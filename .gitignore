@@ -1,0 +1,10 @@
+/local/
+/build/
+/out/
+*.user
+/target/
+/dist/
+/.vs/
+/docs/baseline.md
+*.pdb
+*.log
