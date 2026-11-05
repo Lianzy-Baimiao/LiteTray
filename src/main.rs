@@ -6,14 +6,25 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("LiteTray: {error}");
         #[cfg(windows)]
-        unsafe {
-            use windows_sys::Win32::UI::WindowsAndMessaging::*;
-            MessageBoxW(
-                std::ptr::null_mut(),
-                litetray::platform::wide(&error).as_ptr(),
-                litetray::platform::wide("LiteTray").as_ptr(),
-                MB_OK | MB_ICONERROR,
-            );
+        if !std::env::args().any(|a| {
+            matches!(
+                a.as_str(),
+                "--diagnose"
+                    | "--weather-check"
+                    | "--check-updates"
+                    | "--prepare-symbols"
+                    | "--probe-taskbar"
+            )
+        }) {
+            unsafe {
+                use windows_sys::Win32::UI::WindowsAndMessaging::*;
+                MessageBoxW(
+                    std::ptr::null_mut(),
+                    litetray::platform::wide(&error).as_ptr(),
+                    litetray::platform::wide("LiteTray").as_ptr(),
+                    MB_OK | MB_ICONERROR,
+                );
+            }
         }
         std::process::exit(1);
     }
@@ -24,6 +35,25 @@ fn run() -> Result<(), String> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
     let config = config::load(&config::data_dir().join("config.json"))?;
     match arguments.first().map(String::as_str) {
+        Some("--prepare-symbols") => {
+            let module = std::path::Path::new("C:\\Windows\\System32\\taskbar.dll");
+            let import = arguments.get(1).map(std::path::Path::new);
+            let result = platform::symbols::prepare(module, import)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?
+            );
+            Ok(())
+        }
+        Some("--probe-taskbar") => {
+            let result = platform::probe::run()?;
+            let text = serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?;
+            if let Some(path) = arguments.get(1) {
+                std::fs::write(path, &text).map_err(|e| e.to_string())?;
+            }
+            println!("{text}");
+            Ok(())
+        }
         Some("--diagnose") => {
             let text = serde_json::to_string_pretty(&platform::diagnostics::collect())
                 .map_err(|e| e.to_string())?;

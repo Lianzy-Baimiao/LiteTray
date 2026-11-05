@@ -30,12 +30,12 @@ Rust 原生 Windows 应用，GitHub 仓库保持私有。
 
 ```powershell
 # MSVC / 配置完整的工具链
-cargo build --release
-cargo test --all-targets
+cargo build --workspace --release
+cargo test --workspace --all-targets
 
 # 本机 GNU 工具链；不修改全局环境
-.\tools\Invoke-Cargo.ps1 build --release
-.\tools\Invoke-Cargo.ps1 test --all-targets
+.\tools\Invoke-Cargo.ps1 build --workspace --release
+.\tools\Invoke-Cargo.ps1 test --workspace --all-targets
 ```
 
 本机脚本优先使用 `LITETRAY_MINGW_BIN`，否则读取用户 `tools\mingw64\bin`。GNU 构建产物位于用户 `.cargo-target\litetray\release\LiteTray.exe`。MSVC 默认位于 `target\release\LiteTray.exe`。
@@ -49,9 +49,13 @@ LiteTray.exe --background
 LiteTray.exe --diagnose [output.json]
 LiteTray.exe --weather-check [output.json]
 LiteTray.exe --check-updates
+LiteTray.exe --probe-taskbar [output.json]
+LiteTray.exe --prepare-symbols [existing-symbol-cache]
 ```
 
 默认打开设置；关闭窗口收至托盘，右键托盘菜单可以退出。开机启动是可选项，默认关闭。配置保存在 `%LOCALAPPDATA%\LiteTray`；开发检查可用 `LITETRAY_DATA_DIR` 指向隔离目录。
+
+`--probe-taskbar` 通过同目录 Rust DLL 在 Explorer 任务栏线程执行一次受限只读探测，返回窗口树与模块身份后移除 hook，不修改托盘。`--prepare-symbols` 校验当前 taskbar.dll 的 PE/PDB 身份，优先使用独立缓存，也可显式导入匹配的已有 PDB；缺失时从 Microsoft 符号服务器下载，使用 DbgHelp 验证 GUID/age 后保存按模块 SHA-256 命名的符号映射。映射尚未用于修改任务栏。
 
 ## 天气来源
 
