@@ -2,6 +2,10 @@
 //! modify XAML, or patch functions. The host removes the scoped message hook
 //! after the synchronous roundtrip completes.
 #![cfg(windows)]
+mod clock;
+mod inspect;
+mod xaml;
+mod xaml_abi;
 use std::ptr::null_mut;
 use windows_sys::Win32::{
     Foundation::*,
@@ -13,6 +17,32 @@ use windows_sys::Win32::{
 };
 const MESSAGE: &str = "LiteTray.TaskbarProbe.v1";
 const PROTOCOL: usize = 0x4c545001;
+/// Runs the isolated clock check in the calling application process.
+/// # Safety
+/// `output` must reference `capacity` writable bytes. Call on an STA thread
+/// before creating any other XAML runtime on that thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn LiteTraySelfTestClock(output: *mut u8, capacity: usize) -> i32 {
+    if output.is_null() || capacity < 2 {
+        return -1;
+    }
+    let (status, result) = match clock::self_test() {
+        Ok(result) => (0, result),
+        Err(error) => (
+            1,
+            serde_json::json!({"passed":false,"environment":"isolated_xaml_in_host_process","explorer_accessed":false,"error":error}),
+        ),
+    };
+    let bytes = result.to_string();
+    if bytes.len() >= capacity {
+        return -1;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), output, bytes.len());
+        *output.add(bytes.len()) = 0;
+    }
+    status
+}
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
@@ -29,12 +59,106 @@ pub unsafe extern "system" fn LiteTrayCallWndProc(code: i32, w: WPARAM, l: LPARA
             if message != 0 && call.message == message && call.wParam != 0 && is_taskbar(call.hwnd)
             {
                 let reply = call.wParam as HWND;
-                if class_name(reply) == "LiteTray.ProbeReceiver.v1" {
+                let mut pid = 0;
+                GetWindowThreadProcessId(reply, &mut pid);
+                if class_name(reply) == "LiteTray.ProbeReceiver.v1" && same_installation(pid) {
                     report(reply, call.lParam as u64);
                 }
             }
+            if call.message == WM_COPYDATA && call.lParam != 0 && is_taskbar(call.hwnd) {
+                inspect_request(call.hwnd, call.wParam as HWND, call.lParam);
+            }
         }
         CallNextHookEx(null_mut(), code, w, l)
+    }
+}
+unsafe fn inspect_request(taskbar: HWND, sender: HWND, data: isize) {
+    unsafe {
+        use litetray_adapter_protocol::*;
+        if class_name(sender) != RECEIVER_CLASS {
+            return;
+        }
+        let copy = &*(data as *const COPYDATASTRUCT);
+        if copy.dwData != REQUEST_TAG
+            || copy.cbData == 0
+            || copy.cbData as usize > MAX_REQUEST
+            || copy.lpData.is_null()
+        {
+            return;
+        }
+        let Ok(request) = InspectRequest::decode(std::slice::from_raw_parts(
+            copy.lpData.cast(),
+            copy.cbData as usize,
+        )) else {
+            return;
+        };
+        if request.receiver != sender as u64 {
+            return;
+        }
+        let mut pid = 0;
+        GetWindowThreadProcessId(sender, &mut pid);
+        if pid == 0 || pid != request.host_pid || !same_installation(pid) {
+            return;
+        }
+        let response = inspect::run(&request.layout, request.nonce);
+        let Ok(bytes) = serde_json::to_vec(&response) else {
+            return;
+        };
+        if bytes.len() > MAX_RESPONSE {
+            return;
+        }
+        let reply = COPYDATASTRUCT {
+            dwData: RESPONSE_TAG,
+            cbData: bytes.len() as u32,
+            lpData: bytes.as_ptr() as *mut _,
+        };
+        let mut result = 0;
+        SendMessageTimeoutW(
+            sender,
+            WM_COPYDATA,
+            taskbar as usize,
+            &reply as *const _ as isize,
+            SMTO_ABORTIFHUNG,
+            1000,
+            &mut result,
+        );
+    }
+}
+unsafe fn same_installation(pid: u32) -> bool {
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return false;
+        }
+        let mut path = vec![0u16; 32768];
+        let mut length = path.len() as u32;
+        let ok = QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut length) != 0;
+        CloseHandle(process);
+        if !ok {
+            return false;
+        }
+        let host = String::from_utf16_lossy(&path[..length as usize]);
+        let mut own = std::ptr::null_mut();
+        if GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            LiteTrayCallWndProc as *const u16,
+            &mut own,
+        ) == 0
+        {
+            return false;
+        }
+        let length = GetModuleFileNameW(own, path.as_mut_ptr(), path.len() as u32) as usize;
+        if length == 0 || length >= path.len() {
+            return false;
+        }
+        let dll = String::from_utf16_lossy(&path[..length]);
+        let parent = std::path::Path::new(&dll).parent();
+        parent.is_some_and(|parent| {
+            parent
+                .join("LiteTray.exe")
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&host)
+        })
     }
 }
 unsafe fn is_taskbar(hwnd: HWND) -> bool {
@@ -140,11 +264,19 @@ unsafe fn loaded_identity(base: usize) -> Option<serde_json::Value> {
             return None;
         }
         let optional = pe + 24;
+        let machine = u16::from_le_bytes(header.get(pe + 4..pe + 6)?.try_into().ok()?);
+        if header.get(optional..optional + 2) != Some(&[0x0b, 0x02]) {
+            return None;
+        }
         let timestamp = get32(&header, pe + 8)?;
         let image_size = get32(&header, optional + 56)?;
         let debug_rva = get32(&header, optional + 112 + 6 * 8)? as usize;
         let debug_size = get32(&header, optional + 112 + 6 * 8 + 4)? as usize;
-        if debug_size > 4096 || debug_rva.checked_add(debug_size)? > image_size as usize {
+        if debug_size == 0
+            || !debug_size.is_multiple_of(28)
+            || debug_size > 4096
+            || debug_rva.checked_add(debug_size)? > image_size as usize
+        {
             return None;
         }
         let debug = read_memory(base.checked_add(debug_rva)?, debug_size)?;
@@ -162,7 +294,7 @@ unsafe fn loaded_identity(base: usize) -> Option<serde_json::Value> {
                 continue;
             }
             return Some(
-                serde_json::json!({"timestamp":timestamp,"image_size":image_size,"pdb_guid":&cv[4..20],"pdb_age":get32(&cv,20)?}),
+                serde_json::json!({"machine":machine,"timestamp":timestamp,"image_size":image_size,"pdb_guid":&cv[4..20],"pdb_age":get32(&cv,20)?}),
             );
         }
         None

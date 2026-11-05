@@ -71,7 +71,7 @@ enum Event {
 struct App {
     hwnd: HWND,
     panel: HWND,
-    panel_children: Vec<HWND>,
+    panel_font: HFONT,
     children: Vec<HWND>,
     fields: HashMap<u16, HWND>,
     font: HFONT,
@@ -173,7 +173,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
         let mut app = App {
             hwnd,
             panel: null_mut(),
-            panel_children: vec![],
+            panel_font: null_mut(),
             children: vec![],
             fields: HashMap::new(),
             font: null_mut(),
@@ -325,6 +325,7 @@ impl App {
     }
     unsafe fn release_resources(&mut self) {
         unsafe {
+            self.close_panel();
             PALETTE.with(|p| p.set(None));
             for object in [
                 self.font,
@@ -342,6 +343,18 @@ impl App {
             self.clock_font = null_mut();
             self.background = null_mut();
             self.edit_background = null_mut();
+        }
+    }
+    unsafe fn close_panel(&mut self) {
+        unsafe {
+            if !self.panel.is_null() {
+                DestroyWindow(self.panel);
+                self.panel = null_mut();
+            }
+            if !self.panel_font.is_null() {
+                DeleteObject(self.panel_font);
+                self.panel_font = null_mut();
+            }
         }
     }
     #[expect(
@@ -797,6 +810,7 @@ impl App {
                     self.label("关闭设置窗口会收至托盘；右键托盘图标可退出程序。\r\n配置和天气缓存保存在当前用户目录，API Key 不写入配置文件。",224,231,width-260,65);
                     self.button("打开配置目录", 503, 224, 320, 170);
                     self.button("导出诊断信息", 504, 412, 320, 170);
+                    self.button("退出程序", EXIT, 600, 320, 170);
                     self.label("兼容策略：先检测系统能力，再启用对应任务栏适配。\r\nWindows 10 经典任务栏和 Windows 11 XAML 任务栏分别实现。\r\n未知系统版本不使用未验证的内存偏移。",224,389,width-260,100);
                 }
                 5 => {
@@ -1205,37 +1219,54 @@ impl App {
                 ShowWindow(self.panel, SW_HIDE);
                 return;
             }
-            if !self.panel.is_null() {
-                DestroyWindow(self.panel);
-                self.panel_children.clear();
-            }
+            self.close_panel();
             let mut point = std::mem::zeroed();
             GetCursorPos(&mut point);
             let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
             let mut info: MONITORINFO = std::mem::zeroed();
             info.cbSize = size_of::<MONITORINFO>() as u32;
-            GetMonitorInfoW(monitor, &mut info);
-            let width = self.scale(680);
-            let height = self.scale(445);
-            let x = (point.x - width + 30)
-                .max(info.rcWork.left)
-                .min((info.rcWork.right - width).max(info.rcWork.left));
-            let y = (info.rcWork.bottom - height - 10).max(info.rcWork.top);
+            if GetMonitorInfoW(monitor, &mut info) == 0 {
+                return;
+            }
             let hwnd = CreateWindowExW(
                 WS_EX_TOOLWINDOW | WS_EX_CONTROLPARENT,
                 wide(PANEL_CLASS).as_ptr(),
                 wide("LiteTray 日历与天气").as_ptr(),
                 WS_POPUP | WS_BORDER | WS_CLIPCHILDREN,
-                x,
-                y,
-                width,
-                height,
+                point.x,
+                point.y,
+                1,
+                1,
                 self.hwnd,
                 null_mut(),
                 GetModuleHandleW(null()),
                 null(),
             );
+            if hwnd.is_null() {
+                self.set_status("无法创建日历天气面板");
+                return;
+            }
             self.panel = hwnd;
+            // Derive scale from the popup's actual monitor. Settings can be on
+            // a completely different display with a different effective DPI.
+            let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+            let scale = |value: i32| value * dpi / 96;
+            self.panel_font = make_font(scale(15), 400, "Segoe UI");
+            let width = scale(680);
+            let height = scale(445);
+            let x = (point.x - width + scale(30))
+                .max(info.rcWork.left)
+                .min((info.rcWork.right - width).max(info.rcWork.left));
+            let y = (info.rcWork.bottom - height - scale(10)).max(info.rcWork.top);
+            SetWindowPos(
+                hwnd,
+                null_mut(),
+                x,
+                y,
+                width,
+                height,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
             let control =
                 |class: &str, text: &str, id: u16, style: u32, x: i32, y: i32, w: i32, h: i32| {
                     let style = if class == "BUTTON" {
@@ -1248,18 +1279,18 @@ impl App {
                         wide(class).as_ptr(),
                         wide(text).as_ptr(),
                         WS_CHILD | WS_VISIBLE | style,
-                        self.scale(x),
-                        self.scale(y),
-                        self.scale(w),
-                        self.scale(h),
+                        scale(x),
+                        scale(y),
+                        scale(w),
+                        scale(h),
                         hwnd,
                         id as usize as HMENU,
                         GetModuleHandleW(null()),
                         null(),
                     );
-                    SendMessageW(c, WM_SETFONT, self.font as usize, 1);
+                    SendMessageW(c, WM_SETFONT, self.panel_font as usize, 1);
                     if class == "SysMonthCal32" {
-                        theme_calendar(c, self.font);
+                        theme_calendar(c, self.panel_font);
                     }
                     c
                 };
@@ -1620,6 +1651,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
 }
 unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     unsafe {
+        // A display scale change invalidates the popup's control layout. The
+        // next invocation recreates it on the current monitor with fresh fonts.
+        if msg == WM_DPICHANGED || msg == WM_DISPLAYCHANGE {
+            ShowWindow(hwnd, SW_HIDE);
+            return 0;
+        }
         if let Some(result) = paint_message(hwnd, msg, w, l) {
             return result;
         }
@@ -1729,18 +1766,27 @@ unsafe fn theme_calendar(hwnd: HWND, font: HFONT) {
         SetWindowTheme(hwnd, wide("").as_ptr(), wide("").as_ptr());
         SendMessageW(hwnd, WM_SETFONT, font as usize, 1);
         if let Some(p) = PALETTE.with(Cell::get) {
+            // The classic month calendar reuses TITLEBK for weekday text.
+            // A near-background title color therefore makes weekdays vanish.
             for (slot, color) in [
                 (MCSC_BACKGROUND, p.bg),
                 (MCSC_MONTHBK, p.bg),
                 (MCSC_TEXT, p.text),
-                (MCSC_TITLEBK, p.edit_bg),
-                (MCSC_TITLETEXT, p.text),
+                (
+                    MCSC_TITLEBK,
+                    if p.dark {
+                        rgb(92, 155, 225)
+                    } else {
+                        rgb(0, 95, 168)
+                    },
+                ),
+                (MCSC_TITLETEXT, rgb(255, 255, 255)),
                 (
                     MCSC_TRAILINGTEXT,
                     if p.dark {
-                        rgb(145, 145, 145)
+                        rgb(155, 155, 155)
                     } else {
-                        rgb(110, 110, 110)
+                        rgb(105, 105, 105)
                     },
                 ),
             ] {

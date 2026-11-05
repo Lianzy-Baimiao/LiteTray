@@ -1,3 +1,4 @@
+pub mod adapter;
 pub mod credentials;
 pub mod diagnostics;
 pub mod lunar;

@@ -104,10 +104,10 @@ unsafe fn resolve(
         let mut groups = BTreeMap::new();
         for mask in [
             "*GetTaskbarHost*",
-            "*TaskbarHost*FrameHeight*",
-            "*Ref_count_base*Decref*",
+            "*FrameHeight*",
+            "*Decref*",
             "*TaskBand*",
-            "*TrayUI*StartTaskbar*",
+            "*StartTaskbar*",
             "*SecondaryTray*InitModelAndHost*",
         ] {
             let mut symbols = Vec::<Symbol>::new();
@@ -151,6 +151,74 @@ unsafe fn resolve(
         Ok(map)
     }
 }
+/// Build a complete plan only from the same verified image and unambiguous
+/// decorated symbols. This does not load a DLL or invoke Explorer code.
+pub fn host_layout(
+    map: &SymbolMap,
+    module_bytes: &[u8],
+) -> Result<litetray_adapter_protocol::HostLayout, String> {
+    use litetray_adapter_protocol::{
+        HostLayout, ModuleIdentity, SymbolAddress, SymbolRole, VERSION, frame_element_offset,
+    };
+    let identity = pe::identity(module_bytes)?;
+    if map.schema != 1 || map.image != identity {
+        return Err("符号映射与当前磁盘模块身份不一致".into());
+    }
+    let mut symbols = Vec::new();
+    for role in SymbolRole::ALL {
+        let mut found = map
+            .symbols
+            .values()
+            .flatten()
+            .filter(|s| s.decorated_name == role.decorated())
+            .map(|s| s.rva)
+            .collect::<Vec<_>>();
+        found.sort_unstable();
+        found.dedup();
+        if found.len() != 1 {
+            return Err(format!("任务栏符号缺失或不唯一：{role:?}"));
+        }
+        let rva = u32::try_from(found[0]).map_err(|_| "符号 RVA 溢出")?;
+        let (prologue, section) =
+            pe::rva_bytes(module_bytes, rva, if role.executable() { 16 } else { 8 })?;
+        if section.characteristics & 0x80000000 != 0 {
+            return Err("任务栏入口位于可写节区，拒绝使用".into());
+        }
+        symbols.push(SymbolAddress {
+            role,
+            rva,
+            section_start: section.rva,
+            section_size: section.virtual_size,
+            executable: section.characteristics & 0x20000000 != 0,
+            prologue: if role.executable() {
+                prologue.to_vec()
+            } else {
+                vec![]
+            },
+        });
+    }
+    let element_offset = frame_element_offset(
+        &symbols
+            .iter()
+            .find(|s| s.role == SymbolRole::FrameHeight)
+            .ok_or("缺少布局符号")?
+            .prologue,
+    )?;
+    let layout = HostLayout {
+        schema: VERSION,
+        module: ModuleIdentity {
+            machine: identity.machine,
+            timestamp: identity.timestamp,
+            image_size: identity.image_size,
+            pdb_guid: identity.pdb_guid,
+            pdb_age: identity.pdb_age,
+        },
+        symbols,
+        element_offset,
+    };
+    layout.validate()?;
+    Ok(layout)
+}
 unsafe extern "system" fn enumerate(
     info: *const SYMBOL_INFOW,
     _size: u32,
@@ -193,5 +261,66 @@ unsafe extern "system" fn enumerate(
             size: info.Size,
         });
         1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use litetray_adapter_protocol::SymbolRole;
+    fn fixture() -> (Vec<u8>, SymbolMap) {
+        let bytes = pe::fixture();
+        let symbols = SymbolRole::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(i, role)| Symbol {
+                name: role.decorated().into(),
+                decorated_name: role.decorated().into(),
+                rva: if i < 2 {
+                    0x2000 + i as u64 * 8
+                } else {
+                    0x1100 + (i - 2) as u64 * 32
+                },
+                size: 16,
+            })
+            .collect();
+        let map = SymbolMap {
+            schema: 1,
+            image: pe::identity(&bytes).unwrap(),
+            symbols: [("test".into(), symbols)].into(),
+        };
+        (bytes, map)
+    }
+    #[test]
+    fn requires_a_complete_identity_matched_layout() {
+        let (bytes, mut map) = fixture();
+        let layout = host_layout(&map, &bytes).unwrap();
+        assert_eq!(layout.element_offset, 0x48);
+        assert_eq!(layout.symbols.len(), 6);
+        map.image.pdb_age += 1;
+        assert!(host_layout(&map, &bytes).is_err());
+    }
+    #[test]
+    fn missing_ambiguous_and_data_section_function_symbols_are_rejected() {
+        let (bytes, mut map) = fixture();
+        let original = map.symbols["test"].clone();
+        map.symbols.get_mut("test").unwrap().pop();
+        assert!(host_layout(&map, &bytes).is_err());
+        map.symbols.insert("test".into(), original.clone());
+        let mut duplicate = original[2].clone();
+        duplicate.rva += 1;
+        map.symbols.get_mut("test").unwrap().push(duplicate);
+        assert!(host_layout(&map, &bytes).is_err());
+        map.symbols.insert("test".into(), original);
+        map.symbols.get_mut("test").unwrap()[2].rva = 0x2020;
+        assert!(host_layout(&map, &bytes).is_err());
+    }
+    #[test]
+    fn modified_image_bytes_and_unknown_prologue_cannot_reuse_the_plan() {
+        let (mut bytes, mut map) = fixture();
+        bytes[0x340] = 0xe9;
+        assert!(host_layout(&map, &bytes).is_err());
+        map.image = pe::identity(&bytes).unwrap();
+        assert!(host_layout(&map, &bytes).is_err());
     }
 }

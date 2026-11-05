@@ -51,11 +51,21 @@ LiteTray.exe --weather-check [output.json]
 LiteTray.exe --check-updates
 LiteTray.exe --probe-taskbar [output.json]
 LiteTray.exe --prepare-symbols [existing-symbol-cache]
+LiteTray.exe --inspect-taskbar [output.json]
+LiteTray.exe --self-test-clock
 ```
 
 默认打开设置；关闭窗口收至托盘，右键托盘菜单可以退出。开机启动是可选项，默认关闭。配置保存在 `%LOCALAPPDATA%\LiteTray`；开发检查可用 `LITETRAY_DATA_DIR` 指向隔离目录。
 
-`--probe-taskbar` 通过同目录 Rust DLL 在 Explorer 任务栏线程执行一次受限只读探测，返回窗口树与模块身份后移除 hook，不修改托盘。`--prepare-symbols` 校验当前 taskbar.dll 的 PE/PDB 身份，优先使用独立缓存，也可显式导入匹配的已有 PDB；缺失时从 Microsoft 符号服务器下载，使用 DbgHelp 验证 GUID/age 后保存按模块 SHA-256 命名的符号映射。映射尚未用于修改任务栏。
+`--probe-taskbar` 通过同目录 Rust DLL 在 Explorer 任务栏线程执行一次受限只读探测，返回窗口树与模块身份后移除 hook，不修改托盘。`--prepare-symbols` 校验当前 taskbar.dll 的 PE/PDB 身份，优先使用独立缓存，也可显式导入匹配的已有 PDB；缺失时从 Microsoft 符号服务器下载，使用 DbgHelp 验证 GUID/age 后保存按模块 SHA-256 命名的符号映射及完整接口布局。`--inspect-taskbar` 的代码进一步核对加载模块和函数入口，读取受限 XAML 树；当前未完成实机验收，不会启用写入。
+
+`--self-test-clock` 在 **LiteTray 自己进程** 的新 XAML 控件中检查时钟文本和样式写入、原值/原绑定恢复、部分失败回滚。它不访问 Explorer，也不修改任务栏。适合开发检查，不代表已经实现任务栏接管：
+
+```powershell
+.\tools\Test-XamlClock.ps1 -BinaryPath <release目录>\LiteTray.exe
+```
+
+接口来源和隔离边界见 [ABI 说明](crates/taskbar-adapter/ABI.md)，上游参考与许可见 [第三方声明](THIRD-PARTY-NOTICES.md)。
 
 ## 天气来源
 

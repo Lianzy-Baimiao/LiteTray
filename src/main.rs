@@ -14,6 +14,8 @@ fn main() {
                     | "--check-updates"
                     | "--prepare-symbols"
                     | "--probe-taskbar"
+                    | "--inspect-taskbar"
+                    | "--self-test-clock"
             )
         }) {
             unsafe {
@@ -35,10 +37,36 @@ fn run() -> Result<(), String> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
     let config = config::load(&config::data_dir().join("config.json"))?;
     match arguments.first().map(String::as_str) {
+        Some("--self-test-clock") => {
+            let result = platform::adapter::self_test_clock()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?
+            );
+            Ok(())
+        }
+        Some("--inspect-taskbar") => {
+            let result = platform::adapter::inspect()?;
+            let text = serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?;
+            if let Some(path) = arguments.get(1) {
+                config::atomic_write(std::path::Path::new(path), text.as_bytes())?;
+            }
+            println!("{text}");
+            Ok(())
+        }
         Some("--prepare-symbols") => {
-            let module = std::path::Path::new("C:\\Windows\\System32\\taskbar.dll");
+            let module = std::env::var_os("SystemRoot")
+                .map(std::path::PathBuf::from)
+                .ok_or("SystemRoot 不可用")?
+                .join("System32/taskbar.dll");
             let import = arguments.get(1).map(std::path::Path::new);
-            let result = platform::symbols::prepare(module, import)?;
+            let result = platform::symbols::prepare(&module, import)?;
+            let bytes = std::fs::read(&module).map_err(|e| e.to_string())?;
+            let layout = platform::symbols::host_layout(&result, &bytes)?;
+            config::atomic_write(
+                &config::data_dir().join("taskbar-layout.json"),
+                &serde_json::to_vec_pretty(&layout).map_err(|e| e.to_string())?,
+            )?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?
@@ -92,7 +120,7 @@ fn run() -> Result<(), String> {
         }
         Some("--help") => {
             println!(
-                "LiteTray [--settings | --calendar | --background | --diagnose [file] | --weather-check [file] | --check-updates]"
+                "LiteTray [--settings | --calendar | --background | --diagnose [file] | --weather-check [file] | --check-updates | --self-test-clock | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
             );
             Ok(())
         }

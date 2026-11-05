@@ -519,6 +519,7 @@ name = "litetray"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "litetray-adapter-protocol",
  "semver",
  "serde",
  "serde_json",
@@ -531,10 +532,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "litetray-adapter-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "litetray-taskbar-adapter"
 version = "0.1.0"
 dependencies = [
+ "litetray-adapter-protocol",
  "serde_json",
+ "windows-link",
  "windows-sys",
 ]
 
