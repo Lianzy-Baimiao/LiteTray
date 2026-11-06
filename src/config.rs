@@ -46,6 +46,8 @@ pub enum Appearance {
 pub struct ClockConfig {
     pub top_line: String,
     pub bottom_line: String,
+    pub date_format: String,
+    pub time_format: String,
     pub show_seconds: bool,
     pub show_lunar: bool,
     pub font_family: String,
@@ -64,6 +66,8 @@ impl Default for ClockConfig {
         Self {
             top_line: "%date% %weekday%  %time%".into(),
             bottom_line: "%weather%".into(),
+            date_format: "yyyy/MM/dd".into(),
+            time_format: "HH:mm".into(),
             show_seconds: true,
             show_lunar: true,
             font_family: "Microsoft YaHei UI".into(),
@@ -244,6 +248,8 @@ impl Config {
             return Err("时钟字号或宽度超出范围".into());
         }
         litetray_adapter_protocol::clock::validate_font_family(&self.clock.font_family)?;
+        crate::clock::validate_pattern(&self.clock.date_format, true)?;
+        crate::clock::validate_pattern(&self.clock.time_format, false)?;
         self.clock.top_style.validate()?;
         self.clock.bottom_style.validate()?;
         if self.clock.top_line.len() > 1024

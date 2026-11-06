@@ -306,6 +306,9 @@ pub(super) unsafe fn fill(dc: HDC, r: RECT, color: u32) {
 }
 pub(super) unsafe fn rounded(dc: HDC, r: RECT, color: u32, border: u32, radius: i32) {
     unsafe {
+        if radius > 0 && smooth_rounded(dc, r, color, border, radius) {
+            return;
+        }
         let brush = CreateSolidBrush(color);
         let pen = CreatePen(PS_SOLID, 1, border);
         let ob = SelectObject(dc, brush);
@@ -315,6 +318,144 @@ pub(super) unsafe fn rounded(dc: HDC, r: RECT, color: u32, border: u32, radius: 
         SelectObject(dc, op);
         DeleteObject(brush);
         DeleteObject(pen);
+    }
+}
+
+// Only the corner pixels need antialiasing. Cache small premultiplied
+// coverage masks and draw the flat interior with GDI; this avoids allocating
+// or rasterizing a full-sized surface for every date/button on each paint.
+#[derive(PartialEq, Eq, Clone, Copy)]
+struct CornerKey {
+    diameter: i32,
+    color: u32,
+    border: u32,
+}
+struct CornerMask {
+    key: CornerKey,
+    bitmap: HBITMAP,
+}
+impl Drop for CornerMask {
+    fn drop(&mut self) {
+        unsafe {
+            DeleteObject(self.bitmap);
+        }
+    }
+}
+thread_local! { static CORNERS: RefCell<std::collections::VecDeque<CornerMask>> = const { RefCell::new(std::collections::VecDeque::new()) }; }
+unsafe fn corner_mask(key: CornerKey) -> Option<CornerMask> {
+    unsafe {
+        let n = (key.diameter + 1) / 2;
+        let mut info: BITMAPINFO = std::mem::zeroed();
+        info.bmiHeader = BITMAPINFOHEADER {
+            biSize: size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: n * 2,
+            biHeight: -n * 2,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB,
+            ..std::mem::zeroed()
+        };
+        let mut bits = null_mut();
+        let bitmap = CreateDIBSection(null_mut(), &info, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+        if bitmap.is_null() {
+            return None;
+        }
+        let pixels = std::slice::from_raw_parts_mut(bits.cast::<u32>(), (4 * n * n) as usize);
+        let radius = key.diameter as f32 / 2.;
+        for y in 0..n {
+            for x in 0..n {
+                let mut channels = [0u32; 4];
+                for sy in 0..8 {
+                    for sx in 0..8 {
+                        let px = x as f32 + (sx as f32 + 0.5) / 8.;
+                        let py = y as f32 + (sy as f32 + 0.5) / 8.;
+                        let distance = (px - radius).powi(2) + (py - radius).powi(2);
+                        if distance <= radius * radius {
+                            let inside = px >= 1.
+                                && py >= 1.
+                                && radius > 1.
+                                && distance <= (radius - 1.).powi(2);
+                            let color = if inside { key.color } else { key.border };
+                            channels[0] += color & 255;
+                            channels[1] += color >> 8 & 255;
+                            channels[2] += color >> 16 & 255;
+                            channels[3] += 255;
+                        }
+                    }
+                }
+                let pixel = (channels[3] / 64) << 24
+                    | (channels[0] / 64) << 16
+                    | (channels[1] / 64) << 8
+                    | (channels[2] / 64);
+                for (dx, dy) in [
+                    (x, y),
+                    (2 * n - 1 - x, y),
+                    (x, 2 * n - 1 - y),
+                    (2 * n - 1 - x, 2 * n - 1 - y),
+                ] {
+                    pixels[(dy * 2 * n + dx) as usize] = pixel;
+                }
+            }
+        }
+        Some(CornerMask { key, bitmap })
+    }
+}
+unsafe fn smooth_rounded(dc: HDC, r: RECT, color: u32, border: u32, diameter: i32) -> bool {
+    unsafe {
+        let width = r.right - r.left;
+        let height = r.bottom - r.top;
+        let diameter = diameter.min(width).min(height);
+        let n = (diameter + 1) / 2;
+        if !(1..=64).contains(&n) || 2 * n > width || 2 * n > height {
+            return false;
+        }
+        let key = CornerKey {
+            diameter,
+            color,
+            border,
+        };
+        CORNERS.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            let mask = if let Some(index) = cache.iter().position(|c| c.key == key) {
+                cache.remove(index).unwrap()
+            } else if let Some(mask) = corner_mask(key) {
+                mask
+            } else {
+                return false;
+            };
+            let source = CreateCompatibleDC(dc);
+            if source.is_null() {
+                return false;
+            }
+            let old = SelectObject(source, mask.bitmap);
+            fill(dc, rect(r.left + n, r.top, width - 2 * n, height), color);
+            fill(dc, rect(r.left, r.top + n, width, height - 2 * n), color);
+            fill(dc, rect(r.left + n, r.top, width - 2 * n, 1), border);
+            fill(dc, rect(r.left + n, r.bottom - 1, width - 2 * n, 1), border);
+            fill(dc, rect(r.left, r.top + n, 1, height - 2 * n), border);
+            fill(dc, rect(r.right - 1, r.top + n, 1, height - 2 * n), border);
+            let blend = BLENDFUNCTION {
+                BlendOp: AC_SRC_OVER as u8,
+                BlendFlags: 0,
+                SourceConstantAlpha: 255,
+                AlphaFormat: AC_SRC_ALPHA as u8,
+            };
+            for (x, y, sx, sy) in [
+                (r.left, r.top, 0, 0),
+                (r.right - n, r.top, n, 0),
+                (r.left, r.bottom - n, 0, n),
+                (r.right - n, r.bottom - n, n, n),
+            ] {
+                AlphaBlend(dc, x, y, n, n, source, sx, sy, n, n, blend);
+            }
+            SelectObject(source, old);
+            DeleteDC(source);
+            if cache.len() == 32 {
+                cache.pop_front();
+            }
+            cache.push_back(mask);
+            true
+        })
     }
 }
 pub(super) unsafe fn text(dc: HDC, value: &str, r: RECT, font: HFONT, color: u32, flags: u32) {

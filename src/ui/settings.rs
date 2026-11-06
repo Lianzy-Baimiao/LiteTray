@@ -1,6 +1,7 @@
 //! Settings composition. The persistent window shell owns navigation; each
 //! page is prepared while hidden, then swapped into the content viewport.
 use super::*;
+const SS_ENDELLIPSIS: u32 = 0x4000;
 
 #[derive(PartialEq, Eq)]
 pub(super) struct PageKey {
@@ -29,14 +30,15 @@ pub(super) const PRESETS: [(&str, &str, &str); 4] = [
     ("Windows 简洁", "%time%", "%date%"),
     ("日期与星期", "%time%", "%month2%/%day2% %weekday_short%"),
     ("时间与天气", "%time%  %weekday_short%", "%weather%"),
-    ("完整日期", "%date% %weekday%", "%time%"),
+    ("紧凑年月日", "%time%", "%date%"),
 ];
 impl App {
     pub(super) unsafe fn tray_settings(&mut self, c: &Config, width: i32) {
         unsafe {
             let total = width - 260;
-            self.section("显示范围", 224, 88, total);
-            self.label("选择显示自定义时钟的屏幕", 224, 128, total / 2, 26);
+            let half = (total - 24) / 2;
+            self.section("时钟与图标", 224, 88, total);
+            self.label("时钟显示范围", 224, 137, half, 24);
             self.combo(
                 &["所有显示器", "仅主显示器", "指定显示器"],
                 match c.tray.scope {
@@ -45,40 +47,45 @@ impl App {
                     MonitorScope::Selected => 2,
                 },
                 301,
-                224 + total / 2,
-                124,
-                total / 2,
+                248 + half,
+                130,
+                half,
             );
-            self.section("托盘图标", 224, 184, total);
             self.check(
-                "将主屏托盘图标复制到副屏",
+                "复制主屏托盘图标到副屏",
                 c.tray.enabled && c.tray.show_icons,
                 308,
                 224,
-                220,
+                185,
                 total,
             );
-            self.label("包含应用图标、隐藏图标入口和系统图标。\r\n顺序、显隐与宽度跟随主屏，按实际内容排列。",224,260,total,44);
-            self.section("你的显示器", 224, 322, total - 180);
-            self.button("刷新显示器", 307, 224 + total - 154, 316, 154);
-            self.label(
-                "指定屏幕时可多选；单击一行或按空格切换。",
+            self.caption(
+                "图标顺序、显隐和宽度跟随主屏，按实际内容排列。",
                 224,
-                364,
+                225,
+                total,
+                24,
+            );
+            self.divider(224, 273, total);
+            self.section("选择显示器", 224, 292, total - 160);
+            self.button("刷新", 307, 224 + total - 112, 286, 112);
+            self.caption(
+                "使用“指定显示器”时，在下面选择需要显示时钟的屏幕。",
+                224,
+                335,
                 total,
                 24,
             );
             self.monitor_rows = monitors::choices(&self.monitor_snapshot, &c.tray.selected_devices);
-            let list_height = self.monitor_rows.len().clamp(2, 4) as i32 * 32 + 4;
             let list = self.control(
                 "LISTBOX",
                 "",
                 305,
                 WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY as u32 | LBS_MULTIPLESEL as u32,
                 224,
-                396,
+                377,
                 total,
-                list_height,
+                132,
             );
             for (index, row) in self.monitor_rows.iter().enumerate() {
                 SendMessageW(list, LB_ADDSTRING, 0, wide(&row.label).as_ptr() as isize);
@@ -90,17 +97,19 @@ impl App {
                 306,
                 SS_LEFT as u32,
                 224,
-                408 + list_height,
+                531,
                 total,
                 44,
             );
         }
     }
+
     pub(super) unsafe fn general_settings(&mut self, c: &Config, width: i32) {
         unsafe {
             let total = width - 260;
+            let half = (total - 24) / 2;
             self.section("外观", 224, 88, total);
-            self.label("颜色模式", 224, 133, total / 2, 26);
+            self.label("颜色模式", 224, 140, half, 24);
             self.combo(
                 &["跟随 Windows", "浅色", "深色"],
                 match c.appearance {
@@ -109,28 +118,30 @@ impl App {
                     Appearance::Dark => 2,
                 },
                 501,
-                224 + total / 2,
-                128,
-                total / 2,
+                248 + half,
+                133,
+                half,
             );
-            self.label(
-                "强调色、界面字体与高对比度设置跟随 Windows。",
+            self.caption(
+                "强调色、界面字体与高对比度随系统变化。",
                 224,
-                183,
+                187,
                 total,
-                26,
+                24,
             );
-            self.section("启动与后台运行", 224, 232, total);
+            self.divider(224, 233, total);
+            self.section("启动与后台运行", 224, 252, total);
             self.check(
                 "登录 Windows 时启动 LiteTray",
                 c.start_with_windows,
                 502,
                 224,
-                274,
+                299,
                 total,
             );
-            self.label("关闭设置窗口后继续运行，日程、闹钟与计时仍会提醒。\r\n退出 LiteTray 后停止提醒；已保存的数据留在本机。",224,318,total,44);
-            self.section("数据与维护", 224, 394, total);
+            self.caption("关闭窗口后继续计时和提醒。\r\n退出 LiteTray 后停止提醒，已保存的数据仍保留在本机。", 224, 342, total, 44);
+            self.divider(224, 410, total);
+            self.section("数据与维护", 224, 429, total);
             let button = (total - 32) / 3;
             for (i, (name, id)) in [
                 ("打开配置目录", 503),
@@ -140,74 +151,62 @@ impl App {
             .into_iter()
             .enumerate()
             {
-                self.button(name, id, 224 + i as i32 * (button + 16), 436, button);
+                self.button(name, id, 224 + i as i32 * (button + 16), 477, button);
             }
+            self.caption(
+                "配置、日程和提醒记录均保存在本机配置目录。",
+                224,
+                533,
+                total,
+                24,
+            );
         }
     }
+
     pub(super) unsafe fn weather_settings(&mut self, c: &Config, width: i32) {
         unsafe {
             let total = width - 260;
             let half = (total - 24) / 2;
-            let quarter = (half - 16) / 2;
-            self.section("城市与刷新", 224, 88, total - 180);
+            let right = 248 + half;
+            let small = (half - 16) / 2;
+            self.section("位置", 224, 88, total - 180);
             self.check(
                 "启用天气",
                 c.weather.enabled,
                 400,
-                224 + total - 160,
+                224 + total - 150,
                 84,
-                160,
+                150,
             );
-            self.edit("城市名称", &c.weather.city, 401, 224, 124, half);
+            self.edit("城市名称", &c.weather.city, 401, 224, 131, half);
             self.edit(
                 "纬度",
                 &c.weather.latitude.to_string(),
                 402,
-                248 + half,
-                124,
-                quarter,
+                right,
+                131,
+                small,
             );
             self.edit(
                 "经度",
                 &c.weather.longitude.to_string(),
                 403,
-                264 + half + quarter,
-                124,
-                quarter,
+                right + small + 16,
+                131,
+                small,
             );
-            self.edit(
-                "刷新间隔 / 分钟",
-                &c.weather.refresh_minutes.to_string(),
-                414,
-                224,
-                192,
-                half,
-            );
-            self.edit(
-                "请求超时 / 秒",
-                &c.weather.timeout_seconds.to_string(),
-                415,
-                248 + half,
-                192,
-                half,
-            );
-            self.section("天气来源", 224, 264, total);
-            self.label(
-                "上方优先；连接失败或数据过期时自动切换到下一个来源。",
-                224,
-                296,
-                total,
-                25,
-            );
+            self.divider(224, 207, total);
+            self.section("来源优先级", 224, 224, half);
+            self.caption("按列表顺序请求，失败后自动切换。", 224, 259, half, 24);
             let list = self.control(
                 "LISTBOX",
                 "",
                 404,
                 WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY as u32,
                 224,
-                332,
+                297,
                 half,
-                96,
+                100,
             );
             for provider in &c.weather.providers {
                 SendMessageW(
@@ -218,14 +217,7 @@ impl App {
                 );
             }
             SendMessageW(list, LB_SETCURSEL, 0, 0);
-            self.combo(
-                &Provider::ALL.map(|p| p.label()),
-                0,
-                405,
-                248 + half,
-                332,
-                half,
-            );
+            self.combo(&Provider::ALL.map(|p| p.label()), 0, 405, right, 248, half);
             for (i, (name, id)) in [("添加", 406), ("移除", 407), ("上移", 408), ("下移", 409)]
                 .into_iter()
                 .enumerate()
@@ -233,101 +225,132 @@ impl App {
                 self.button(
                     name,
                     id,
-                    248 + half + i as i32 * (half + 8) / 4,
-                    382,
+                    right + i as i32 * (half + 8) / 4,
+                    296,
                     (half - 24) / 4,
                 );
             }
-            self.section("可选服务凭据", 224, 446, total);
-            self.label(
-                "Open-Meteo、MET Norway、wttr.in 无需密钥；以下凭据按需填写。",
+            self.edit(
+                "刷新 / 分钟",
+                &c.weather.refresh_minutes.to_string(),
+                414,
+                right,
+                345,
+                small,
+            );
+            self.edit(
+                "超时 / 秒",
+                &c.weather.timeout_seconds.to_string(),
+                415,
+                right + small + 16,
+                345,
+                small,
+            );
+            self.divider(224, 423, total);
+            self.section("可选服务凭据", 224, 440, total);
+            self.caption(
+                "Open-Meteo、MET Norway、wttr.in 无需密钥。",
                 224,
-                480,
+                473,
                 total,
                 24,
             );
-            self.combo(&["和风天气", "OpenWeather"], 0, 410, 224, 516, 180);
+            self.combo(&["和风天气", "OpenWeather"], 0, 410, 224, 508, 160);
             self.control(
                 "EDIT",
                 "",
                 411,
                 WS_TABSTOP | ES_AUTOHSCROLL as u32 | ES_PASSWORD as u32,
-                420,
-                516,
-                total - 376,
+                400,
+                508,
+                total - 344,
                 30,
             );
             SendMessageW(
                 self.field(411),
                 EM_SETCUEBANNER,
                 0,
-                wide("API Key（输入后保存）").as_ptr() as isize,
+                wide("API Key").as_ptr() as isize,
             );
-            self.button("保存", 412, 224 + total - 164, 514, 76);
-            self.button("删除", 413, 224 + total - 76, 514, 76);
-            self.label("和风 API Host", 224, 568, 180, 24);
+            self.button("保存", 412, 224 + total - 152, 506, 68);
+            self.button("删除", 413, 224 + total - 68, 506, 68);
+            self.label("和风 API Host", 224, 562, 160, 24);
             self.control(
                 "EDIT",
                 &c.weather.qweather_host,
                 416,
                 WS_TABSTOP | ES_AUTOHSCROLL as u32,
-                420,
-                562,
-                total - 196,
+                400,
+                556,
+                total - 176,
                 30,
             );
             SendMessageW(
                 self.field(416),
                 EM_SETCUEBANNER,
                 0,
-                wide("使用其他天气来源时留空").as_ptr() as isize,
+                wide("仅使用和风天气时填写").as_ptr() as isize,
             );
         }
     }
+
     pub(super) unsafe fn migration_settings(&mut self, width: i32, height: i32) {
         unsafe {
             let total = width - 260;
-            self.section("从 Windhawk 导入", 224, 88, total);
-            self.label(
-                "选择导出的 JSON 文件，查看转换结果，再采用到设置草稿。",
+            self.section("导入 Windhawk 配置", 224, 88, total - 180);
+            self.button("选择 JSON 文件", 701, 224 + total - 172, 82, 172);
+            self.caption(
+                "选择导出文件后，在下方检查转换结果，再采用到草稿。",
                 224,
-                130,
+                131,
                 total,
-                42,
+                24,
             );
-            let button = (total - 32) / 3;
-            for (i, (label, id)) in [
-                ("选择配置文件", 701),
-                ("采用到草稿", 702),
-                ("导出迁移报告", 703),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                self.button(label, id, 224 + i as i32 * (button + 16), 190, button);
-            }
-            EnableWindow(self.field(702), self.migration.is_some() as i32);
-            EnableWindow(self.field(703), self.migration.is_some() as i32);
-            self.section("转换结果", 224, 260, total);
-            let text=self.migration.as_ref().map(migration::Report::text).unwrap_or_else(||"尚未选择文件。\r\n\r\n从 Windhawk 导出设置为 JSON 文件，再在这里导入。\r\n检查转换结果后点击“采用到草稿”，保存设置后生效。".into());
+            self.divider(224, 174, total);
+            let text = self.migration.as_ref().map(migration::Report::text).unwrap_or_else(|| "还没有导入配置\r\n\r\n在 Windhawk 中导出设置为 JSON 文件，然后选择该文件。\r\n\r\n这里会列出可迁移的时钟和托盘设置，以及需要手动调整的项目。".into());
             let report = self.control(
                 "EDIT",
                 "",
                 704,
                 WS_TABSTOP | ES_MULTILINE as u32 | ES_AUTOVSCROLL as u32 | ES_READONLY as u32,
                 224,
-                304,
+                196,
                 total,
-                (height - 484).max(220),
+                (height - 492).max(236),
             );
             SendMessageW(report, EM_SETLIMITTEXT, 2 * 1024 * 1024, 0);
             SetWindowTextW(report, wide(&text).as_ptr());
+            let y = (height - 274).max(452);
+            self.button("采用到草稿", 702, 224, y, 160);
+            self.button("导出转换报告", 703, 400, y, 168);
+            EnableWindow(self.field(702), self.migration.is_some() as i32);
+            EnableWindow(self.field(703), self.migration.is_some() as i32);
+            self.caption(
+                "采用后可继续调整，点击底部“保存设置”后生效。",
+                224,
+                y + 54,
+                total,
+                24,
+            );
         }
     }
+
     unsafe fn section(&mut self, text: &str, x: i32, y: i32, width: i32) {
         unsafe {
             let hwnd = self.label(text, x, y, width, 26);
             widgets::heading(hwnd, self.dpi);
+        }
+    }
+    unsafe fn caption(&mut self, text: &str, x: i32, y: i32, width: i32, height: i32) {
+        unsafe {
+            let hwnd = self.label(text, x, y, width, height);
+            SetPropW(hwnd, wide("LiteTray.Muted").as_ptr(), 1usize as HANDLE);
+        }
+    }
+    unsafe fn divider(&mut self, x: i32, y: i32, width: i32) {
+        unsafe {
+            let hwnd = self.label("", x, y, width, 1);
+            widgets::divider(hwnd);
         }
     }
     unsafe fn clock_sample(&mut self, c: &Config, width: i32) {
@@ -431,49 +454,137 @@ impl App {
         unsafe {
             let total = width - 260;
             let half = (total - 24) / 2;
+            let right = 248 + half;
             self.clock_sample(c, width);
             self.preset_choices(c, total);
-            self.section("显示内容", 224, 214, total);
-            self.edit("第一行", &c.clock.top_line, 201, 224, 250, half);
-            self.edit("第二行", &c.clock.bottom_line, 202, 248 + half, 250, half);
-            self.label(
-                "变量：%time% 时间   %date% 日期   %weekday% 星期   %weather% 天气",
-                224,
-                312,
-                total,
-                24,
-            );
-            self.label("默认字体", 224, 348, half, 24);
-            self.font_picker(Some(&c.clock.font_family), 205, 224, 374, half, false);
-            self.label("字号", 248 + half, 348, 96, 24);
-            self.size_picker(Some(c.clock.font_size), 206, 248 + half, 374, 96, false);
+            self.edit("第一行 · 内容模板", &c.clock.top_line, 201, 224, 216, half);
             self.edit(
-                "宽度 · 留空自动",
+                "第二行 · 内容模板",
+                &c.clock.bottom_line,
+                202,
+                right,
+                216,
+                half,
+            );
+            self.caption(
+                "可组合 %time% 时间、%date% 日期、%weekday% 星期、%weather% 天气",
+                224,
+                278,
+                total,
+                22,
+            );
+            for (id, value, x) in [
+                (214, c.clock.date_format.clone(), 224),
+                (215, clock::effective_time_pattern(&c.clock), right),
+            ] {
+                self.control(
+                    "STATIC",
+                    "",
+                    id + 2,
+                    SS_LEFT as u32 | SS_ENDELLIPSIS,
+                    x,
+                    310,
+                    half,
+                    22,
+                );
+                let edit = self.control(
+                    "EDIT",
+                    &value,
+                    id,
+                    WS_TABSTOP | ES_AUTOHSCROLL as u32,
+                    x,
+                    335,
+                    half,
+                    30,
+                );
+                SendMessageW(edit, EM_SETLIMITTEXT, 128, 0);
+            }
+            for (id, y) in [(218, 373), (219, 397)] {
+                let hint = self.control(
+                    "STATIC",
+                    "",
+                    id,
+                    SS_LEFT as u32 | SS_ENDELLIPSIS,
+                    224,
+                    y,
+                    total,
+                    22,
+                );
+                SetPropW(hint, wide("LiteTray.Muted").as_ptr(), 1usize as HANDLE);
+            }
+            self.update_clock_samples();
+            self.divider(224, 434, total);
+            self.label("点击时钟", 224, 449, half, 22);
+            self.combo(
+                &["日历与天气", "系统日历"],
+                usize::from(c.clock.click_action == ClickAction::SystemCalendar),
+                208,
+                224,
+                476,
+                half,
+            );
+            self.edit(
+                "时钟宽度 · 留空随内容",
                 &if c.clock.width == 0 {
                     String::new()
                 } else {
                     c.clock.width.to_string()
                 },
                 207,
-                364 + half,
-                348,
-                half - 116,
+                right,
+                449,
+                half,
             );
-            self.check("显示秒", c.clock.show_seconds, 203, 224, 416, 160);
-            self.check("日历显示农历", c.clock.show_lunar, 204, 410, 416, 220);
-            self.label("点击时钟", 224, 464, 96, 24);
-            self.combo(
-                &["日历与天气", "系统日历"],
-                usize::from(c.clock.click_action == ClickAction::SystemCalendar),
-                208,
-                332,
-                458,
-                half - 108,
-            );
-            self.button("预览原生时钟", 209, 248 + half, 458, half);
-            self.button("启用任务栏时钟", 212, 224, 502, half);
-            self.button("停用并恢复系统时钟", 213, 248 + half, 502, half);
-            self.control("STATIC", "", 210, SS_LEFT as u32, 224, 548, total, 44);
+            self.check("日历显示农历", c.clock.show_lunar, 204, 224, 522, half);
+            self.button("预览原生时钟", 209, right, 518, half);
+            self.button("启用任务栏时钟", 212, 224, 564, half);
+            self.button("恢复系统时钟", 213, right, 564, half);
+            // The persistent footer carries connection status; a long adapter
+            // diagnostic must not push the actual settings out of the page.
+        }
+    }
+
+    pub(super) unsafe fn update_clock_samples(&self) {
+        unsafe {
+            if self.page != 1 {
+                return;
+            }
+            let mut c = self.draft.clock.clone();
+            c.date_format = self.text(214);
+            c.time_format = self.text(215);
+            c.show_seconds = false;
+            for (date, id, pattern, label, token, help) in [
+                (
+                    true,
+                    216,
+                    &c.date_format,
+                    "日期格式",
+                    "%date%",
+                    "yyyy / yy 年 · MM 或 mm 月 · dd 日 · ddd / dddd 星期；例如 yyyymmdd",
+                ),
+                (
+                    false,
+                    217,
+                    &c.time_format,
+                    "时间格式",
+                    "%time%",
+                    "HH 24小时 · hh 12小时 · mm 分 · ss 秒 · tt 上午/下午；例如 HH:mm:ss",
+                ),
+            ] {
+                match clock::validate_pattern(pattern, date) {
+                    Ok(()) => {
+                        set_text(
+                            self.field(id),
+                            &format!("{label} · {}", clock::format(token, &c, Local::now(), "")),
+                        );
+                        set_text(self.field(id + 2), help);
+                    }
+                    Err(error) => {
+                        set_text(self.field(id), &format!("{label} · 请检查格式"));
+                        set_text(self.field(id + 2), &error);
+                    }
+                }
+            }
         }
     }
     pub(super) unsafe fn style_settings(&mut self, c: &Config, width: i32) {
@@ -488,7 +599,20 @@ impl App {
             let total = width - 260;
             let half = (total - 24) / 2;
             self.clock_sample(c, width);
-            self.preset_choices(c, total);
+            self.label("公共字体", 224, 178, half, 22);
+            self.font_picker(Some(&c.clock.font_family), 205, 224, 205, half, false);
+            self.label("字号", 248 + half, 178, 80, 22);
+            self.size_picker(Some(c.clock.font_size), 206, 248 + half, 205, 80, false);
+            self.label("公共对齐", 344 + half, 178, half - 96, 22);
+            self.combo(
+                &["保留原样", "左对齐", "居中", "右对齐"],
+                align(c.clock.alignment),
+                803,
+                344 + half,
+                205,
+                half - 96,
+            );
+            self.divider(224, 253, total);
             for (title, line, color, color_id, font_id, x) in [
                 (
                     "第一行",
@@ -507,125 +631,130 @@ impl App {
                     248 + half,
                 ),
             ] {
-                self.section(title, x, 218, half);
-                self.label("字体", x, 252, half - 100, 22);
+                self.section(title, x, 270, half);
                 self.font_picker(
                     line.font_family.as_deref(),
                     font_id,
                     x,
-                    278,
-                    half - 100,
+                    306,
+                    half - 96,
                     true,
                 );
-                self.label("字号", x + half - 84, 252, 84, 22);
-                self.size_picker(line.font_size, font_id + 1, x + half - 84, 278, 84, true);
-                self.edit("文字颜色", color, color_id, x, 318, half - 232);
+                self.size_picker(line.font_size, font_id + 1, x + half - 80, 306, 80, true);
+                let color_width = half - 220;
+                self.edit("文字颜色", color, color_id, x, 356, color_width);
+                SendMessageW(
+                    self.field(color_id),
+                    EM_SETCUEBANNER,
+                    0,
+                    wide("跟随系统").as_ptr() as isize,
+                );
                 self.button(
                     "选色",
                     if color_id == 801 { 812 } else { 813 },
-                    x + half - 224,
-                    342,
+                    x + color_width + 8,
+                    379,
                     56,
                 );
-                self.label("对齐方式", x + half - 150, 318, 150, 22);
+                self.label("对齐", x + half - 144, 356, 144, 22);
                 self.combo(
                     &["沿用公共对齐", "保留原样", "左对齐", "居中", "右对齐"],
                     line.alignment.map(|a| align(a) + 1).unwrap_or(0),
                     font_id + 2,
-                    x + half - 150,
-                    344,
-                    150,
+                    x + half - 144,
+                    381,
+                    144,
                 );
             }
-            self.label("公共对齐", 224, 392, 96, 24);
-            self.combo(
-                &["保留原样", "左对齐", "居中", "右对齐"],
-                align(c.clock.alignment),
-                803,
-                332,
-                386,
-                half - 108,
+            self.caption(
+                "选择“沿用”继承公共设置；颜色留空时跟随 Windows。",
+                224,
+                425,
+                total,
+                22,
             );
-            self.label(
-                "独立设置每一行；选择“沿用”可跟随公共字体与字号。",
-                248 + half,
-                386,
-                half,
-                40,
-            );
-            self.section("鼠标悬停提示", 224, 436, total);
+            self.divider(224, 462, total);
+            self.label("鼠标悬停提示 · 留空使用系统提示", 224, 477, total, 22);
             let tip = self.control(
                 "EDIT",
                 &c.clock.tooltip_line.replace('\n', "\r\n"),
                 804,
                 WS_TABSTOP | ES_MULTILINE as u32 | ES_AUTOVSCROLL as u32 | ES_WANTRETURN as u32,
                 224,
-                472,
+                505,
                 total,
-                52,
+                48,
             );
             SendMessageW(tip, EM_SETLIMITTEXT, 1024, 0);
-            self.label(
-                "留空使用系统提示。支持显示内容中的全部变量和换行。",
-                224,
-                534,
-                total,
-                24,
+            SendMessageW(
+                tip,
+                EM_SETCUEBANNER,
+                0,
+                wide("留空使用系统提示；支持内容模板中的变量与换行").as_ptr() as isize,
             );
-            self.button("预览原生时钟", 209, 224, 566, half);
-            self.button("重置样式", 805, 248 + half, 566, half);
+            self.button("预览原生时钟", 209, 224, 562, half);
+            self.button("重置样式", 805, 248 + half, 562, half);
         }
     }
+
     pub(super) unsafe fn about_settings(&mut self, c: &Config, width: i32) {
         unsafe {
             let total = width - 260;
-            self.section("LiteTray 轻托盘", 224, 88, total);
-            self.label(
+            self.section("LiteTray 轻托盘", 224, 88, total - 180);
+            self.button("项目主页", 607, 224 + total - 144, 82, 144);
+            self.caption(
                 &format!(
-                    "版本 {}  ·  {UI_REVISION}\r\n让每块屏幕都有顺手的时钟、日历和托盘。",
+                    "版本 {} · {UI_REVISION}\r\n让每块屏幕都有顺手的时钟、日历和托盘。",
                     env!("CARGO_PKG_VERSION")
                 ),
                 224,
-                130,
+                134,
                 total,
-                50,
+                48,
             );
-            self.section("应用更新", 224, 204, total);
+            self.divider(224, 209, total);
+            self.section("应用更新", 224, 228, total);
             self.control(
                 "STATIC",
                 &self
                     .update
                     .as_ref()
                     .map(UpdateStatus::text)
-                    .unwrap_or_else(|| "点击检查，获取 GitHub 上的最新 Releases 与 Tags。".into()),
+                    .unwrap_or_else(|| "可从 GitHub 获取最新的 Releases 与 Tags。".into()),
                 608,
                 SS_LEFT as u32,
                 224,
-                244,
+                270,
                 total,
                 56,
             );
-            self.button("检查更新", UPDATE, 224, 312, 160);
-            self.button("查看版本", OPEN_RELEASE, 402, 312, 150);
-            self.button("项目主页", 607, 570, 312, 140);
+            self.button("检查更新", UPDATE, 224, 340, 160);
+            self.button("查看版本", OPEN_RELEASE, 400, 340, 150);
+            self.divider(224, 400, total);
             self.check(
                 "启动时检查更新",
                 c.updates.check_on_startup,
                 603,
                 224,
-                364,
-                280,
+                419,
+                (total - 24) / 2,
             );
             self.check(
                 "接收预览版本",
                 c.updates.include_prerelease,
                 602,
-                522,
-                364,
-                240,
+                248 + (total - 24) / 2,
+                419,
+                (total - 24) / 2,
             );
-            self.edit("更新仓库", &c.updates.repository, 601, 224, 416, total);
-            self.label("公开仓库直接检查，无需密钥或登录。\r\n开发期间仓库尚未公开时，会显示暂不可访问；公开后自动恢复。",224,488,total,44);
+            self.edit("更新仓库", &c.updates.repository, 601, 224, 471, total);
+            self.caption(
+                "公开仓库无需密钥或登录。\r\n开发中的私有仓库暂不可访问，转为公开后即可检查。",
+                224,
+                547,
+                total,
+                44,
+            );
         }
     }
 }

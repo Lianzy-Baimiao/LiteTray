@@ -42,6 +42,7 @@ const TIMER_TOGGLE: u16 = 4123;
 const TIMER_DELETE: u16 = 4124;
 const HISTORY: u16 = 4130;
 const EMPTY_TIMERS: u16 = 4131;
+const EMPTY_HISTORY: u16 = 4132;
 const TYPE_TAB: u16 = 4200;
 const TIMER_TAB: u16 = 4300;
 const SOUND_CHOICE: u16 = 4400;
@@ -171,7 +172,7 @@ pub(super) unsafe fn create(
             fonts: [
                 make_font(scale(14), 400, &face),
                 make_font(scale(12), 400, &face),
-                make_font(scale(38), 500, "Segoe UI"),
+                make_font(scale(48), 500, "Segoe UI"),
             ],
             dpi,
             timer_mode: timers,
@@ -529,7 +530,8 @@ impl View {
                     tab_width - 6,
                 );
             }
-            let left = (width * 38 / 100).clamp(250, 330);
+            self.rule(20, 68, width - 40);
+            let left = (width * 36 / 100).clamp(250, 320);
             self.control(
                 "STATIC",
                 &self
@@ -538,13 +540,13 @@ impl View {
                     .unwrap_or_else(|| "全部日期 · 即将到来".into()),
                 SCOPE,
                 0,
-                20,
-                72,
-                left - 74,
+                24,
+                98,
+                left - 86,
                 24,
             );
-            self.button("全部", ALL_DATES, left - 54, 66, 54);
-            self.button("＋ 新建", NEW, 20, 108, left - 20);
+            self.button("全部", ALL_DATES, left - 58, 90, 58);
+            self.button("新建事项", NEW, 24, 132, left - 24);
             let list = self.control(
                 "LISTBOX",
                 "",
@@ -555,41 +557,58 @@ impl View {
                     | LBS_OWNERDRAWFIXED as u32
                     | LBS_HASSTRINGS as u32
                     | LBS_NOINTEGRALHEIGHT as u32,
-                20,
-                154,
-                left - 20,
-                height - 236,
+                24,
+                191,
+                left - 24,
+                height - 293,
             );
             SendMessageW(list, LB_SETITEMHEIGHT, 0, self.s(65) as isize);
             self.control(
                 "STATIC",
-                "暂无事项\r\n点击“新建”记录第一件事",
+                "暂无事项\r\n点击“新建事项”开始记录",
                 EMPTY,
                 SS_CENTER,
-                30,
-                210,
-                left - 40,
+                34,
+                239,
+                left - 44,
                 70,
             );
-            let x = left + 28;
-            let w = width - x - 20;
+            let x = left + 32;
+            let w = width - x - 24;
             let half = (w - 16) / 2;
-            self.edit("标题", "", TITLE, x, 70, w);
+            let heading = self.control("STATIC", "新建日程", 4023, 0, x, 94, w, 26);
+            widgets::heading(heading, self.dpi);
+            let title = self.control(
+                "EDIT",
+                "",
+                TITLE,
+                WS_TABSTOP | ES_AUTOHSCROLL as u32,
+                x,
+                132,
+                w,
+                32,
+            );
+            SendMessageW(
+                title,
+                EM_SETCUEBANNER,
+                0,
+                wide("输入事项标题").as_ptr() as isize,
+            );
             self.edit(
-                "日期（公历）",
+                "日期 · YYYY-MM-DD",
                 &self
                     .scope
                     .unwrap_or_else(|| Local::now().date_naive())
                     .to_string(),
                 DATE,
                 x,
-                144,
+                175,
                 half,
             );
-            self.edit("时间（留空为全天）", "", TIME, x + half + 16, 144, half);
-            self.label("重复", x, 218, half);
-            self.combo(&Repeat::ALL.map(Repeat::label), 0, REPEAT, x, 246, half);
-            self.label("提醒", x + half + 16, 218, half);
+            self.edit("时间 · 留空为全天", "", TIME, x + half + 16, 175, half);
+            self.label("重复", x, 252, half);
+            self.combo(&Repeat::ALL.map(Repeat::label), 0, REPEAT, x, 280, half);
+            self.label("提醒", x + half + 16, 252, half);
             self.combo(
                 &[
                     "不提醒",
@@ -604,66 +623,68 @@ impl View {
                 1,
                 REMIND,
                 x + half + 16,
-                246,
+                280,
                 half,
             );
-            self.label("备注", x, 292, w);
+            self.label("备注", x, 331, w);
+            let bottom = (height - 152).min(546);
             self.control(
                 "EDIT",
                 "",
                 NOTES,
                 WS_TABSTOP | ES_MULTILINE as u32 | ES_AUTOVSCROLL as u32 | ES_WANTRETURN as u32,
                 x,
-                320,
+                359,
                 w,
-                (height - 498).clamp(54, 160),
-            );
-            let bottom = (height - 178).min(486);
-            self.control(
-                "BUTTON",
-                "已完成",
-                DONE,
-                WS_TABSTOP | BS_AUTOCHECKBOX as u32,
-                x,
-                bottom,
-                half,
-                30,
+                (bottom - 371).max(40),
             );
             let enabled = self.control(
                 "BUTTON",
                 "启用提醒",
                 ENABLED,
                 WS_TABSTOP | BS_AUTOCHECKBOX as u32,
+                x,
+                bottom,
+                half,
+                28,
+            );
+            SendMessageW(enabled, BM_SETCHECK, BST_CHECKED as usize, 0);
+            self.control(
+                "BUTTON",
+                "已完成",
+                DONE,
+                WS_TABSTOP | BS_AUTOCHECKBOX as u32,
                 x + half + 16,
                 bottom,
                 half,
-                30,
+                28,
             );
-            SendMessageW(enabled, BM_SETCHECK, BST_CHECKED as usize, 0);
-            self.button("保存", COMMIT, x, bottom + 44, half);
-            self.button("删除", DELETE, x + half + 16, bottom + 44, half);
+            self.button("保存", COMMIT, x, bottom + 42, half);
+            self.button("删除", DELETE, x + half + 16, bottom + 42, half);
+            self.rule(20, height - 65, width - 40);
             self.control(
                 "STATIC",
                 &self.message.clone(),
                 MESSAGE,
                 0,
-                20,
-                height - 68,
-                width - 40,
-                26,
+                24,
+                height - 52,
+                width - 48,
+                24,
             );
-            self.label(
+            self.note(
                 "全天事项在 09:00 提醒 · 日历同时显示农历",
-                20,
-                height - 36,
-                width - 40,
+                24,
+                height - 28,
+                width - 48,
+                24,
             );
             self.update_tabs();
         }
     }
     unsafe fn timer_layout(&mut self, width: i32, height: i32) {
         unsafe {
-            let tab_width = (width - 188) / 4;
+            let tab_width = (width - 184) / 4;
             for (index, label) in ["番茄钟", "定时提醒", "提醒记录", "铃声"]
                 .into_iter()
                 .enumerate()
@@ -676,22 +697,44 @@ impl View {
                     tab_width - 6,
                 );
             }
-            self.button("管理闹钟", 4190, width - 150, 16, 130);
-            let half = (width - 64) / 2;
-            let right = 44 + half;
+            self.button("管理闹钟", 4190, width - 144, 16, 124);
+            self.rule(20, 68, width - 40);
+            let half = (width - 88) / 2;
+            let right = 64 + half;
             let start = self.children.len();
-            let clock = self.control("STATIC", "25:00", FOCUS_TIME, 0, 24, 98, width - 48, 68);
+            self.heading("当前专注", 24, 94, half);
+            self.control(
+                "STATIC",
+                "准备专注",
+                FOCUS_PHASE,
+                SS_CENTER,
+                24,
+                153,
+                half,
+                26,
+            );
+            let clock = self.control(
+                "STATIC", "00:25:00", FOCUS_TIME, SS_CENTER, 24, 194, half, 76,
+            );
             SendMessageW(clock, WM_SETFONT, self.fonts[2] as usize, 0);
-            self.control("STATIC", "准备专注", FOCUS_PHASE, 0, 24, 180, half, 30);
-            self.button("开始专注", FOCUS_TOGGLE, right, 170, half - 106);
-            self.button("重置", FOCUS_RESET, width - 110, 170, 90);
-            let cell = (width - 100) / 4;
+            let actions = (half - 16) / 2;
+            self.button("开始专注", FOCUS_TOGGLE, 24, 315, actions);
+            self.button("重置", FOCUS_RESET, 40 + actions, 315, actions);
+            self.note(
+                "阶段结束后响铃。\r\n准备好后，再开始下一段专注或休息。",
+                24,
+                373,
+                half,
+                48,
+            );
+            self.heading("专注节奏", right, 94, half);
+            let cell = (half - 20) / 2;
             let settings = self.store.borrow().data.focus.clone();
             for (i, (name, id, value)) in [
                 ("专注 / 分钟", FOCUS_WORK, settings.work),
                 ("短休息 / 分钟", FOCUS_SHORT, settings.short_break),
                 ("长休息 / 分钟", FOCUS_LONG, settings.long_break),
-                ("间隔 / 轮", FOCUS_ROUNDS, settings.rounds),
+                ("长休息间隔 / 轮", FOCUS_ROUNDS, settings.rounds),
             ]
             .into_iter()
             .enumerate()
@@ -700,21 +743,23 @@ impl View {
                     name,
                     &value.to_string(),
                     id,
-                    20 + i as i32 * (cell + 20),
-                    248,
+                    right + i as i32 % 2 * (cell + 20),
+                    145 + i as i32 / 2 * 83,
                     cell,
                 );
             }
-            self.button("保存节奏", FOCUS_SAVE, 20, 334, 124);
-            self.label(
-                "阶段结束后响铃，由你决定何时开始下一阶段。",
-                20,
-                404,
-                width - 40,
+            self.button("保存节奏", FOCUS_SAVE, right, 315, half);
+            self.note(
+                "保存后从下一阶段开始使用。\r\n铃声和响铃时长可在“铃声”中调整。",
+                right,
+                373,
+                half,
+                48,
             );
             self.timer_groups.push(self.children[start..].to_vec());
             let start = self.children.len();
-            self.label("进行中的计时", 20, 82, half);
+            self.heading("进行中的计时", 24, 94, half);
+            let list_height = (height - 316).max(164);
             let list = self.control(
                 "LISTBOX",
                 "",
@@ -725,50 +770,76 @@ impl View {
                     | LBS_OWNERDRAWFIXED as u32
                     | LBS_HASSTRINGS as u32
                     | LBS_NOINTEGRALHEIGHT as u32,
-                20,
-                122,
+                24,
+                142,
                 half,
-                height - 210,
+                list_height,
             );
             SendMessageW(list, LB_SETITEMHEIGHT, 0, self.s(65) as isize);
             self.control(
                 "STATIC",
-                "还没有计时器\r\n设置内容和时长后开始计时",
+                "还没有计时器\r\n在右侧创建第一条提醒",
                 EMPTY_TIMERS,
                 SS_CENTER,
-                32,
-                208,
+                36,
+                226,
                 half - 24,
-                70,
+                60,
             );
-            self.edit("提醒内容", "喝水 / 休息一下", TIMER_TITLE, right, 82, half);
-            self.edit("多久后提醒 / 分钟", "10", TIMER_MINUTES, right, 168, half);
-            self.button("开始计时", TIMER_START, right, 260, half);
-            self.button("暂停 / 继续", TIMER_TOGGLE, right, 316, (half - 16) / 2);
+            self.button("暂停 / 继续", TIMER_TOGGLE, 24, 158 + list_height, actions);
             self.button(
-                "删除计时器",
+                "删除",
                 TIMER_DELETE,
-                right + (half + 16) / 2,
-                316,
-                (half - 16) / 2,
+                40 + actions,
+                158 + list_height,
+                actions,
+            );
+            self.heading("新建提醒", right, 94, half);
+            self.edit("提醒内容", "喝水 / 休息一下", TIMER_TITLE, right, 145, half);
+            self.edit("多久后提醒 / 分钟", "10", TIMER_MINUTES, right, 228, half);
+            self.button("开始计时", TIMER_START, right, 315, half);
+            self.note(
+                "可同时创建多个计时器。\r\n选中左侧计时器后可暂停、继续或删除。",
+                right,
+                373,
+                half,
+                48,
             );
             self.timer_groups.push(self.children[start..].to_vec());
             let start = self.children.len();
-            self.label("最近提醒 · 保存在本机", 20, 82, width - 40);
+            self.heading("最近提醒", 24, 94, width - 48);
+            self.note(
+                "提醒记录保存在本机，可在这里回看。",
+                24,
+                132,
+                width - 48,
+                24,
+            );
             self.control(
                 "LISTBOX",
                 "",
                 HISTORY,
                 WS_TABSTOP | WS_VSCROLL | LBS_HASSTRINGS as u32 | LBS_NOINTEGRALHEIGHT as u32,
-                20,
-                124,
-                width - 40,
-                height - 214,
+                24,
+                177,
+                width - 48,
+                height - 285,
+            );
+            self.control(
+                "STATIC",
+                "还没有提醒记录\r\n闹钟、日程或计时到期后，会出现在这里",
+                EMPTY_HISTORY,
+                SS_CENTER,
+                24,
+                250,
+                width - 48,
+                64,
             );
             self.timer_groups.push(self.children[start..].to_vec());
             let start = self.children.len();
             let sound = self.store.borrow().data.sound.clone();
-            self.label("提醒铃声", 20, 86, width - 40);
+            self.heading("声音与时长", 24, 94, width - 48);
+            self.label("提醒铃声", 24, 145, half);
             self.combo(
                 &[
                     "静音",
@@ -786,55 +857,76 @@ impl View {
                 ],
                 sound.tone as usize,
                 SOUND_CHOICE,
-                20,
-                116,
-                width - 40,
+                24,
+                173,
+                half,
             );
-            self.edit(
-                "自定义音乐（WAV）",
-                &sound.custom_file,
-                SOUND_PATH,
-                20,
-                172,
-                width - 186,
-            );
-            SendMessageW(self.field(SOUND_PATH), EM_SETLIMITTEXT, 32767, 0);
-            self.button("选择文件…", SOUND_BROWSE, width - 146, 200, 126);
             self.edit(
                 "响铃时长 / 秒（5–120）",
                 &sound.seconds.to_string(),
                 SOUND_SECONDS,
-                20,
-                252,
+                right,
+                145,
                 half,
             );
-            self.button("试听 5 秒", SOUND_PREVIEW, right, 280, half);
-            self.button("保存铃声", SOUND_SAVE, 20, 350, half);
-            self.label(
-                "适用于闹钟、日程、定时提醒和专注；使用当前系统音量。",
-                20,
-                414,
-                width - 40,
+            self.edit(
+                "自定义音乐 · WAV 文件",
+                &sound.custom_file,
+                SOUND_PATH,
+                24,
+                234,
+                width - 210,
+            );
+            SendMessageW(self.field(SOUND_PATH), EM_SETLIMITTEXT, 32767, 0);
+            SendMessageW(
+                self.field(SOUND_PATH),
+                EM_SETCUEBANNER,
+                0,
+                wide("选择自定义 WAV 时填写").as_ptr() as isize,
+            );
+            self.button("选择文件…", SOUND_BROWSE, width - 166, 262, 142);
+            self.button("保存铃声", SOUND_SAVE, 24, 330, 160);
+            self.button("试听 5 秒", SOUND_PREVIEW, 200, 330, 144);
+            self.note(
+                "适用于闹钟、日程、定时提醒与专注。\r\n使用当前系统音量，选择“静音”后仅显示通知。",
+                24,
+                392,
+                width - 48,
+                48,
             );
             self.timer_groups.push(self.children[start..].to_vec());
-            self.button("停止响铃", SOUND_STOP, width - 146, height - 76, 126);
+            self.rule(20, height - 100, width - 40);
+            self.button("停止响铃", SOUND_STOP, width - 150, height - 82, 130);
             self.control(
                 "STATIC",
                 &self.message.clone(),
                 MESSAGE,
                 0,
-                20,
-                height - 72,
-                width - 186,
+                24,
+                height - 78,
+                width - 194,
                 28,
             );
-            self.label(
-                "关闭窗口后仍会计时和提醒 · 退出 LiteTray 后停止通知",
-                20,
-                height - 34,
-                width - 40,
-            );
+            self.note("关闭窗口后仍会计时与提醒", 24, height - 36, width - 48, 24);
             self.update_tabs();
+        }
+    }
+    unsafe fn heading(&mut self, text: &str, x: i32, y: i32, width: i32) {
+        unsafe {
+            let hwnd = self.control("STATIC", text, 0, 0, x, y, width, 26);
+            widgets::heading(hwnd, self.dpi);
+        }
+    }
+    unsafe fn note(&mut self, text: &str, x: i32, y: i32, width: i32, height: i32) {
+        unsafe {
+            let hwnd = self.control("STATIC", text, 0, 0, x, y, width, height);
+            SetPropW(hwnd, wide("LiteTray.Muted").as_ptr(), 1usize as HANDLE);
+        }
+    }
+    unsafe fn rule(&mut self, x: i32, y: i32, width: i32) {
+        unsafe {
+            let hwnd = self.control("STATIC", "", 0, 0, x, y, width, 1);
+            widgets::divider(hwnd);
         }
     }
     unsafe fn update_tabs(&self) {
@@ -847,6 +939,9 @@ impl View {
                 );
             }
             if self.timer_mode {
+                for id in [TIMER_TOGGLE, TIMER_DELETE] {
+                    EnableWindow(self.field(id), i32::from(self.ids.contains(&self.selected)));
+                }
                 for (index, group) in self.timer_groups.iter().enumerate() {
                     for &hwnd in group {
                         ShowWindow(
@@ -858,6 +953,14 @@ impl View {
                             },
                         );
                     }
+                }
+                if self.timer_tab == 2 {
+                    let empty = SendMessageW(self.field(HISTORY), LB_GETCOUNT, 0, 0) == 0;
+                    ShowWindow(self.field(HISTORY), if empty { SW_HIDE } else { SW_SHOWNA });
+                    ShowWindow(
+                        self.field(EMPTY_HISTORY),
+                        if empty { SW_SHOWNA } else { SW_HIDE },
+                    );
                 }
                 if self.timer_tab == 1 {
                     ShowWindow(
@@ -883,6 +986,19 @@ impl View {
                     if self.filter == 1 { SW_SHOWNA } else { SW_HIDE },
                 );
                 set_text(self.field(COMMIT), &format!("保存{}", self.kind().label()));
+                set_text(
+                    self.field(4023),
+                    &format!(
+                        "{}{}",
+                        if self.selected == 0 {
+                            "新建"
+                        } else {
+                            "编辑"
+                        },
+                        self.kind().label()
+                    ),
+                );
+                set_text(self.field(NEW), &format!("新建{}", self.kind().label()));
             }
         }
     }
@@ -1025,7 +1141,11 @@ impl View {
                 .iter()
                 .find(|t| t.phase != Phase::Countdown)
             {
-                set_text(self.field(FOCUS_TIME), &timer.display(Utc::now()));
+                let time = timer.display(Utc::now());
+                set_text(
+                    self.field(FOCUS_TIME),
+                    time.strip_prefix("00:").unwrap_or(&time),
+                );
                 set_text(
                     self.field(FOCUS_PHASE),
                     &format!("{} · 已完成 {} 轮", timer.phase.label(), timer.rounds),
@@ -1043,7 +1163,12 @@ impl View {
             } else {
                 set_text(
                     self.field(FOCUS_TIME),
-                    &format!("00:{:02}:00", store.data.focus.work),
+                    format!(
+                        "{:02}:{:02}:00",
+                        store.data.focus.work / 60,
+                        store.data.focus.work % 60
+                    )
+                    .trim_start_matches("00:"),
                 );
                 set_text(self.field(FOCUS_PHASE), "准备专注");
                 set_text(self.field(FOCUS_TOGGLE), "开始专注");
@@ -1200,6 +1325,7 @@ impl View {
                 {
                     self.load_entry(&entry);
                 }
+                self.update_tabs();
                 return Ok(());
             }
             if notification != BN_CLICKED as u16 {
@@ -1401,7 +1527,14 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
                 if let Ok(view) = (*raw).try_borrow() {
                     let t = design::Theme::new(view.dark);
-                    SetTextColor(w as HDC, t.text);
+                    SetTextColor(
+                        w as HDC,
+                        if !GetPropW(l as HWND, wide("LiteTray.Muted").as_ptr()).is_null() {
+                            t.muted
+                        } else {
+                            t.text
+                        },
+                    );
                     SetBkColor(
                         w as HDC,
                         if msg == WM_CTLCOLOREDIT {
@@ -1513,21 +1646,28 @@ unsafe fn draw_item(view: &View, item: &DRAWITEMSTRUCT) {
                 && id - TYPE_TAB + 1 == view.filter as u16
                 || (TIMER_TAB..TIMER_TAB + 4).contains(&id)
                     && id - TIMER_TAB == view.timer_tab as u16;
-            let primary =
-                matches!(id, COMMIT | FOCUS_TOGGLE | TIMER_START | SOUND_SAVE) || active_tab;
+            let primary = matches!(id, COMMIT | FOCUS_TOGGLE | TIMER_START | SOUND_SAVE);
             let hover = !GetPropW(item.hwndItem, wide("LiteTray.Hover").as_ptr()).is_null();
-            let color = if primary {
+            let disabled = item.itemState & ODS_DISABLED != 0;
+            let color = if disabled {
+                t.field
+            } else if primary {
                 t.accent
-            } else if hover || selected {
+            } else if active_tab || hover || selected {
                 t.tint
             } else {
                 t.field
             };
+            design::fill(item.hDC, item.rcItem, t.surface);
             design::rounded(
                 item.hDC,
                 item.rcItem,
                 color,
-                if focused { t.accent } else { t.border },
+                if active_tab || focused {
+                    t.accent
+                } else {
+                    t.border
+                },
                 view.s(8),
             );
             design::text(
@@ -1535,7 +1675,15 @@ unsafe fn draw_item(view: &View, item: &DRAWITEMSTRUCT) {
                 &window_text(item.hwndItem),
                 item.rcItem,
                 view.fonts[0],
-                if primary { t.on_accent } else { t.text },
+                if disabled {
+                    t.muted
+                } else if primary {
+                    t.on_accent
+                } else if active_tab {
+                    t.accent
+                } else {
+                    t.text
+                },
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE,
             );
         }

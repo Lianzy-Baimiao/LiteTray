@@ -24,7 +24,125 @@ pub fn needs_second_ticks(config: &ClockConfig) -> bool {
     config.show_seconds
         || [&config.top_line, &config.bottom_line, &config.tooltip_line]
             .iter()
-            .any(|line| line.contains("%second%"))
+            .any(|line| {
+                line.contains("%second%")
+                    || line.contains("%time%") && pattern_has_seconds(&config.time_format, false)
+                    || line.contains("%date%") && pattern_has_seconds(&config.date_format, true)
+            })
+}
+
+/// Separate date/time patterns make lower-case `yyyymmdd` unambiguous:
+/// m is a month in the date field, and a minute in the time field.
+/// Upper-case M is always a month. Quoted text and escaped characters are literal.
+fn pattern_parts(pattern: &str, date: bool) -> Result<Vec<(String, Option<&'static str>)>, String> {
+    if pattern.is_empty() || pattern.len() > 128 || pattern.contains(['\0', '\n', '\r']) {
+        return Err("日期与时间格式须为 1–128 字符的单行文本".into());
+    }
+    let mut chars = pattern.chars().peekable();
+    let mut parts = Vec::new();
+    let mut month_context = date;
+    while let Some(c) = chars.next() {
+        if c == '\'' {
+            let mut literal = String::new();
+            loop {
+                match chars.next() {
+                    Some('\'') if chars.peek() == Some(&'\'') => {
+                        chars.next();
+                        literal.push('\'');
+                    }
+                    Some('\'') => break,
+                    Some(c) => literal.push(c),
+                    None => return Err("格式中的单引号未闭合".into()),
+                }
+            }
+            parts.push((literal, None));
+        } else if c == '\\' {
+            parts.push((
+                chars
+                    .next()
+                    .ok_or("格式末尾的转义符后缺少字符")?
+                    .to_string(),
+                None,
+            ));
+        } else if c.is_ascii_alphabetic() {
+            let mut token = c.to_string();
+            while chars.peek() == Some(&c) {
+                token.push(chars.next().unwrap());
+            }
+            if matches!(c, 'H' | 'h') {
+                month_context = false;
+            }
+            if c == 'y' {
+                month_context = date;
+            }
+            let spec = match token.as_str() {
+                "yyyy" => "%Y",
+                "yy" => "%y",
+                "M" => "%-m",
+                "MM" => "%m",
+                "m" if month_context => "%-m",
+                "mm" if month_context => "%m",
+                "d" => "%-d",
+                "dd" => "%d",
+                "ddd" => "weekday_short",
+                "dddd" => "weekday",
+                "H" => "%-H",
+                "HH" => "%H",
+                "h" => "%-I",
+                "hh" => "%I",
+                "m" => "%-M",
+                "mm" => "%M",
+                "s" => "%-S",
+                "ss" => "%S",
+                "t" | "tt" => "ampm",
+                _ => return Err(format!("不支持格式 {token}；普通英文请用单引号包围")),
+            };
+            parts.push((token, Some(spec)));
+        } else {
+            parts.push((c.to_string(), None));
+        }
+    }
+    Ok(parts)
+}
+pub fn validate_pattern(pattern: &str, date: bool) -> Result<(), String> {
+    pattern_parts(pattern, date).map(|_| ())
+}
+pub fn effective_time_pattern(config: &ClockConfig) -> String {
+    if config.show_seconds && !pattern_has_seconds(&config.time_format, false) {
+        format!("{}:ss", config.time_format)
+    } else {
+        config.time_format.clone()
+    }
+}
+fn pattern_has_seconds(pattern: &str, date: bool) -> bool {
+    pattern_parts(pattern, date)
+        .is_ok_and(|parts| parts.iter().any(|(_, s)| matches!(s, Some("%S" | "%-S"))))
+}
+fn format_pattern(pattern: &str, date: bool, now: DateTime<Local>) -> String {
+    let Ok(parts) = pattern_parts(pattern, date) else {
+        return pattern.into();
+    };
+    parts
+        .into_iter()
+        .map(|(literal, spec)| match spec {
+            None => literal,
+            Some("weekday") => [
+                "星期一",
+                "星期二",
+                "星期三",
+                "星期四",
+                "星期五",
+                "星期六",
+                "星期日",
+            ][now.weekday().num_days_from_monday() as usize]
+                .into(),
+            Some("weekday_short") => ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+                [now.weekday().num_days_from_monday() as usize]
+                .into(),
+            Some("ampm") => if now.hour12().0 { "下午" } else { "上午" }.into(),
+            Some(spec) => now.format(spec).to_string(),
+        })
+        .collect()
 }
 
 /// Formatting belongs to the host timer, independent of settings visibility.
@@ -91,15 +209,13 @@ pub fn format(template: &str, config: &ClockConfig, now: DateTime<Local>, weathe
             return out;
         };
         match &tail[..end] {
-            "date" => out.push_str(&now.format("%Y/%m/%d").to_string()),
-            "time" => out.push_str(
-                &now.format(if config.show_seconds {
-                    "%H:%M:%S"
-                } else {
-                    "%H:%M"
-                })
-                .to_string(),
-            ),
+            "date" => out.push_str(&format_pattern(&config.date_format, true, now)),
+            "time" => {
+                out.push_str(&format_pattern(&config.time_format, false, now));
+                if config.show_seconds && !pattern_has_seconds(&config.time_format, false) {
+                    out.push_str(&now.format(":%S").to_string());
+                }
+            }
             "weekday" => out.push_str(weekday),
             "weather" => out.push_str(weather),
             "year" => out.push_str(&now.year().to_string()),
@@ -129,6 +245,62 @@ pub fn format(template: &str, config: &ClockConfig, now: DateTime<Local>, weathe
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn detailed_patterns_reach_the_taskbar_frame() {
+        use chrono::TimeZone;
+        let c: ClockConfig = serde_json::from_value(serde_json::json!({
+            "date_format": "yyyymmdd", "time_format": "hh:mm:ss tt",
+            "top_line": "%date%", "bottom_line": "%time%", "show_seconds": false
+        }))
+        .unwrap();
+        let now = Local
+            .with_ymd_and_hms(2026, 1, 2, 0, 5, 9)
+            .single()
+            .unwrap();
+        let output = frame(&c, "", now);
+        assert_eq!(output.text.top, "20260102");
+        assert_eq!(output.text.bottom, "12:05:09 上午");
+        assert!(needs_second_ticks(&c));
+    }
+    #[test]
+    fn patterns_distinguish_months_minutes_literals_and_leap_days() {
+        use chrono::TimeZone;
+        let now = Local
+            .with_ymd_and_hms(2024, 2, 29, 23, 7, 4)
+            .single()
+            .unwrap();
+        assert_eq!(
+            format_pattern("yyyy年M月d日 dddd", true, now),
+            "2024年2月29日 星期四"
+        );
+        assert_eq!(format_pattern("yy-MM-dd ddd", true, now), "24-02-29 周四");
+        assert_eq!(
+            format_pattern("HH:mm:ss / h:m:s tt", false, now),
+            "23:07:04 / 11:7:4 下午"
+        );
+        assert_eq!(
+            format_pattern("'Date:' yyyymmdd 'it''s'", true, now),
+            "Date: 20240229 it's"
+        );
+        assert!(validate_pattern("yyy-MM-dd", true).is_err());
+        assert!(validate_pattern("yyyy 'unfinished", true).is_err());
+        assert!(validate_pattern("", false).is_err());
+        assert!(validate_pattern("HH:mm\nss", false).is_err());
+        let mut c = ClockConfig {
+            show_seconds: false,
+            top_line: "%time%".into(),
+            time_format: "HH:mm 'ss'".into(),
+            ..Default::default()
+        };
+        assert!(
+            !needs_second_ticks(&c),
+            "literal seconds must not affect cadence"
+        );
+        c.tooltip_line = "%date%".into();
+        c.date_format = "yyyy/MM/dd HH:mm:ss".into();
+        assert!(needs_second_ticks(&c));
+        assert_eq!(format("%date%", &c, now, ""), "2024/02/29 23:07:04");
+    }
     #[test]
     fn unknown_fields_are_not_silently_lost() {
         assert!(validate_template("%cpu%").is_err());

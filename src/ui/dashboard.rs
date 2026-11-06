@@ -335,7 +335,7 @@ pub(super) unsafe fn update(
         view.busy = busy;
         view.weather = weather.clone();
         view.lunar = config.clock.show_lunar;
-        view.seconds = config.clock.show_seconds;
+        view.seconds = clock::needs_second_ticks(&config.clock);
         let changed = view
             .store
             .as_ref()

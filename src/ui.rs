@@ -44,7 +44,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.5";
+const UI_REVISION: &str = "开发版 5.6";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -134,6 +134,7 @@ struct App {
     draft: Config,
     saved: Config,
     status: String,
+    taskbar_status: Option<String>,
     weather: Option<weather::WeatherResult>,
     update: Option<UpdateStatus>,
     migration_source: Option<Vec<u8>>,
@@ -309,6 +310,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             saved: config.clone(),
             draft: config,
             status: "开发版 · 在“时钟显示”中启用任务栏时钟".into(),
+            taskbar_status: None,
             weather: None,
             update: None,
             migration_source: None,
@@ -1031,10 +1033,13 @@ impl App {
             1 => {
                 c.clock.top_line = self.text(201);
                 c.clock.bottom_line = self.text(202);
-                c.clock.show_seconds = self.checked(203);
+                c.clock.date_format = self.text(214);
+                let pattern = self.text(215);
+                if pattern != clock::effective_time_pattern(&c.clock) {
+                    c.clock.time_format = pattern;
+                    c.clock.show_seconds = false;
+                }
                 c.clock.show_lunar = self.checked(204);
-                c.clock.font_family = self.text(205);
-                c.clock.font_size = self.text(206).parse().map_err(|_| "字号必须是整数")?;
                 c.clock.width = if self.text(207).trim().is_empty() {
                     0
                 } else {
@@ -1090,6 +1095,8 @@ impl App {
             }
             7 => {
                 use litetray_adapter_protocol::clock::Alignment;
+                c.clock.font_family = self.text(205);
+                c.clock.font_size = self.text(206).parse().map_err(|_| "字号必须是整数")?;
                 c.clock.top_color = self.text(801).trim().into();
                 c.clock.bottom_color = self.text(802).trim().into();
                 c.clock.alignment = match self.selected(803) {
@@ -1208,6 +1215,7 @@ impl App {
     unsafe fn update_views(&mut self) {
         unsafe {
             agenda::tick(self.field(agenda::ID));
+            self.update_clock_samples();
             let summary = self
                 .weather
                 .as_ref()
@@ -1230,16 +1238,6 @@ impl App {
                 if self.page == 1 {
                     let state = taskbar.snapshot();
                     set_text(
-                        self.field(210),
-                        &format!(
-                            "{}\r\n{}",
-                            state.text(),
-                            self.preview
-                                .as_ref()
-                                .map_or_else(|| "独立预览：尚未打开".into(), |p| p.status_text())
-                        ),
-                    );
-                    set_text(
                         self.field(212),
                         if self.saved.tray.clock_enabled {
                             "重新应用"
@@ -1256,6 +1254,11 @@ impl App {
                         )),
                     );
                     EnableWindow(self.field(213), i32::from(self.saved.tray.clock_enabled));
+                    let status = state.text();
+                    if self.taskbar_status.as_ref() != Some(&status) {
+                        self.taskbar_status = Some(status.clone());
+                        self.set_status(status);
+                    }
                 }
             }
             for &panel in &self.panel_cache {
@@ -1717,6 +1720,13 @@ impl App {
                     self.draft.clock.bottom_line = bottom.into();
                     self.draft.clock.width = 0;
                     self.draft.clock.show_seconds = false;
+                    self.draft.clock.time_format = "HH:mm".into();
+                    self.draft.clock.date_format = if id == settings::PRESET + 3 {
+                        "yyyymmdd"
+                    } else {
+                        "yyyy/MM/dd"
+                    }
+                    .into();
                     self.draft.clock.font_family = design::font_face();
                     self.draft.clock.font_size = 12;
                     self.draft.clock.top_color.clear();
@@ -2321,6 +2331,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     {
                         if app.collect_page().is_ok() {
                             widgets::update_preview(app.field(widgets::PREVIEW), &app.draft.clock);
+                            app.update_clock_samples();
                         }
                         return Some(0);
                     }
@@ -2333,11 +2344,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     }
                     if (w >> 16) == BN_CLICKED as usize {
                         quit = app.command(id);
-                        if matches!(app.page, 1 | 7)
-                            && matches!(id, 203 | 204)
-                            && app.collect_page().is_ok()
-                        {
+                        if matches!(app.page, 1 | 7) && id == 204 && app.collect_page().is_ok() {
                             widgets::update_preview(app.field(widgets::PREVIEW), &app.draft.clock);
+                            app.update_clock_samples();
                         }
                     }
                     Some(0)
@@ -2627,7 +2636,14 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
             WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
                 let t = design::Theme::new(p.dark);
                 let surface = !GetPropW(l as HWND, wide("LiteTray.Surface").as_ptr()).is_null();
-                SetTextColor(w as HDC, p.text);
+                SetTextColor(
+                    w as HDC,
+                    if !GetPropW(l as HWND, wide("LiteTray.Muted").as_ptr()).is_null() {
+                        t.muted
+                    } else {
+                        p.text
+                    },
+                );
                 SetBkColor(w as HDC, if surface { t.surface } else { p.bg });
                 Some(if surface { p.surface } else { p.background } as isize)
             }

@@ -3,6 +3,49 @@
 use super::*;
 use chrono::Days;
 
+#[test]
+fn selected_calendar_day_has_antialiased_corners() {
+    on_isolated_desktop(|| unsafe {
+        for dark in [false, true] {
+            let mut app = app_for_check(
+                dark,
+                96,
+                &std::env::temp_dir().join("litetray-edge-check.json"),
+            );
+            app.render();
+            let dashboard = app.field(dashboard::ID);
+            let selection = dashboard::selection(dashboard).unwrap();
+            let index = selection
+                .grid()
+                .iter()
+                .position(|d| *d == selection.selected)
+                .unwrap();
+            let day = GetDlgItem(dashboard, 1000 + index as i32);
+            let path = std::env::temp_dir().join(format!("litetray-calendar-edge-{dark}.bmp"));
+            write_window(day, &path);
+            let bmp = std::fs::read(&path).unwrap();
+            let width = i32::from_le_bytes(bmp[18..22].try_into().unwrap()) as usize;
+            let t = design::Theme::new(dark);
+            let mut intermediate = 0;
+            for y in 0..5 {
+                for x in 0..5 {
+                    let i = 54 + (y * width + x) * 4;
+                    let c = rgb(bmp[i + 2] as u32, bmp[i + 1] as u32, bmp[i] as u32);
+                    if c != t.surface && c != t.accent {
+                        intermediate += 1;
+                    }
+                }
+            }
+            assert!(
+                intermediate >= 3,
+                "date corner has only {intermediate} blended edge pixels; hard GDI stair steps"
+            );
+            DestroyWindow(app.hwnd);
+            app.release_resources();
+        }
+    });
+}
+
 // Exercise real ShowWindow/restore and message routing without showing any
 // test window on the user's input desktop. Never call SwitchDesktop.
 fn on_isolated_desktop(check: impl FnOnce() + Send + 'static) {
@@ -807,7 +850,7 @@ unsafe fn audit_native_layout(parent: HWND, tag: &str, failures: &mut Vec<String
                         let overlap_h = r.bottom.min(other_rect.bottom) - r.top.max(other_rect.top);
                         let empty_overlay = (id == 4000 && matches!(*other_id, 4005 | 4131))
                             || (*other_id == 4000 && matches!(id, 4005 | 4131));
-                        if overlap_w > 2 && overlap_h > 2 && !empty_overlay {
+                        if overlap_w > 0 && overlap_h > 0 && !empty_overlay {
                             failures.push(format!("{tag}: overlap {id} '{text}' / {other_id} '{other_text}' {overlap_w}x{overlap_h}"));
                         }
                     }
@@ -832,6 +875,15 @@ unsafe fn audit_native_layout(parent: HWND, tag: &str, failures: &mut Vec<String
                 let is_button = class.eq_ignore_ascii_case("button") && !custom_calendar;
                 let is_combo = class.eq_ignore_ascii_case("combobox");
                 let color_edit = class.eq_ignore_ascii_case("edit") && matches!(id, 801 | 802);
+                if class.eq_ignore_ascii_case("edit")
+                    && text.is_empty()
+                    && style & ES_MULTILINE as u32 != 0
+                    && style & WS_VSCROLL != 0
+                {
+                    failures.push(format!(
+                        "{tag}: empty multiline field {id} has an unnecessary scrollbar"
+                    ));
+                }
                 if (is_static || is_button || is_combo || color_edit) && !text.is_empty() {
                     let dc = GetDC(child);
                     let font = SendMessageW(child, WM_GETFONT, 0, 0) as HGDIOBJ;
@@ -1054,6 +1106,7 @@ fn ui_audit_keyboard_tabs_only_visit_active_page_and_native_choices_work() {
                 }
             }
         }
+        app.command(NAV + 7);
         let font = app.field(205);
         let selected = SendMessageW(font, CB_GETCURSEL, 0, 0);
         SendMessageW(font, WM_KEYDOWN, VK_HOME as usize, 0);
@@ -1158,10 +1211,6 @@ fn settings_switches_preserve_chrome_drafts_and_native_font_choices() {
         app.render();
         let navigation = app.field(NAV + 1);
         let title = app.field(901);
-        assert!(
-            SendMessageW(app.field(205), CB_GETCOUNT, 0, 0) > 1,
-            "font picker must enumerate installed fonts"
-        );
         set_text(app.field(201), "%time% · 自定义");
         app.command(NAV + 7);
         assert_eq!(
@@ -1170,6 +1219,10 @@ fn settings_switches_preserve_chrome_drafts_and_native_font_choices() {
             "page changes must not recreate navigation"
         );
         assert_eq!(app.field(901), title, "header survives page changes");
+        assert!(
+            SendMessageW(app.field(205), CB_GETCOUNT, 0, 0) > 1,
+            "font picker must enumerate installed fonts"
+        );
         assert_eq!(app.text(806), "沿用公共字体");
         let text = app.field(804);
         set_text(text, &"长备注\r\n".repeat(100));
@@ -1200,6 +1253,51 @@ fn settings_switches_preserve_chrome_drafts_and_native_font_choices() {
         DestroyWindow(app.hwnd);
         app.release_resources();
     }
+}
+
+#[test]
+fn settings_date_patterns_preview_validate_and_survive_navigation() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-pattern-ui-unused.json"),
+        );
+        app.page = 1;
+        app.render();
+        app.collect_page().unwrap();
+        assert_eq!(
+            serde_json::to_value(&app.draft).unwrap(),
+            serde_json::to_value(&app.saved).unwrap(),
+            "opening formats must not mark an old configuration as edited"
+        );
+        set_text(app.field(214), "yyyymmdd");
+        set_text(app.field(215), "HH:mm:ss");
+        app.collect_page().unwrap();
+        app.update_clock_samples();
+        assert!(
+            app.text(216)
+                .ends_with(&Local::now().format("%Y%m%d").to_string())
+        );
+        app.command(NAV + 7);
+        app.command(NAV + 1);
+        assert_eq!(app.text(214), "yyyymmdd");
+        assert_eq!(app.text(215), "HH:mm:ss");
+        set_text(app.field(215), "HH:mm");
+        app.collect_page().unwrap();
+        assert!(!clock::needs_second_ticks(&app.draft.clock));
+        set_text(app.field(214), "yyy-MM-dd");
+        app.collect_page().unwrap();
+        app.update_clock_samples();
+        assert!(app.draft.validate().is_err());
+        assert!(app.text(216).contains("请检查格式"));
+        assert!(app.text(218).contains("不支持格式"));
+        app.command(settings::PRESET + 3);
+        assert_eq!(app.text(214), "yyyymmdd");
+        app.draft.validate().unwrap();
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+    });
 }
 unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path) -> App {
     unsafe {
@@ -1313,6 +1411,7 @@ unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path) -> App {
             draft: config.clone(),
             saved: config,
             status: "界面验证 · 示例日程 · 不触发提醒".into(),
+            taskbar_status: None,
             weather: None,
             update: None,
             migration_source: None,

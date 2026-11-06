@@ -31,7 +31,7 @@ $documents=@('docs/implementation-plan.md','docs/progress.md','docs/taskbar-sour
 $documents += @('docs/images/settings-light.png','docs/images/settings-style-dark.png')
 $documents += @('data/holidays/README.md','data/holidays/LICENSE')
 $documents += @('docs/images/panel-editor-dark.png')
-$documents += @('docs/ui-audit-5.5.md')
+$documents += @('docs/ui-audit-5.5.md','docs/ui-audit-5.6.md','docs/images/focus-light.png')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null

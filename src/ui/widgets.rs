@@ -3,6 +3,47 @@
 use super::*;
 use std::sync::OnceLock;
 
+pub(super) unsafe fn divider(hwnd: HWND) {
+    unsafe {
+        SetWindowSubclass(hwnd, Some(divider_proc), 19, 0);
+    }
+}
+unsafe extern "system" fn divider_proc(
+    hwnd: HWND,
+    msg: u32,
+    w: WPARAM,
+    l: LPARAM,
+    id: usize,
+    _: usize,
+) -> LRESULT {
+    unsafe {
+        match msg {
+            WM_PAINT | WM_PRINTCLIENT => {
+                let mut ps: PAINTSTRUCT = std::mem::zeroed();
+                let dc = if msg == WM_PRINTCLIENT {
+                    w as HDC
+                } else {
+                    BeginPaint(hwnd, &mut ps)
+                };
+                let mut r: RECT = std::mem::zeroed();
+                GetClientRect(hwnd, &mut r);
+                let t = design::Theme::new(PALETTE.with(Cell::get).is_some_and(|p| p.dark));
+                design::fill(dc, r, t.border);
+                if msg != WM_PRINTCLIENT {
+                    EndPaint(hwnd, &ps);
+                }
+                return 0;
+            }
+            WM_ERASEBKGND => return 1,
+            WM_NCDESTROY => {
+                RemoveWindowSubclass(hwnd, Some(divider_proc), id);
+            }
+            _ => {}
+        }
+        DefSubclassProc(hwnd, msg, w, l)
+    }
+}
+
 pub(super) unsafe fn draw_list(item: &DRAWITEMSTRUCT, dark: bool) {
     unsafe {
         let t = design::Theme::new(dark);
