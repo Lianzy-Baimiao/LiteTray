@@ -8,6 +8,7 @@ mod page;
 mod panel;
 mod quick_agenda;
 mod settings;
+mod settings_open;
 #[cfg(test)]
 mod visual_checks;
 mod widgets;
@@ -43,7 +44,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.4";
+const UI_REVISION: &str = "开发版 5.4.1";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -1800,9 +1801,7 @@ impl App {
                     self.schedule_tick();
                 }
                 40 => {
-                    ShowWindow(self.panel, SW_HIDE);
-                    ShowWindow(self.hwnd, SW_SHOW);
-                    SetForegroundWindow(self.hwnd);
+                    PostMessageW(self.hwnd, WM_SHOW_SETTINGS, 0, 0);
                 }
                 EXIT => {
                     if let Err(e) = self.collect_page() {
@@ -2062,6 +2061,9 @@ unsafe fn choose_migration_file(owner: HWND) -> Result<Option<std::path::PathBuf
 
 unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     unsafe {
+        if let Some(result) = settings_open::message(hwnd, msg, w, l) {
+            return result;
+        }
         let created = TASKBAR_CREATED.with(|id| {
             if id.get() == 0 {
                 id.set(RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()));
@@ -2313,12 +2315,6 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     app.receive();
                     Some(0)
                 }
-                WM_SHOW_SETTINGS => {
-                    ShowWindow(hwnd, SW_SHOW);
-                    SetForegroundWindow(hwnd);
-                    app.schedule_tick();
-                    Some(0)
-                }
                 WM_SHOW_SECONDARY => {
                     let _ = app.collect_page();
                     if (1..=PAGES.len()).contains(&w) {
@@ -2460,10 +2456,6 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM)
             return result;
         }
         if msg == WM_COMMAND {
-            let id = (w & 0xffff) as u16;
-            if id == 40 && !panel::detached(hwnd) {
-                panel::hide(hwnd);
-            }
             let main = GetWindow(hwnd, GW_OWNER);
             PostMessageW(main, WM_COMMAND, w, l);
             return 0;

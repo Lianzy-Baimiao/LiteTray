@@ -36,6 +36,9 @@ windows-sys = { version = "0.61", features = [
 ] }
 windows = { version = "0.62", features = ["Foundation", "Globalization", "UI_ViewManagement", "Win32_System_WinRT"] }
 
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_StationsAndDesktops"] }
+
 [build-dependencies]
 winresource = "0.1"
 

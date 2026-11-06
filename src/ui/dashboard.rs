@@ -782,6 +782,12 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             return DefWindowProcW(hwnd, msg, w, l);
         }
         match msg {
+            WM_COMMAND if w & 0xffff == 40 && w >> 16 == BN_CLICKED as usize => {
+                // Opening settings does not depend on the calendar's paint or
+                // data state. Never discard this command during a view borrow.
+                PostMessageW(GetParent(hwnd), WM_COMMAND, w, l);
+                0
+            }
             quick_agenda::CLOSED | quick_agenda::SAVED => {
                 if let Ok(mut v) = (*raw).try_borrow_mut() {
                     v.editing = false;
@@ -1549,6 +1555,14 @@ unsafe fn weather_icon(dc: HDC, r: RECT, color: u32, description: &str) {
     }
 }
 
+#[cfg(test)]
+pub(super) unsafe fn with_borrowed_view(hwnd: HWND, action: impl FnOnce()) {
+    unsafe {
+        let cell = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RefCell<View>);
+        let _held = cell.borrow_mut();
+        action();
+    }
+}
 #[cfg(test)]
 mod visual_checks {
     use super::*;

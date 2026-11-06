@@ -2,6 +2,420 @@
 //! owned windows; it has no Explorer connection, profile, tray icon or network.
 use super::*;
 use chrono::Days;
+
+// Exercise real ShowWindow/restore and message routing without showing any
+// test window on the user's input desktop. Never call SwitchDesktop.
+fn on_isolated_desktop(check: impl FnOnce() + Send + 'static) {
+    // WinRT/UISettings and registered native classes may keep process-wide
+    // desktop state after earlier UI tests. Start a fresh process before
+    // creating an alternate desktop instead of mixing both in one process.
+    if std::env::var_os("LITETRAY_ISOLATED_SETTINGS_TEST").is_none() {
+        use std::{
+            os::windows::process::CommandExt,
+            process::{Command, Stdio},
+        };
+        let name = thread::current().name().unwrap().to_owned();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &name, "--test-threads=1", "--nocapture"])
+            .env("LITETRAY_ISOLATED_SETTINGS_TEST", "1")
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while child.try_wait().unwrap().is_none() {
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("isolated settings test timed out: {name}");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "isolated settings test failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    use windows_sys::Win32::System::StationsAndDesktops::*;
+    unsafe {
+        let name = wide(&format!(
+            "LiteTray.SettingsCheck.{}.{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let desktop = CreateDesktopW(name.as_ptr(), null(), null(), 0, GENERIC_ALL, null());
+        assert!(
+            !desktop.is_null(),
+            "cannot create isolated desktop: {}",
+            GetLastError()
+        );
+        let handle = desktop as usize;
+        let result = thread::spawn(move || {
+            assert_ne!(SetThreadDesktop(handle as HDESK), 0);
+            check();
+        })
+        .join();
+        CloseDesktop(desktop);
+        if let Err(error) = result {
+            std::panic::resume_unwind(error);
+        }
+    }
+}
+unsafe fn dispatch_settings_requests() {
+    unsafe {
+        // Only dispatch messages involved in settings activation. This fixture
+        // must not run the production weather or holiday timer workers.
+        for _ in 0..8 {
+            let mut dispatched = false;
+            for kind in [WM_COMMAND, WM_SHOW_SETTINGS] {
+                let mut message: MSG = std::mem::zeroed();
+                while PeekMessageW(&mut message, null_mut(), kind, kind, PM_REMOVE) != 0 {
+                    DispatchMessageW(&message);
+                    dispatched = true;
+                }
+            }
+            if !dispatched {
+                break;
+            }
+        }
+    }
+}
+unsafe fn settings_first_click_case(busy: bool, minimized: bool) -> (bool, bool) {
+    unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-settings-open-unused.json"),
+        );
+        app.render();
+        app.prewarm_panels();
+        let hwnd = app.hwnd;
+        let popup = app.panel_cache[0];
+        app.panel = popup;
+        let calendar = GetDlgItem(popup, dashboard::ID as i32);
+        let settings = GetDlgItem(calendar, 40);
+        assert!(!settings.is_null());
+        if minimized {
+            ShowWindow(hwnd, SW_SHOWMINNOACTIVE);
+            assert_ne!(IsIconic(hwnd), 0);
+        }
+        ShowWindow(hwnd, SW_HIDE);
+        ShowWindow(popup, SW_SHOWNOACTIVATE);
+        STATE.with(|s| *s.borrow_mut() = Some(app));
+        // BM_CLICK follows the actual settings icon -> calendar -> popup ->
+        // application message chain. Exactly one click, no second command.
+        if busy {
+            STATE.with(|s| {
+                let _held = s.borrow_mut();
+                SendMessageW(settings, BM_CLICK, 0, 0);
+                dispatch_settings_requests();
+            });
+        } else {
+            SendMessageW(settings, BM_CLICK, 0, 0);
+            dispatch_settings_requests();
+        }
+        // Drain a deferred activation retry, if the implementation uses one.
+        let until = Instant::now() + Duration::from_millis(120);
+        while Instant::now() < until {
+            dispatch_settings_requests();
+            let mut message: MSG = std::mem::zeroed();
+            while PeekMessageW(&mut message, hwnd, WM_TIMER, WM_TIMER, PM_REMOVE) != 0 {
+                if message.wParam != 1 && message.wParam != 2 && message.wParam != 3 {
+                    DispatchMessageW(&message);
+                }
+            }
+            thread::sleep(Duration::from_millis(4));
+        }
+        let result = (IsWindowVisible(hwnd) != 0, IsIconic(hwnd) == 0);
+        STATE.with(|s| {
+            let mut app = s.borrow_mut().take().unwrap();
+            app.close_panel();
+            DestroyWindow(hwnd);
+            app.release_resources();
+        });
+        RoUninitialize();
+        result
+    }
+}
+#[test]
+fn settings_open_first_click_survives_calendar_reentry() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-settings-calendar-unused.json"),
+        );
+        app.render();
+        app.prewarm_panels();
+        let hwnd = app.hwnd;
+        let popup = app.panel_cache[0];
+        app.panel = popup;
+        let view = GetDlgItem(popup, dashboard::ID as i32);
+        STATE.with(|s| *s.borrow_mut() = Some(app));
+        dashboard::with_borrowed_view(view, || {
+            SendMessageW(GetDlgItem(view, 40), BM_CLICK, 0, 0);
+        });
+        dispatch_settings_requests();
+        let shown = IsWindowVisible(hwnd) != 0;
+        STATE.with(|s| {
+            let mut app = s.borrow_mut().take().unwrap();
+            app.close_panel();
+            DestroyWindow(hwnd);
+            app.release_resources();
+        });
+        RoUninitialize();
+        assert!(
+            shown,
+            "settings icon click was dropped while calendar view was updating"
+        );
+    });
+}
+#[test]
+fn settings_open_first_click_from_hidden_window() {
+    on_isolated_desktop(|| unsafe {
+        let (shown, restored) = settings_first_click_case(false, false);
+        assert!(
+            shown && restored,
+            "first settings click did not show a usable window: visible={shown}, restored={restored}"
+        );
+    });
+}
+#[test]
+fn settings_open_first_click_survives_reentrant_dispatch() {
+    on_isolated_desktop(|| unsafe {
+        let (shown, restored) = settings_first_click_case(true, false);
+        assert!(
+            shown && restored,
+            "first settings click was lost during nested message dispatch: visible={shown}, restored={restored}"
+        );
+    });
+}
+#[test]
+fn settings_open_first_click_restores_a_previously_minimized_window() {
+    on_isolated_desktop(|| unsafe {
+        let (shown, restored) = settings_first_click_case(false, true);
+        assert!(
+            shown && restored,
+            "first settings click left the window minimized: visible={shown}, restored={restored}"
+        );
+    });
+}
+#[test]
+fn settings_open_handoff_keeps_source_until_settings_are_shown() {
+    on_isolated_desktop(|| unsafe {
+        struct Probe {
+            source: HWND,
+            shown: bool,
+            source_visible_when_shown: bool,
+        }
+        unsafe extern "system" fn probe(
+            hwnd: HWND,
+            msg: u32,
+            w: WPARAM,
+            l: LPARAM,
+            _id: usize,
+            data: usize,
+        ) -> LRESULT {
+            unsafe {
+                if msg == WM_SHOWWINDOW && w != 0 {
+                    let probe = &mut *(data as *mut Probe);
+                    probe.shown = true;
+                    probe.source_visible_when_shown = IsWindowVisible(probe.source) != 0;
+                }
+                DefSubclassProc(hwnd, msg, w, l)
+            }
+        }
+        for detached in [false, true] {
+            let mut app = app_for_check(
+                false,
+                96,
+                &std::env::temp_dir().join("litetray-settings-handoff-unused.json"),
+            );
+            app.render();
+            app.prewarm_panels();
+            let hwnd = app.hwnd;
+            let popup = app.panel_cache[0];
+            app.panel = popup;
+            panel::set_detached(popup, detached);
+            ShowWindow(popup, SW_SHOWNOACTIVATE);
+            let mut log = Probe {
+                source: popup,
+                shown: false,
+                source_visible_when_shown: false,
+            };
+            SetWindowSubclass(hwnd, Some(probe), 99, &mut log as *mut _ as usize);
+            STATE.with(|s| *s.borrow_mut() = Some(app));
+            SendMessageW(
+                GetDlgItem(GetDlgItem(popup, dashboard::ID as i32), 40),
+                BM_CLICK,
+                0,
+                0,
+            );
+            dispatch_settings_requests();
+            let usable = IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) == 0;
+            let source_visible = IsWindowVisible(popup) != 0;
+            RemoveWindowSubclass(hwnd, Some(probe), 99);
+            STATE.with(|s| {
+                let mut app = s.borrow_mut().take().unwrap();
+                app.close_panel();
+                DestroyWindow(hwnd);
+                app.release_resources();
+            });
+            RoUninitialize();
+            assert!(usable && log.shown);
+            assert!(
+                log.source_visible_when_shown,
+                "settings handoff hides the source before showing its destination"
+            );
+            assert_eq!(
+                source_visible, detached,
+                "only the originating attached popup should close"
+            );
+        }
+    });
+}
+unsafe fn wait_settings(hwnd: HWND) {
+    unsafe {
+        let deadline = Instant::now() + Duration::from_millis(200);
+        while Instant::now() < deadline {
+            dispatch_settings_requests();
+            let mut message: MSG = std::mem::zeroed();
+            while PeekMessageW(&mut message, hwnd, WM_TIMER, WM_TIMER, PM_REMOVE) != 0 {
+                if message.wParam == 74 {
+                    DispatchMessageW(&message);
+                }
+            }
+            if IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) == 0 {
+                return;
+            }
+            thread::sleep(Duration::from_millis(4));
+        }
+    }
+}
+#[test]
+fn settings_open_single_request_waits_for_modal_owner_and_can_be_cancelled() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-settings-modal-unused.json"),
+        );
+        app.render();
+        let hwnd = app.hwnd;
+        STATE.with(|s| *s.borrow_mut() = Some(app));
+        EnableWindow(hwnd, 0);
+        SendMessageW(hwnd, WM_SHOW_SETTINGS, 0, 0);
+        wait_settings(hwnd);
+        assert_eq!(
+            IsWindowVisible(hwnd),
+            0,
+            "do not activate a disabled modal owner"
+        );
+        EnableWindow(hwnd, 1);
+        wait_settings(hwnd);
+        assert_ne!(
+            IsWindowVisible(hwnd),
+            0,
+            "one request must survive the entire modal loop"
+        );
+        assert_eq!(
+            GetPropW(hwnd, wide("LiteTray.SettingsOpen.Completed").as_ptr()) as usize,
+            1
+        );
+        ShowWindow(hwnd, SW_HIDE);
+        STATE.with(|s| {
+            let _held = s.borrow_mut();
+            SendMessageW(hwnd, WM_SHOW_SETTINGS, 0, 0);
+            SendMessageW(hwnd, WM_CLOSE, 0, 0);
+        });
+        wait_settings(hwnd);
+        assert_eq!(
+            IsWindowVisible(hwnd),
+            0,
+            "a cancelled pending open must not reappear later"
+        );
+        STATE.with(|s| {
+            let mut app = s.borrow_mut().take().unwrap();
+            DestroyWindow(hwnd);
+            app.release_resources();
+        });
+        RoUninitialize();
+    });
+}
+#[test]
+fn settings_open_handles_one_hundred_first_clicks_across_all_settings_entries() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-settings-repeat-unused.json"),
+        );
+        app.page = 1;
+        app.render();
+        app.prewarm_panels();
+        let hwnd = app.hwnd;
+        let popup = app.panel_cache[0];
+        app.panel = popup;
+        let icon = GetDlgItem(GetDlgItem(popup, dashboard::ID as i32), 40);
+        let template = app.field(201);
+        set_text(template, "%time% · 未保存草稿");
+        STATE.with(|s| *s.borrow_mut() = Some(app));
+        for index in 0..100 {
+            if index % 4 == 0 {
+                ShowWindow(hwnd, SW_SHOWMINNOACTIVE);
+            }
+            ShowWindow(hwnd, SW_HIDE);
+            ShowWindow(popup, SW_SHOWNOACTIVATE);
+            let click = || {
+                match index % 3 {
+                    0 => {
+                        SendMessageW(icon, BM_CLICK, 0, 0);
+                    }
+                    1 => {
+                        PostMessageW(hwnd, WM_COMMAND, 40, 0);
+                    }
+                    _ => {
+                        PostMessageW(hwnd, WM_SHOW_SETTINGS, 0, 0);
+                    }
+                }
+                dispatch_settings_requests();
+            };
+            if index % 2 == 0 {
+                STATE.with(|s| {
+                    let _held = s.borrow_mut();
+                    click();
+                });
+            } else {
+                click();
+            }
+            wait_settings(hwnd);
+            assert_ne!(IsWindowVisible(hwnd), 0, "click {index} was lost");
+            assert_eq!(IsIconic(hwnd), 0, "click {index} failed to restore");
+            assert_eq!(
+                GetPropW(hwnd, wide("LiteTray.SettingsOpen.Completed").as_ptr()) as usize,
+                index + 1,
+                "one click must complete exactly once"
+            );
+            let draft = STATE.with(|s| s.borrow().as_ref().unwrap().text(201));
+            assert_eq!(
+                draft, "%time% · 未保存草稿",
+                "native restore must preserve edits"
+            );
+        }
+        STATE.with(|s| {
+            let mut app = s.borrow_mut().take().unwrap();
+            app.close_panel();
+            DestroyWindow(hwnd);
+            app.release_resources();
+        });
+        RoUninitialize();
+    });
+}
 pub(super) unsafe fn assert_external_foreground() {
     unsafe {
         // A shared interactive desktop may change naturally during a test.

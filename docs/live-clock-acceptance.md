@@ -136,3 +136,15 @@
 真实副屏预建日历 HWND 7930480（left=4389）在隐藏状态下验证新建入口，确认创建内嵌编辑区、六类标签及保存入口，然后取消关闭。放假表按钮不存在，设置窗口始终隐藏，应用未获取前台，agenda.json 哈希前后相同。未注入鼠标或键盘；这些隐藏检查不冒充自然鼠标操作验收。
 
 本地证据：local/ui54-tests-final.log、local/ui54-ui-tests-final.log、local/ui54-clippy-final.log、local/ui54-render-final.log、local/ui54-renders/、local/ui54-deployment.json、local/ui54-live.json、local/ui54-inline-live.json。
+
+## 2026-11-07 开发版 5.4.1：设置首次点击丢失与最小化恢复
+
+用真实原生命名按钮的 BM_CLICK 贯穿“设置图标 → 日历 → 弹层 → 主窗口”消息链，并将窗口放在不会切换到前台的独立测试桌面。修复前 `tools/Invoke-Cargo.ps1 -CargoArguments @('test','--bin','LiteTray','settings_open_first_click','--locked','--','--test-threads=1','--nocapture')` 为 1 通过、2 失败：主窗口重入时 visible=false；先最小化再隐藏时 visible=true 但 restored=false。额外回归确认日历 View 借用期间设置图标也会被忽略，以及旧流程会先隐藏源弹层再显示设置。
+
+根因是两层 try_borrow 失败直接消费设置命令、SW_SHOW 没有恢复最小化窗口，以及源弹层过早隐藏。settings_open.rs 统一设置打开入口，将待处理请求保存在 App 借用之外；界面重入或原生模态窗口期间延后执行，关闭时取消未执行请求。日历设置图标先转发、无需借用日历数据。显示和激活发生在释放 App 借用之后，SW_RESTORE 恢复最小化窗口；普通弹层在设置可见后收起，分离弹层保持。窗口属性记录请求数、完成数、耗时与前台句柄，点击路径不写日志文件。
+
+单独验证每项修复后，7 项设置回归全部通过，其中同一进程内循环 100 次覆盖齿轮、托盘命令和 WM_SHOW_SETTINGS，并交替重入和最小化，检查每次请求只执行一次且设置草稿保留。完整测试共 124 项通过，Clippy -D warnings 通过。将这组激活测试与旧 UI 测试混在同一进程时曾出现跨桌面环境等待；现每项在全新测试子进程中创建非输入桌面，并设 20 秒失败上限。没有调用 SwitchDesktop，没有向用户桌面注入输入。独立桌面验证不替代用户游戏环境中的自然鼠标点击验收。
+
+03:20 已部署 5.4.1。两个 DLL 哈希与 5.4 完全相同，因此在现有 dist/LiteTray-ui54-inline 目录只更新宿主与文档，旧 EXE 备份到 local/LiteTray-ui54-before-settings-open.exe；另有完整包 dist/LiteTray-ui541-settings-open。宿主 PID 31380 → 42440，任务栏 Explorer 保持 PID 34284、启动于 03:02:21，文件管理器 Explorer 12816 与 QQ 20412 也未重启。主副屏托盘图标顺序、宽度、右侧和垂直对齐通过，QQ 钩子 ready=true。只读检查确认实际窗口标题为 5.4.1，设置与日历保持隐藏，未模拟正式实例的设置点击来抢占用户前台。
+
+本地证据：local/settings-open-before.log、local/settings-open-queued.log、local/settings-open-restored.log、local/settings-open-handoff-before.log、local/settings-open-calendar-before.log、local/settings-open-regression.log、local/settings-open-tests-final.log、local/settings-open-clippy-final.log、local/settings-open-deployment.json、local/settings-open-live.json、local/settings-open-window-state.json。
