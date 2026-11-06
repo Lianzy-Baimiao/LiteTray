@@ -178,33 +178,17 @@ impl App {
                 84,
                 150,
             );
-            self.edit("城市名称", &c.weather.city, 401, 224, 131, half);
-            self.edit(
-                "纬度",
-                &c.weather.latitude.to_string(),
-                402,
-                right,
-                131,
-                small,
-            );
-            self.edit(
-                "经度",
-                &c.weather.longitude.to_string(),
-                403,
-                right + small + 16,
-                131,
-                small,
-            );
-            self.divider(224, 207, total);
-            self.section("来源优先级", 224, 224, half);
-            self.caption("按列表顺序请求，失败后自动切换。", 224, 259, half, 24);
+            self.location_controls(total);
+            self.divider(224, 273, total);
+            self.section("来源优先级", 224, 287, half);
+            self.caption("按列表顺序请求，失败后自动切换。", 224, 320, half, 24);
             let list = self.control(
                 "LISTBOX",
                 "",
                 404,
                 WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY as u32,
                 224,
-                297,
+                356,
                 half,
                 100,
             );
@@ -217,7 +201,7 @@ impl App {
                 );
             }
             SendMessageW(list, LB_SETCURSEL, 0, 0);
-            self.combo(&Provider::ALL.map(|p| p.label()), 0, 405, right, 248, half);
+            self.combo(&Provider::ALL.map(|p| p.label()), 0, 405, right, 300, half);
             for (i, (name, id)) in [("添加", 406), ("移除", 407), ("上移", 408), ("下移", 409)]
                 .into_iter()
                 .enumerate()
@@ -226,7 +210,7 @@ impl App {
                     name,
                     id,
                     right + i as i32 * (half + 8) / 4,
-                    296,
+                    346,
                     (half - 24) / 4,
                 );
             }
@@ -235,7 +219,7 @@ impl App {
                 &c.weather.refresh_minutes.to_string(),
                 414,
                 right,
-                345,
+                393,
                 small,
             );
             self.edit(
@@ -243,26 +227,19 @@ impl App {
                 &c.weather.timeout_seconds.to_string(),
                 415,
                 right + small + 16,
-                345,
+                393,
                 small,
             );
-            self.divider(224, 423, total);
-            self.section("可选服务凭据", 224, 440, total);
-            self.caption(
-                "Open-Meteo、MET Norway、wttr.in 无需密钥。",
-                224,
-                473,
-                total,
-                24,
-            );
-            self.combo(&["和风天气", "OpenWeather"], 0, 410, 224, 508, 160);
+            self.divider(224, 467, total);
+            self.section("可选服务凭据", 224, 478, total);
+            self.combo(&["和风天气", "OpenWeather"], 0, 410, 224, 518, 160);
             self.control(
                 "EDIT",
                 "",
                 411,
                 WS_TABSTOP | ES_AUTOHSCROLL as u32 | ES_PASSWORD as u32,
                 400,
-                508,
+                518,
                 total - 344,
                 30,
             );
@@ -272,16 +249,16 @@ impl App {
                 0,
                 wide("API Key").as_ptr() as isize,
             );
-            self.button("保存", 412, 224 + total - 152, 506, 68);
-            self.button("删除", 413, 224 + total - 68, 506, 68);
-            self.label("和风 API Host", 224, 562, 160, 24);
+            self.button("保存", 412, 224 + total - 152, 516, 68);
+            self.button("删除", 413, 224 + total - 68, 516, 68);
+            self.label("和风 API Host", 224, 571, 160, 24);
             self.control(
                 "EDIT",
                 &c.weather.qweather_host,
                 416,
                 WS_TABSTOP | ES_AUTOHSCROLL as u32,
                 400,
-                556,
+                566,
                 total - 176,
                 30,
             );

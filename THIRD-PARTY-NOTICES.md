@@ -221,3 +221,28 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+## Weather location services
+
+City search calls the public Open-Meteo geocoding API, whose location database
+comes from GeoNames. The API server is open source (AGPL-3.0); no server code
+is bundled in LiteTray. Location results display provider attribution.
+
+- API documentation: https://open-meteo.com/en/docs/geocoding-api
+- Server source: https://github.com/open-meteo/geocoding-api
+- Location data: https://www.geonames.org/
+- Public API terms: https://open-meteo.com/en/terms
+
+Approximate IP location uses IPWHOIS, with GeoJS as a fallback. GeoJS is an
+open-source service (MIT), but IPWHOIS is a hosted public service, not claimed
+to be open source. No source code or IP databases from either service are
+bundled. These calls only occur when the user asks to obtain their location;
+LiteTray retains the chosen city and coordinates, not the returned IP address.
+
+- IPWHOIS API and usage limits: https://ipwhois.io/documentation
+- GeoJS API: https://www.geojs.io/docs/v1/endpoints/geo/
+- GeoJS source: https://github.com/jloh/geojs
+
+Public endpoints remain subject to their providers' current usage terms and
+availability. IP location is approximate and can identify a proxy/VPN exit.

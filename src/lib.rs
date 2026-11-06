@@ -2,6 +2,7 @@ pub mod clock;
 pub mod config;
 pub mod holidays;
 pub mod http;
+pub mod location;
 pub mod migration;
 pub mod monitors;
 pub mod organizer;

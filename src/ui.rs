@@ -11,12 +11,13 @@ mod settings;
 mod settings_open;
 #[cfg(test)]
 mod visual_checks;
+mod weather_location;
 mod widgets;
 use chrono::{Local, TimeZone, Utc};
 use litetray::{
     clock,
     config::{self, Appearance, ClickAction, Config, MonitorScope, Provider},
-    holidays, http, migration, monitors, organizer,
+    holidays, http, location, migration, monitors, organizer,
     platform::{
         app_icon, clock_preview, credentials, diagnostics, displays, lunar, startup, taskbar_clock,
         tray_popup, wide,
@@ -44,7 +45,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.6.1";
+const UI_REVISION: &str = "开发版 5.7";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -100,6 +101,7 @@ enum Event {
     Weather(Box<(config::WeatherConfig, weather::WeatherResult)>),
     Update(Result<UpdateStatus, String>),
     Holidays(i32, holidays::Outcome),
+    Location(u64, Result<Vec<location::Place>, String>),
 }
 struct App {
     hwnd: HWND,
@@ -136,6 +138,7 @@ struct App {
     status: String,
     taskbar_status: Option<String>,
     weather: Option<weather::WeatherResult>,
+    location: weather_location::State,
     update: Option<UpdateStatus>,
     migration_source: Option<Vec<u8>>,
     migration: Option<migration::Report>,
@@ -312,6 +315,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             status: "开发版 · 在“时钟显示”中启用任务栏时钟".into(),
             taskbar_status: None,
             weather: None,
+            location: Default::default(),
             update: None,
             migration_source: None,
             migration: None,
@@ -1072,9 +1076,7 @@ impl App {
             }
             3 => {
                 c.weather.enabled = self.checked(400);
-                c.weather.city = self.text(401);
-                c.weather.latitude = self.text(402).parse().map_err(|_| "纬度必须是数字")?;
-                c.weather.longitude = self.text(403).parse().map_err(|_| "经度必须是数字")?;
+                self.location.query = self.text(weather_location::QUERY);
                 c.weather.refresh_minutes =
                     self.text(414).parse().map_err(|_| "刷新间隔必须是整数")?;
                 c.weather.timeout_seconds = self.text(415).parse().map_err(|_| "超时必须是整数")?;
@@ -1194,6 +1196,15 @@ impl App {
                 return Err(error);
             }
             self.saved = self.draft.clone();
+            if self.location.active.is_none()
+                && self.location.results.iter().any(|place| {
+                    place.latitude == self.saved.weather.latitude
+                        && place.longitude == self.saved.weather.longitude
+                        && place.name == self.saved.weather.city
+                })
+            {
+                self.location.message = "位置已保存，将使用所选城市更新天气。\r\n需要调整时，可重新搜索城市或获取当地位置。".into();
+            }
             self.popup_router.configure(&self.saved.tray, self.hwnd);
             self.status = match self
                 .taskbar
@@ -1328,6 +1339,7 @@ impl App {
         unsafe {
             while let Ok(event) = self.rx.try_recv() {
                 match event {
+                    Event::Location(serial, result) => self.receive_location(serial, result),
                     Event::Holidays(year, result) => {
                         self.holiday_active = None;
                         self.holidays.borrow_mut().apply(year, result);
@@ -1710,6 +1722,9 @@ impl App {
                 return false;
             }
             match id {
+                weather_location::SEARCH | weather_location::NEARBY if self.page == 3 => {
+                    self.start_location(id == weather_location::NEARBY);
+                }
                 settings::PRESET..=833 => {
                     if let Err(error) = self.collect_page() {
                         self.set_status(error);
@@ -2326,6 +2341,20 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 }
                 WM_COMMAND => {
                     let id = (w & 0xffff) as u16;
+                    if app.page == 3
+                        && id == weather_location::QUERY
+                        && (w >> 16) as u32 == EN_CHANGE
+                    {
+                        app.location.query = app.text(weather_location::QUERY);
+                        return Some(0);
+                    }
+                    if app.page == 3
+                        && id == weather_location::CHOICE
+                        && (w >> 16) as u32 == CBN_SELCHANGE
+                    {
+                        app.choose_location();
+                        return Some(0);
+                    }
                     if matches!(app.page, 1 | 7)
                         && matches!((w >> 16) as u32, EN_CHANGE | CBN_SELCHANGE)
                     {

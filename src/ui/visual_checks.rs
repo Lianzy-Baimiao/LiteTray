@@ -4,6 +4,181 @@ use super::*;
 use chrono::Days;
 
 #[test]
+#[ignore = "Explicit live network search on a non-input desktop, no profile writes"]
+fn live_city_search_populates_native_choices_without_blocking_navigation() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-live-city-unused.json"),
+        );
+        app.page = 3;
+        app.render();
+        let saved = serde_json::to_value(&app.saved).unwrap();
+        set_text(app.field(weather_location::QUERY), "深圳");
+        let start = Instant::now();
+        app.command(weather_location::SEARCH);
+        assert!(
+            start.elapsed() < Duration::from_millis(100),
+            "location lookup blocked the UI thread"
+        );
+        app.command(NAV + 7);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.location.active.is_some() && Instant::now() < deadline {
+            app.receive();
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            app.location.active.is_none(),
+            "location request did not finish"
+        );
+        assert!(!app.location.results.is_empty(), "{}", app.location.message);
+        app.command(NAV + 3);
+        assert!(SendMessageW(app.field(weather_location::CHOICE), CB_GETCOUNT, 0, 0) > 1);
+        assert_eq!(serde_json::to_value(&app.saved).unwrap(), saved);
+        eprintln!(
+            "live native city search: {} choices, remained navigable",
+            app.location.results.len()
+        );
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+    });
+}
+
+#[test]
+fn weather_city_selection_uses_coordinates_and_keeps_other_drafts() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-city-ui-unused.json"),
+        );
+        app.page = 3;
+        app.render();
+        let old = app.saved.weather.clone();
+        assert!(app.field(402).is_null() && app.field(403).is_null());
+        set_text(app.field(weather_location::QUERY), "深圳");
+        set_text(app.field(414), "17");
+        set_text(app.field(411), "draft-key-no-network");
+        app.collect_page().unwrap();
+        let serial = weather_location::begin_for_check(&mut app, false);
+        app.sync_location_controls();
+        assert_eq!(IsWindowEnabled(app.field(weather_location::SEARCH)), 0);
+        let places = vec![
+            location::Place {
+                name: "深圳".into(),
+                region: "广东 · 中国".into(),
+                latitude: 22.55,
+                longitude: 114.06,
+                source: "Open-Meteo / GeoNames",
+            },
+            location::Place {
+                name: "深圳".into(),
+                region: "福建 · 中国".into(),
+                latitude: 24.79,
+                longitude: 118.43,
+                source: "Open-Meteo / GeoNames",
+            },
+        ];
+        app.tx.send(Event::Location(serial, Ok(places))).unwrap();
+        app.receive();
+        assert_eq!(
+            app.draft.weather.latitude, old.latitude,
+            "search never guesses which same-name city the user wants"
+        );
+        assert_eq!(
+            app.text(411),
+            "draft-key-no-network",
+            "network completions must not rebuild the form and lose credentials"
+        );
+        assert_eq!(app.text(414), "17");
+        assert_ne!(IsWindowEnabled(app.field(weather_location::SEARCH)), 0);
+        assert_eq!(
+            SendMessageW(app.field(weather_location::CHOICE), CB_GETCOUNT, 0, 0),
+            3
+        );
+        SendMessageW(app.field(weather_location::CHOICE), CB_SETCURSEL, 1, 0);
+        app.choose_location();
+        assert_eq!(
+            (app.draft.weather.latitude, app.draft.weather.longitude),
+            (22.55, 114.06)
+        );
+        assert_eq!(
+            app.saved.weather.latitude, old.latitude,
+            "choosing a place only updates the settings draft"
+        );
+        app.command(NAV + 4);
+        app.command(NAV + 3);
+        assert_eq!(app.text(weather_location::QUERY), "深圳");
+        assert_eq!(app.draft.weather.refresh_minutes, 17);
+        assert_eq!(
+            SendMessageW(app.field(weather_location::CHOICE), CB_GETCURSEL, 0, 0),
+            1
+        );
+        app.draft.validate().unwrap();
+        let mut failures = vec![];
+        audit_native_layout(app.hwnd, "location results", &mut failures);
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+    });
+}
+
+#[test]
+fn location_replies_do_not_overwrite_new_queries_or_positions() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            true,
+            96,
+            &std::env::temp_dir().join("litetray-location-stale-unused.json"),
+        );
+        app.page = 3;
+        app.render();
+        let old = app.draft.weather.latitude;
+        let place = location::Place {
+            name: "香港".into(),
+            region: "".into(),
+            latitude: 22.2783,
+            longitude: 114.1747,
+            source: "IPWHOIS",
+        };
+        let serial = weather_location::begin_for_check(&mut app, true);
+        app.location.query = "北京".into();
+        app.receive_location(serial, Ok(vec![place.clone()]));
+        assert_eq!(app.draft.weather.latitude, old);
+        assert!(app.location.message.contains("忽略旧查询"));
+        let next = weather_location::begin_for_check(&mut app, true);
+        app.receive_location(serial, Ok(vec![place.clone()]));
+        assert!(
+            app.location.active.is_some(),
+            "old delivery cannot complete the new request"
+        );
+        app.receive_location(next, Err("网络查询失败".into()));
+        assert_eq!(app.draft.weather.latitude, old);
+        assert!(app.location.active.is_none());
+        let serial = weather_location::begin_for_check(&mut app, true);
+        app.draft.weather.latitude = 35.;
+        app.receive_location(serial, Ok(vec![place.clone()]));
+        assert_eq!(app.draft.weather.latitude, 35.);
+        let serial = weather_location::begin_for_check(&mut app, true);
+        app.page = 4;
+        app.render();
+        app.receive_location(serial, Ok(vec![place]));
+        assert_eq!(app.draft.weather.city, "香港");
+        assert_ne!(app.saved.weather.city, "香港");
+        app.page = 3;
+        app.render();
+        assert!(app.text(420).contains("近似位置"));
+        assert!(app.text(420).contains("代理"));
+        let mut failures = vec![];
+        audit_native_layout(app.hwnd, "nearby result", &mut failures);
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+    });
+}
+
+#[test]
 fn selected_calendar_day_has_antialiased_corners() {
     on_isolated_desktop(|| unsafe {
         for dark in [false, true] {
@@ -58,8 +233,12 @@ fn on_isolated_desktop(check: impl FnOnce() + Send + 'static) {
             process::{Command, Stdio},
         };
         let name = thread::current().name().unwrap().to_owned();
-        let mut child = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", &name, "--test-threads=1", "--nocapture"])
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact", &name, "--test-threads=1", "--nocapture"]);
+        if std::env::args().any(|arg| arg == "--ignored") {
+            command.arg("--ignored");
+        }
+        let mut child = command
             .env("LITETRAY_ISOLATED_SETTINGS_TEST", "1")
             .creation_flags(CREATE_NO_WINDOW)
             .stdout(Stdio::piped())
@@ -81,6 +260,10 @@ fn on_isolated_desktop(check: impl FnOnce() + Send + 'static) {
             "isolated settings test failed: {}{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "isolated test did not execute: {name}"
         );
         eprint!("{}", String::from_utf8_lossy(&output.stderr));
         return;
@@ -1413,6 +1596,7 @@ unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path) -> App {
             status: "界面验证 · 示例日程 · 不触发提醒".into(),
             taskbar_status: None,
             weather: None,
+            location: Default::default(),
             update: None,
             migration_source: None,
             migration: None,

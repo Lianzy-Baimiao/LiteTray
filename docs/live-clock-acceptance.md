@@ -185,3 +185,9 @@
 完成本轮设置布局重排与日期圆角抗锯齿。时钟新增日期／时间格式及实时例子，支持 `yyyymmdd`，旧模板和配置兼容；专注、定时、铃声、日程和其余设置页重新分组对齐。140 项测试及 Clippy 通过；强化几何检查以捕获细线穿过按钮、空备注框滚动条。三个独立非输入桌面上的真实发布进程均首次成功打开设置，十页无外层滚动条。
 
 04:47:39 后台切换为 5.6，运行宿主 PID 42080；实际目录沿用 `dist/LiteTray-ui54-inline`，完整包 `dist/LiteTray-ui56-layout`。两枚 DLL 哈希未变化，Explorer 34284 与主 QQNT 20412 未重启。主副屏时钟原位内容及托盘代理通过只读检查。具体布局、格式语法、性能数据与证据见 [5.6 检查记录](ui-audit-5.6.md)。
+
+## 2026-11-07 · 导航边框与天气位置
+
+04:54 部署 5.6.1 导航边框修正；05:05:31 再切换至包含两项修改的 5.7。运行目录 `dist/LiteTray-ui54-inline`，宿主 PID 9140，窗口标题确认为开发版 5.7，设置窗口保持隐藏。EXE SHA256 `5A74B034FCCAA1AB9B7EE6C2A3B7EDF481486185DDD8B15E2A466C940BBCFEF3`。
+
+任务栏适配器和 QQ 弹窗钩子的 DLL 未变化；Explorer PID 34284、启动时间 03:02:21，QQ PID 20412、启动时间 02:55:22，均保持原样。主副屏任务栏只读检查的 `error`、`geometry_error` 均为空，`tray_input.active=true`。没有向正式桌面注入输入，也没有修改用户天气位置。测试覆盖范围与独立发布包验证见 [天气位置说明](weather-location.md)。现场证据为 `local/ui57-deployment.json`、`local/ui57-live-summary.json`、`local/ui57-live-taskbar.json`。
