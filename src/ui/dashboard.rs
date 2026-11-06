@@ -11,6 +11,7 @@ const NEXT: u16 = 1101;
 const TODAY: u16 = 1102;
 const ADD_EVENT: u16 = 1103;
 const FOCUS: u16 = 1104;
+const HOLIDAY_SOURCE: u16 = 1105;
 const FIRST_ENTRY: u16 = 1150;
 const SELECT_DAY: u32 = WM_APP + 80;
 const WIDTH: i32 = popup::WIDTH;
@@ -37,6 +38,10 @@ struct View {
     lunar_labels: Vec<String>,
     markers: Vec<bool>,
     entries: Vec<(u64, String, String)>,
+    holidays: Option<Rc<RefCell<holidays::Catalog>>>,
+    holiday_revision: u64,
+    holiday_days: Vec<Option<holidays::Day>>,
+    holiday_status: String,
 }
 impl Drop for View {
     fn drop(&mut self) {
@@ -100,6 +105,10 @@ pub(super) unsafe fn create(parent: HWND, bounds: RECT, dark: bool, flyout: bool
             lunar_labels: vec![],
             markers: vec![],
             entries: vec![],
+            holidays: None,
+            holiday_revision: u64::MAX,
+            holiday_days: vec![],
+            holiday_status: String::new(),
         });
         SetWindowLongPtrW(
             hwnd,
@@ -117,6 +126,18 @@ pub(super) unsafe fn bind_store(hwnd: HWND, store: Rc<RefCell<organizer::Store>>
             && let Ok(mut v) = cell.try_borrow_mut()
         {
             v.store = Some(store);
+        }
+        layout(hwnd);
+    }
+}
+pub(super) unsafe fn bind_holidays(hwnd: HWND, catalog: Rc<RefCell<holidays::Catalog>>) {
+    unsafe {
+        if let Some(cell) =
+            (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RefCell<View>).as_ref()
+            && let Ok(mut view) = cell.try_borrow_mut()
+        {
+            view.holidays = Some(catalog);
+            view.holiday_revision = u64::MAX;
         }
         layout(hwnd);
     }
@@ -233,6 +254,10 @@ pub(super) unsafe fn update(
             .store
             .as_ref()
             .is_some_and(|s| s.borrow().revision != view.revision);
+        let holiday_changed = view
+            .holidays
+            .as_ref()
+            .is_some_and(|h| h.borrow().revision != view.holiday_revision);
         let accessible = format!(
             "日历与天气。{}。{}",
             view.city,
@@ -255,7 +280,7 @@ pub(super) unsafe fn update(
         }
         let factor = view.factor;
         drop(view);
-        if changed || day_changed {
+        if changed || day_changed || holiday_changed {
             layout(hwnd);
         }
         invalidate_part(hwnd, factor, rect(20, 13, 380, 53));
@@ -267,7 +292,7 @@ pub(super) unsafe fn update(
             for id in FIRST..FIRST + 42 {
                 InvalidateRect(GetDlgItem(hwnd, id as i32), null(), 0);
             }
-            invalidate_part(hwnd, factor, rect(20, 452, 340, 22));
+            invalidate_part(hwnd, factor, rect(20, 444, 340, 44));
         }
     }
 }
@@ -288,6 +313,15 @@ fn button_specs(v: &View) -> Vec<ButtonSpec> {
         visible: true,
     };
     let mut buttons = vec![
+        spec(
+            format!("放假安排来源，{}", v.holiday_status),
+            HOLIDAY_SOURCE,
+            180,
+            84,
+            56,
+            32,
+            true,
+        ),
         spec("上个月".into(), PREV, 244, 84, 30, 32, true),
         spec("今天".into(), TODAY, 275, 84, 48, 32, true),
         spec("下个月".into(), NEXT, 325, 84, 30, 32, true),
@@ -323,13 +357,18 @@ fn button_specs(v: &View) -> Vec<ButtonSpec> {
     for (i, date) in v.days.iter().enumerate() {
         buttons.push(spec(
             format!(
-                "{}{}",
+                "{}{}{}",
                 date.format("%Y年%m月%d日"),
                 if *date == Local::now().date_naive() {
                     "，今天"
                 } else {
                     ""
-                }
+                },
+                v.holiday_days
+                    .get(i)
+                    .and_then(|d| d.as_ref())
+                    .map(|d| format!("，{}", d.description()))
+                    .unwrap_or_default()
             ),
             FIRST + i as u16,
             20 + (i % 7) as i32 * 48,
@@ -403,6 +442,16 @@ unsafe fn layout(hwnd: HWND) {
                         .unwrap_or_default()
                 })
                 .collect();
+        }
+        let old_holidays = v.holiday_days.clone();
+        let old_holiday_status = v.holiday_status.clone();
+        if let Some(catalog) = &v.holidays {
+            let catalog = catalog.borrow();
+            if month_changed || catalog.revision != v.holiday_revision {
+                v.holiday_days = v.days.iter().map(|d| catalog.day(*d).cloned()).collect();
+                v.holiday_revision = catalog.revision;
+                v.holiday_status = catalog.status(v.calendar.month.year());
+            }
         }
         let old_markers = v.markers.clone();
         let old_entries = v.entries.clone();
@@ -481,12 +530,16 @@ unsafe fn layout(hwnd: HWND) {
             if (FIRST..FIRST + 42).contains(&b.id) {
                 let i = (b.id - FIRST) as usize;
                 changed |= month_changed || today_changed || old_markers.get(i) != v.markers.get(i);
+                changed |= old_holidays.get(i) != v.holiday_days.get(i);
             }
             if changed && b.visible {
                 dirty.push(child);
             }
         }
         v.displayed = Some(v.calendar);
+        let holiday_status_changed =
+            old_holiday_status != v.holiday_status || old_holidays != v.holiday_days;
+        let month = v.calendar.month;
         if resized {
             for font in old_fonts {
                 if !font.is_null() {
@@ -506,12 +559,22 @@ unsafe fn layout(hwnd: HWND) {
             if month_changed {
                 invalidate_part(hwnd, factor, rect(20, 84, 210, 32));
             }
-            if selection_changed {
-                invalidate_part(hwnd, factor, rect(20, 452, 340, 22));
+            if selection_changed || holiday_status_changed {
+                invalidate_part(hwnd, factor, rect(20, 444, 340, 44));
             }
             if entries_changed {
                 invalidate_part(hwnd, factor, rect(20, 535, 680, 90));
             }
+        }
+        if month_changed {
+            let root = GetAncestor(hwnd, GA_ROOT);
+            let owner = GetWindow(root, GW_OWNER);
+            PostMessageW(
+                if owner.is_null() { root } else { owner },
+                holiday_data::REQUEST,
+                month.year() as usize,
+                month.month() as isize,
+            );
         }
     }
 }
@@ -656,6 +719,14 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 } else if id == TODAY {
                     v.calendar.select(Local::now().date_naive());
                     focus = Some(v.calendar.selected);
+                } else if id == HOLIDAY_SOURCE {
+                    PostMessageW(
+                        GetAncestor(hwnd, GA_ROOTOWNER),
+                        holiday_data::SOURCE,
+                        v.calendar.selected.num_days_from_ce() as usize,
+                        0,
+                    );
+                    return 0;
                 } else if id == ADD_EVENT {
                     PostMessageW(
                         GetAncestor(hwnd, GA_ROOTOWNER),
@@ -793,6 +864,10 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
             && !GetPropW(item.hwndItem, wide("LiteTray.Hover").as_ptr()).is_null();
         let day = (FIRST..FIRST + 42).contains(&id);
         let date = day.then(|| v.days[(id - FIRST) as usize]);
+        let holiday = day
+            .then(|| v.holiday_days.get((id - FIRST) as usize))
+            .flatten()
+            .and_then(|d| d.as_ref());
         let selected = date == Some(v.calendar.selected);
         fill(item.hDC, item.rcItem, t.surface);
         let color = if selected {
@@ -815,11 +890,14 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
                 PREV => "‹".into(),
                 NEXT => "›".into(),
                 TODAY => "今天".into(),
+                HOLIDAY_SOURCE => "放假表".into(),
                 REFRESH => "刷新天气".into(),
                 40 => "设置".into(),
                 CALENDAR => "展开".into(),
                 ADD_EVENT => "添加日程".into(),
                 FOCUS => "专注计时".into(),
+                panel::DETACH => "分离".into(),
+                panel::CLOSE => "关闭".into(),
                 _ => window_text(item.hwndItem),
             }
         };
@@ -835,11 +913,13 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
         text(
             item.hDC,
             &label,
-            if day && v.lunar {
+            if day && (v.lunar || holiday.is_some()) {
                 rect(
                     item.rcItem.left,
                     item.rcItem.top + s(2),
-                    item.rcItem.right - item.rcItem.left,
+                    item.rcItem.right
+                        - item.rcItem.left
+                        - if holiday.is_some() { s(14) } else { 0 },
                     s(22),
                 )
             } else {
@@ -851,9 +931,13 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
         );
         if day {
             let index = (id - FIRST) as usize;
-            if v.lunar
-                && let Some(label) = v.lunar_labels.get(index)
-            {
+            let sublabel = holiday.map(|d| d.name.as_str()).or_else(|| {
+                v.lunar
+                    .then(|| v.lunar_labels.get(index))
+                    .flatten()
+                    .map(String::as_str)
+            });
+            if let Some(label) = sublabel {
                 text(
                     item.hDC,
                     label,
@@ -864,7 +948,44 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
                         s(18),
                     ),
                     v.fonts[1],
-                    if selected { t.on_accent } else { t.muted },
+                    if selected {
+                        t.on_accent
+                    } else if holiday.is_some_and(|d| d.off) {
+                        t.accent
+                    } else {
+                        t.muted
+                    },
+                    DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
+                );
+            }
+            if let Some(holiday) = holiday {
+                let badge = rect(
+                    item.rcItem.right - s(15),
+                    item.rcItem.top + s(3),
+                    s(14),
+                    s(15),
+                );
+                if !selected {
+                    rounded(
+                        item.hDC,
+                        badge,
+                        if holiday.off { t.tint } else { t.field },
+                        t.border,
+                        s(3),
+                    );
+                }
+                text(
+                    item.hDC,
+                    holiday.badge(),
+                    badge,
+                    v.fonts[1],
+                    if selected {
+                        t.on_accent
+                    } else if holiday.off {
+                        t.accent
+                    } else {
+                        t.text
+                    },
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE,
                 );
             }
@@ -872,7 +993,7 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
                 fill(
                     item.hDC,
                     rect(
-                        item.rcItem.right - s(7),
+                        item.rcItem.left + s(3),
                         item.rcItem.top + s(5),
                         s(3).max(1),
                         s(3).max(1),
@@ -964,7 +1085,7 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
             &v.calendar.month.format("%Y年 %-m月").to_string(),
             20,
             84,
-            200,
+            156,
             32,
             0,
             t.text,
@@ -994,11 +1115,32 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
         tx(
             &format!("{}  {}", v.calendar.selected.format("%-m月%-d日"), lunar),
             20,
-            452,
+            446,
             340,
-            22,
+            20,
             1,
             t.muted,
+        );
+        let selected_holiday = v
+            .days
+            .iter()
+            .position(|d| *d == v.calendar.selected)
+            .and_then(|i| v.holiday_days.get(i))
+            .and_then(|d| d.as_ref());
+        tx(
+            &selected_holiday
+                .map(|d| d.description())
+                .unwrap_or_else(|| v.holiday_status.clone()),
+            20,
+            468,
+            340,
+            18,
+            1,
+            if selected_holiday.is_some() {
+                t.accent
+            } else {
+                t.muted
+            },
         );
         rounded(dc, r(380, 88, 320, 390), t.field, t.border, s(12));
         tx(&v.city, 400, 106, 276, 28, 0, t.text);
@@ -1212,6 +1354,96 @@ unsafe fn weather_icon(dc: HDC, r: RECT, color: u32, description: &str) {
 #[cfg(test)]
 mod visual_checks {
     use super::*;
+    #[test]
+    fn holiday_updates_keep_native_dates_and_route_selected_source() {
+        unsafe {
+            let parent = CreateWindowExW(
+                0,
+                wide("STATIC").as_ptr(),
+                wide("Holiday regression").as_ptr(),
+                WS_POPUP,
+                0,
+                0,
+                WIDTH,
+                HEIGHT,
+                null_mut(),
+                null_mut(),
+                GetModuleHandleW(null()),
+                null(),
+            );
+            assert!(!parent.is_null());
+            let hwnd = create(parent, rect(0, 0, WIDTH, HEIGHT), false, true);
+            let date = NaiveDate::from_ymd_opt(2027, 2, 14).unwrap();
+            restore_selection(hwnd, calendar::Calendar::new(date));
+            let catalog = Rc::new(RefCell::new(holidays::Catalog::default()));
+            bind_holidays(hwnd, catalog.clone());
+            let cell = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RefCell<View>);
+            let before = cell.borrow().buttons.clone();
+            let fonts = cell.borrow().fonts;
+            let index = cell.borrow().days.iter().position(|d| *d == date).unwrap();
+            let selected = GetDlgItem(hwnd, (FIRST + index as u16) as i32);
+            assert!(window_text(selected).contains("春节 · 调休补班"));
+            let mut config = Config::default();
+            config.clock.show_lunar = false;
+            update(hwnd, &config, &None, false);
+            assert_eq!(
+                cell.borrow().holiday_days[index].as_ref().unwrap().badge(),
+                "班"
+            );
+            let mut data = catalog.borrow().seed(2027).unwrap();
+            data.days.iter_mut().find(|d| d.date == date).unwrap().off = true;
+            catalog.borrow_mut().apply(
+                2027,
+                holidays::Outcome {
+                    data: Some(data),
+                    next_check: Utc::now(),
+                    note: "更新回归".into(),
+                },
+            );
+            RedrawWindow(
+                hwnd,
+                null(),
+                null_mut(),
+                RDW_VALIDATE | RDW_NOERASE | RDW_ALLCHILDREN,
+            );
+            update(hwnd, &config, &None, false);
+            assert!(window_text(selected).contains("春节 · 放假"));
+            assert_eq!(cell.borrow().calendar.selected, date);
+            assert_eq!(
+                cell.borrow().buttons,
+                before,
+                "download must not recreate the calendar"
+            );
+            assert_eq!(cell.borrow().fonts, fonts);
+            let mut region: RECT = std::mem::zeroed();
+            let dirty = (FIRST..FIRST + 42)
+                .filter(|id| GetUpdateRect(GetDlgItem(hwnd, *id as i32), &mut region, 0) != 0)
+                .count();
+            // Hidden controls may consume their update region synchronously
+            // when SetWindowText changes the accessible date description.
+            assert!(
+                dirty <= 1,
+                "unrelated holiday dates were invalidated: {dirty}"
+            );
+            SendMessageW(GetDlgItem(hwnd, HOLIDAY_SOURCE as i32), BM_CLICK, 0, 0);
+            let mut message: MSG = std::mem::zeroed();
+            assert_ne!(
+                PeekMessageW(
+                    &mut message,
+                    parent,
+                    holiday_data::SOURCE,
+                    holiday_data::SOURCE,
+                    PM_REMOVE
+                ),
+                0
+            );
+            assert_eq!(message.wParam, date.num_days_from_ce() as usize);
+            assert_eq!(IsWindowVisible(parent), 0);
+            DestroyWindow(parent);
+            super::super::visual_checks::assert_external_foreground();
+        }
+    }
+
     unsafe extern "system" fn count_destroyed(
         hwnd: HWND,
         msg: u32,
@@ -1274,6 +1506,7 @@ mod visual_checks {
             entry.title = "Date-switch regression fixture".into();
             store.borrow_mut().data.put(entry).unwrap();
             bind_store(hwnd, store);
+            bind_holidays(hwnd, Rc::new(RefCell::new(holidays::Catalog::default())));
             update(hwnd, &Config::default(), &None, false);
             let cell = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RefCell<View>);
             let before = cell.borrow().buttons.clone();
@@ -1439,7 +1672,12 @@ mod visual_checks {
                 let _ = RoInitialize(RO_INIT_SINGLETHREADED);
                 let s = |n: i32| (n as f64 * factor).round() as i32;
                 let today = Local::now().date_naive();
-                let calendar = calendar::Calendar::new(today);
+                let calendar = calendar::Calendar::new(if empty {
+                    NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()
+                } else {
+                    NaiveDate::from_ymd_opt(2027, 2, 14).unwrap()
+                });
+                let holidays = holidays::Catalog::default();
                 let now = Utc::now();
                 let v = View {
                     calendar,
@@ -1458,6 +1696,14 @@ mod visual_checks {
                     factor,
                     store: None,
                     revision: 0,
+                    holiday_days: calendar
+                        .grid()
+                        .iter()
+                        .map(|d| holidays.day(*d).cloned())
+                        .collect(),
+                    holiday_status: holidays.status(calendar.month.year()),
+                    holiday_revision: holidays.revision,
+                    holidays: Some(Rc::new(RefCell::new(holidays))),
                     lunar_labels: calendar
                         .grid()
                         .iter()
@@ -1466,7 +1712,7 @@ mod visual_checks {
                     markers: calendar
                         .grid()
                         .iter()
-                        .map(|d| !empty && *d == today)
+                        .map(|d| !empty && (*d == calendar.selected || d.day() == 6))
                         .collect(),
                     entries: if empty {
                         vec![]

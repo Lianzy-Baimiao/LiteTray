@@ -1,5 +1,6 @@
 pub mod clock;
 pub mod config;
+pub mod holidays;
 pub mod http;
 pub mod migration;
 pub mod monitors;

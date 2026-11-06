@@ -2,6 +2,7 @@ mod agenda;
 mod calendar;
 mod dashboard;
 mod design;
+mod holiday_data;
 mod page;
 mod panel;
 mod settings;
@@ -12,7 +13,7 @@ use chrono::{Local, TimeZone, Utc};
 use litetray::{
     clock,
     config::{self, Appearance, ClickAction, Config, MonitorScope, Provider},
-    http, migration, monitors, organizer,
+    holidays, http, migration, monitors, organizer,
     platform::{
         app_icon, clock_preview, credentials, diagnostics, displays, lunar, startup, taskbar_clock,
         tray_popup, wide,
@@ -40,7 +41,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.2";
+const UI_REVISION: &str = "开发版 5.3";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -95,12 +96,16 @@ thread_local! {static PALETTE:Cell<Option<Palette>>=const{Cell::new(None)};}
 enum Event {
     Weather(Box<(config::WeatherConfig, weather::WeatherResult)>),
     Update(Result<UpdateStatus, String>),
+    Holidays(i32, holidays::Outcome),
 }
 struct App {
     hwnd: HWND,
     page_host: HWND,
     shell_layout: Option<(i32, i32, u32)>,
     organizer: Rc<RefCell<organizer::Store>>,
+    holidays: Rc<RefCell<holidays::Catalog>>,
+    holiday_queue: std::collections::BTreeSet<i32>,
+    holiday_active: Option<i32>,
     agenda_state: [Option<agenda::Snapshot>; 2],
     agenda_scope: Option<chrono::NaiveDate>,
     notices: std::collections::VecDeque<organizer::Notice>,
@@ -268,6 +273,9 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
                 &config::data_dir().join("agenda.json"),
             ))),
             agenda_state: [None, None],
+            holidays: Rc::new(RefCell::new(holidays::Catalog::default())),
+            holiday_queue: Default::default(),
+            holiday_active: None,
             agenda_scope: None,
             notices: std::collections::VecDeque::new(),
             next_notice: Instant::now(),
@@ -878,6 +886,7 @@ impl App {
                     self.children.push(view);
                     self.fields.insert(dashboard::ID, view);
                     dashboard::bind_store(view, self.organizer.clone());
+                    dashboard::bind_holidays(view, self.holidays.clone());
                     if let Some(calendar) = self.calendar {
                         dashboard::restore_selection(view, calendar);
                     }
@@ -1247,6 +1256,12 @@ impl App {
         unsafe {
             while let Ok(event) = self.rx.try_recv() {
                 match event {
+                    Event::Holidays(year, result) => {
+                        self.holiday_active = None;
+                        self.holidays.borrow_mut().apply(year, result);
+                        self.update_views();
+                        self.start_next_holiday();
+                    }
                     Event::Weather(response) => {
                         let (request_config, result) = *response;
                         self.weather_busy = false;
@@ -1598,6 +1613,7 @@ impl App {
                 true,
             );
             dashboard::bind_store(view, self.organizer.clone());
+            dashboard::bind_holidays(view, self.holidays.clone());
             app_icon::apply(hwnd, dpi as u32);
             let rounded = 2_i32;
             if self.build >= 22000 {
@@ -2126,6 +2142,19 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 return Some(0);
             }
             match msg {
+                holiday_data::REQUEST => {
+                    if let Some(month) = chrono::NaiveDate::from_ymd_opt(w as i32, l as u32, 1) {
+                        app.request_holidays(month);
+                    }
+                    Some(0)
+                }
+                holiday_data::SOURCE => {
+                    if let Some(date) = chrono::NaiveDate::from_num_days_from_ce_opt(w as i32) {
+                        let target = app.holidays.borrow().source(date);
+                        open_target(&target);
+                    }
+                    Some(0)
+                }
                 agenda::CHANGED => {
                     app.organizer_tick();
                     app.update_views();
@@ -2269,6 +2298,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     Some(0)
                 }
                 WM_TIMER => {
+                    app.refresh_visible_holidays();
                     app.organizer_tick();
                     if IsWindowVisible(hwnd) != 0
                         || app.panel_cache.iter().any(|&p| IsWindowVisible(p) != 0)
