@@ -606,6 +606,31 @@ pub struct IMenuFlyout_Vtbl {
     MenuFlyoutPresenterStyle: usize,
     SetMenuFlyoutPresenterStyle: usize,
 }
+pub const IID_IPanel: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0xa50a4bbd_8361_469c_90da_e9a40c7474df);
+#[repr(C)]
+pub struct IPanel_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    Children: usize,
+    Background: usize,
+    SetBackground: usize,
+    pub IsItemsHost:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    ChildrenTransitions: usize,
+    SetChildrenTransitions: usize,
+}
+pub const IID_IPanelStatics: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0xf23d6b5d_8330_47a6_a046_25f509b25232);
+#[repr(C)]
+pub struct IPanelStatics_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    pub BackgroundProperty: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    IsItemsHostProperty: usize,
+    ChildrenTransitionsProperty: usize,
+}
 pub const IID_IPropertyValue: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0x4bd682dd_7554_40e9_9a9b_82654ede7e62);
 #[repr(C)]

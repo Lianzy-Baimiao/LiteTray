@@ -4,8 +4,10 @@ mod dashboard;
 mod design;
 mod page;
 mod panel;
+mod settings;
 #[cfg(test)]
 mod visual_checks;
+mod widgets;
 use chrono::{Local, TimeZone, Utc};
 use litetray::{
     clock,
@@ -38,7 +40,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.1";
+const UI_REVISION: &str = "开发版 5.2";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -97,6 +99,7 @@ enum Event {
 struct App {
     hwnd: HWND,
     page_host: HWND,
+    shell_layout: Option<(i32, i32, u32)>,
     organizer: Rc<RefCell<organizer::Store>>,
     agenda_state: [Option<agenda::Snapshot>; 2],
     agenda_scope: Option<chrono::NaiveDate>,
@@ -260,6 +263,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
         let mut app = App {
             hwnd,
             page_host: null_mut(),
+            shell_layout: None,
             organizer: Rc::new(RefCell::new(organizer::Store::open(
                 &config::data_dir().join("agenda.json"),
             ))),
@@ -413,6 +417,7 @@ impl App {
     }
     unsafe fn recreate_resources(&mut self) {
         unsafe {
+            self.shell_layout = None;
             self.clear_attached_panels();
             self.release_resources();
             let face = design::font_face();
@@ -552,6 +557,11 @@ impl App {
             let content = x >= 224 && y >= 80 && id != STATUS && id != SAVE && id != 42;
             let style = if class == "COMBOBOX" {
                 style | CBS_OWNERDRAWFIXED as u32 | CBS_HASSTRINGS as u32
+            } else if class == "LISTBOX" {
+                (style & !WS_BORDER)
+                    | LBS_OWNERDRAWFIXED as u32
+                    | LBS_HASSTRINGS as u32
+                    | LBS_NOINTEGRALHEIGHT as u32
             } else {
                 style
             };
@@ -599,6 +609,20 @@ impl App {
             if class == "COMBOBOX" {
                 design::style_combo(hwnd, self.dark(), self.dpi);
             }
+            if class == "LISTBOX" {
+                SetPropW(hwnd, wide("LiteTray.Field").as_ptr(), 1usize as HANDLE);
+                SendMessageW(hwnd, LB_SETITEMHEIGHT, 0, self.scale(32) as isize);
+                SetWindowTheme(
+                    hwnd,
+                    wide(if self.dark() {
+                        "DarkMode_Explorer"
+                    } else {
+                        "Explorer"
+                    })
+                    .as_ptr(),
+                    null(),
+                );
+            }
             if class == "BUTTON" && style & 0xf == BS_AUTOCHECKBOX as u32 {
                 SetWindowTheme(
                     hwnd,
@@ -616,6 +640,7 @@ impl App {
             }
             if class == "EDIT" {
                 SendMessageW(hwnd, EM_SETLIMITTEXT, 2048, 0);
+                widgets::style_edit(hwnd, self.dark(), self.dpi);
             }
             self.children.push(hwnd);
             if id != 0 {
@@ -745,14 +770,28 @@ impl App {
                 let index = snapshot.timer_mode as usize;
                 self.agenda_state[index] = Some(snapshot);
             }
-            for child in self.children.drain(..) {
-                DestroyWindow(child);
-            }
-            self.fields.clear();
             let mut rect = std::mem::zeroed();
             GetClientRect(self.hwnd, &mut rect);
             let width = rect.right * 96 / self.dpi as i32 - 56;
             let height = rect.bottom * 96 / self.dpi as i32;
+            let layout = (rect.right, rect.bottom, self.dpi);
+            let rebuild_shell = self.shell_layout != Some(layout);
+            let old_page = self.page_host;
+            // Keep the old page painted while constructing the replacement
+            // under a hidden parent. Navigation/header/footer survive switches.
+            self.children.retain(|&child| {
+                let content = child == old_page || IsChild(old_page, child) != 0;
+                if rebuild_shell && !content {
+                    DestroyWindow(child);
+                }
+                !content && !rebuild_shell
+            });
+            self.fields.retain(|_, child| {
+                !rebuild_shell
+                    && IsWindow(*child) != 0
+                    && *child != old_page
+                    && IsChild(old_page, *child) == 0
+            });
             self.page_host = page::create(
                 self.hwnd,
                 design::rect(
@@ -763,21 +802,52 @@ impl App {
                 ),
             );
             self.children.push(self.page_host);
-            let brand = self.label("LiteTray", 22, 24, 170, 38);
-            SendMessageW(brand, WM_SETFONT, self.title_font as usize, 1);
-            self.label("轻托盘", 26, 72, 194, 25);
-            for (row, i) in [0, 8, 9, 1, 7, 2, 3, 4, 5, 6].into_iter().enumerate() {
-                self.button(PAGES[i], NAV + i as u16, 16, 134 + row as i32 * 44, 208);
+            if rebuild_shell {
+                let brand = self.label("LiteTray", 22, 24, 170, 38);
+                SendMessageW(brand, WM_SETFONT, self.title_font as usize, 1);
+                self.label("你的时间与桌面", 26, 72, 194, 25);
+                for (i, y) in [
+                    (0, 138),
+                    (8, 180),
+                    (9, 222),
+                    (1, 316),
+                    (7, 358),
+                    (2, 400),
+                    (3, 442),
+                    (4, 536),
+                    (5, 578),
+                    (6, 620),
+                ] {
+                    self.button(PAGES[i], NAV + i as u16, 16, y, 208);
+                }
+                self.label("日常", 28, 108, 170, 22);
+                self.label("任务栏", 28, 286, 170, 22);
+                self.label("应用", 28, 506, 170, 22);
+                self.label(
+                    &format!("{UI_REVISION}  v{}", env!("CARGO_PKG_VERSION")),
+                    24,
+                    height - 90,
+                    165,
+                    50,
+                );
+                let heading =
+                    self.control("STATIC", "", 901, SS_LEFT as u32, 224, 30, width - 250, 42);
+                SendMessageW(heading, WM_SETFONT, self.title_font as usize, 1);
+                self.control("STATIC", "", 902, SS_LEFT as u32, 224, 78, width - 260, 26);
+                self.control(
+                    "STATIC",
+                    "",
+                    STATUS,
+                    SS_LEFT as u32,
+                    224,
+                    height - 72,
+                    width - 415,
+                    48,
+                );
+                self.button("保存设置", SAVE, width - 121, height - 68, 125);
+                self.shell_layout = Some(layout);
             }
-            self.label(
-                &format!("{UI_REVISION}  v{}", env!("CARGO_PKG_VERSION")),
-                24,
-                height - 90,
-                165,
-                50,
-            );
-            let heading = self.label(PAGES[self.page], 224, 30, width - 250, 42);
-            SendMessageW(heading, WM_SETFONT, self.title_font as usize, 1);
+            set_text(self.field(901), PAGES[self.page]);
             let descriptions = [
                 "月历、日程和天气。",
                 "设置任务栏时钟的内容与点击行为。",
@@ -790,7 +860,7 @@ impl App {
                 "记录待办、日程和重要日期。点击保存后保存在本机。",
                 "专注计时、定时提醒与最近提醒记录。",
             ];
-            self.label(descriptions[self.page], 224, 78, width - 260, 26);
+            set_text(self.field(902), descriptions[self.page]);
             let c = self.draft.clone();
             match self.page {
                 0 => {
@@ -812,428 +882,13 @@ impl App {
                         dashboard::restore_selection(view, calendar);
                     }
                 }
-                1 => {
-                    self.edit("第一行模板", &c.clock.top_line, 201, 224, 84, width - 260);
-                    self.edit(
-                        "第二行模板",
-                        &c.clock.bottom_line,
-                        202,
-                        224,
-                        154,
-                        width - 260,
-                    );
-                    self.label(
-                        "常用：%date% %time% %weekday% %weather%\r\n格式：%year% %month2% %day2% %hour% %minute% %second%",
-                        224,
-                        218,
-                        width - 260,
-                        42,
-                    );
-                    self.check("显示秒", c.clock.show_seconds, 203, 224, 268, 140);
-                    self.check("日历显示农历", c.clock.show_lunar, 204, 404, 268, 180);
-                    self.edit("字体", &c.clock.font_family, 205, 224, 312, 260);
-                    self.edit(
-                        "字号（8–32）",
-                        &c.clock.font_size.to_string(),
-                        206,
-                        506,
-                        312,
-                        130,
-                    );
-                    self.edit(
-                        "宽度（留空自动）",
-                        &if c.clock.width == 0 {
-                            String::new()
-                        } else {
-                            c.clock.width.to_string()
-                        },
-                        207,
-                        656,
-                        312,
-                        160,
-                    );
-                    self.label("点击时钟", 224, 388, 180, 25);
-                    self.combo(
-                        &["日历与天气面板", "系统日历"],
-                        if c.clock.click_action == ClickAction::CalendarWeather {
-                            0
-                        } else {
-                            1
-                        },
-                        208,
-                        224,
-                        418,
-                        330,
-                    );
-                    self.button("预览时钟", 209, 574, 418, 250);
-                    self.control(
-                        "STATIC",
-                        "预览：尚未打开",
-                        210,
-                        SS_LEFT as u32,
-                        224,
-                        466,
-                        width - 260,
-                        58,
-                    );
-                    self.button("启用任务栏时钟", 212, 224, 532, 250);
-                    self.button("停用并恢复", 213, 492, 532, 170);
-                }
-                2 => {
-                    self.label("显示范围", 224, 85, 300, 25);
-                    self.combo(
-                        &["所有显示器", "仅主显示器", "指定显示器"],
-                        match c.tray.scope {
-                            MonitorScope::All => 0,
-                            MonitorScope::Primary => 1,
-                            MonitorScope::Selected => 2,
-                        },
-                        301,
-                        224,
-                        114,
-                        340,
-                    );
-                    self.check(
-                        "复制主屏托盘图标和隐藏图标入口",
-                        c.tray.enabled && c.tray.show_icons,
-                        308,
-                        224,
-                        162,
-                        400,
-                    );
-                    self.check(
-                        "包含网络 / 音量 / 输入法等系统图标",
-                        c.tray.enabled && c.tray.show_icons,
-                        303,
-                        224,
-                        200,
-                        400,
-                    );
-                    EnableWindow(self.field(303), 0);
-                    self.check(
-                        "图标复制到选中副屏；主屏图标保持原位",
-                        c.tray.copied_taskbars_only,
-                        304,
-                        224,
-                        238,
-                        460,
-                    );
-                    EnableWindow(self.field(304), 0);
-                    self.label(
-                        "指定屏幕 · 单击或空格切换，可多选",
-                        224,
-                        278,
-                        width - 410,
-                        25,
-                    );
-                    self.button("刷新显示器", 307, width - 170, 270, 134);
-                    self.monitor_rows =
-                        monitors::choices(&self.monitor_snapshot, &c.tray.selected_devices);
-                    let list = self.control(
-                        "LISTBOX",
-                        "",
-                        305,
-                        WS_TABSTOP
-                            | WS_BORDER
-                            | WS_VSCROLL
-                            | LBS_NOTIFY as u32
-                            | LBS_MULTIPLESEL as u32,
-                        224,
-                        310,
-                        width - 260,
-                        136,
-                    );
-                    for (index, row) in self.monitor_rows.iter().enumerate() {
-                        SendMessageW(list, LB_ADDSTRING, 0, wide(&row.label).as_ptr() as isize);
-                        SendMessageW(list, LB_SETSEL, usize::from(row.selected), index as isize);
-                    }
-                    self.control(
-                        "STATIC",
-                        &self.monitor_summary(),
-                        306,
-                        SS_LEFT as u32,
-                        224,
-                        455,
-                        width - 260,
-                        64,
-                    );
-                    self.label(
-                        "保存后生效。图标顺序、显隐与宽度跟随主屏，按实际内容排列。",
-                        224,
-                        527,
-                        width - 260,
-                        52,
-                    );
-                }
-                3 => {
-                    self.check("启用天气", c.weather.enabled, 400, 224, 82, 220);
-                    self.edit("城市名称", &c.weather.city, 401, 224, 119, 240);
-                    self.edit("纬度", &c.weather.latitude.to_string(), 402, 485, 119, 145);
-                    self.edit("经度", &c.weather.longitude.to_string(), 403, 650, 119, 145);
-                    self.label(
-                        "来源优先级 · 上方优先，失败或过期时自动回退",
-                        224,
-                        189,
-                        570,
-                        24,
-                    );
-                    let list = self.control(
-                        "LISTBOX",
-                        "",
-                        404,
-                        WS_TABSTOP | WS_BORDER | WS_VSCROLL | LBS_NOTIFY as u32,
-                        224,
-                        221,
-                        300,
-                        123,
-                    );
-                    for provider in &c.weather.providers {
-                        SendMessageW(
-                            list,
-                            LB_ADDSTRING,
-                            0,
-                            wide(provider.label()).as_ptr() as isize,
-                        );
-                    }
-                    SendMessageW(list, LB_SETCURSEL, 0, 0);
-                    self.combo(&Provider::ALL.map(|p| p.label()), 0, 405, 543, 221, 250);
-                    self.button("添加", 406, 543, 260, 75);
-                    self.button("移除", 407, 630, 260, 75);
-                    self.button("上移", 408, 543, 305, 75);
-                    self.button("下移", 409, 630, 305, 75);
-                    self.edit(
-                        "刷新间隔（分钟）",
-                        &c.weather.refresh_minutes.to_string(),
-                        414,
-                        224,
-                        359,
-                        160,
-                    );
-                    self.edit(
-                        "请求超时（秒）",
-                        &c.weather.timeout_seconds.to_string(),
-                        415,
-                        404,
-                        359,
-                        160,
-                    );
-                    self.edit(
-                        "和风 API Host",
-                        &c.weather.qweather_host,
-                        416,
-                        584,
-                        359,
-                        210,
-                    );
-                    self.label("API Key（保存在 Windows 凭据管理器）", 224, 428, 560, 23);
-                    self.combo(&["和风天气", "OpenWeather"], 0, 410, 224, 457, 160);
-                    self.control(
-                        "EDIT",
-                        "",
-                        411,
-                        WS_TABSTOP | ES_AUTOHSCROLL as u32 | ES_PASSWORD as u32,
-                        400,
-                        457,
-                        220,
-                        30,
-                    );
-                    self.button("保存 Key", 412, 634, 455, 85);
-                    self.button("删除 Key", 413, 729, 455, 85);
-                    self.label("无需密钥：Open-Meteo / MET Norway / wttr.in。各来源更新频率与服务条款不同。",224,507,width-260,40);
-                }
-                4 => {
-                    self.label("外观", 224, 90, 200, 24);
-                    self.combo(
-                        &["跟随 Windows", "浅色", "深色"],
-                        match c.appearance {
-                            Appearance::System => 0,
-                            Appearance::Light => 1,
-                            Appearance::Dark => 2,
-                        },
-                        501,
-                        224,
-                        120,
-                        300,
-                    );
-                    self.check(
-                        "登录 Windows 时启动",
-                        c.start_with_windows,
-                        502,
-                        224,
-                        176,
-                        350,
-                    );
-                    self.label("强调色、高对比度与界面字体跟随 Windows，系统外观变化时自动更新。\r\n关闭窗口后继续后台运行；右键托盘图标可退出。",224,231,width-260,65);
-                    self.button("打开配置目录", 503, 224, 320, 170);
-                    self.button("导出诊断信息", 504, 412, 320, 170);
-                    self.button("退出程序", EXIT, 600, 320, 170);
-                    self.label("保存后的日程与计时进度保留在本机。需要登录后继续提醒时，请开启随 Windows 启动。\r\n通知遵循 Windows 的通知设置；最近提醒也会保留在“闹钟与专注”中。",224,389,width-260,100);
-                }
-                5 => {
-                    self.label(&format!("LiteTray 轻托盘  {} · {UI_REVISION}\r\n自动宽度时钟、日历天气、主屏托盘图标复制",env!("CARGO_PKG_VERSION")),224,86,width-260,80);
-                    self.edit(
-                        "GitHub 更新仓库（owner/repository）",
-                        &c.updates.repository,
-                        601,
-                        224,
-                        187,
-                        width - 260,
-                    );
-                    self.check(
-                        "允许预览版本",
-                        c.updates.include_prerelease,
-                        602,
-                        224,
-                        253,
-                        220,
-                    );
-                    self.check(
-                        "启动时检查更新",
-                        c.updates.check_on_startup,
-                        603,
-                        480,
-                        253,
-                        240,
-                    );
-                    self.label(
-                        "私有仓库 Token（仅需本仓库 Contents 读取权限）",
-                        224,
-                        302,
-                        width - 260,
-                        24,
-                    );
-                    self.control(
-                        "EDIT",
-                        "",
-                        604,
-                        WS_TABSTOP | ES_AUTOHSCROLL as u32 | ES_PASSWORD as u32,
-                        224,
-                        334,
-                        360,
-                        30,
-                    );
-                    self.button("保存 Token", 605, 602, 332, 105);
-                    self.button("删除 Token", 606, 720, 332, 105);
-                    self.button("检查更新", UPDATE, 224, 397, 130);
-                    self.button("打开发布页面", OPEN_RELEASE, 372, 397, 145);
-                    self.button("打开项目", 607, 535, 397, 120);
-                    self.label("检查通过 GitHub Releases 获取版本信息。私有仓库需要单独保存访问凭据。\r\n检测到新版后打开 GitHub 下载页，不会静默替换正在运行的程序。",224,458,width-260,65);
-                    self.button("退出 LiteTray", EXIT, 224, 535, 145);
-                }
-                6 => {
-                    self.label("选择 tools/Export-WindhawkProfile.ps1 导出的 JSON 文件，查看逐项转换结果。",224,84,width-260,45);
-                    self.button("选择导出文件", 701, 224, 137, 170);
-                    self.button("采用到设置草稿", 702, 410, 137, 170);
-                    self.button("导出迁移报告", 703, 596, 137, 170);
-                    EnableWindow(self.field(702), self.migration.is_some() as i32);
-                    EnableWindow(self.field(703), self.migration.is_some() as i32);
-                    let text=self.migration.as_ref().map(migration::Report::text).unwrap_or_else(||"尚未选择文件。\r\n\r\n迁移只更新 LiteTray 的设置草稿；检查后点击“保存设置”生效。\r\n原 Windhawk 设置保持不变。".into());
-                    let report_control = self.control(
-                        "EDIT",
-                        "",
-                        704,
-                        WS_TABSTOP
-                            | WS_VSCROLL
-                            | ES_MULTILINE as u32
-                            | ES_AUTOVSCROLL as u32
-                            | ES_READONLY as u32,
-                        224,
-                        186,
-                        width - 260,
-                        (height - 408).max(220),
-                    );
-                    SendMessageW(report_control, EM_SETLIMITTEXT, 2 * 1024 * 1024, 0);
-                    SetWindowTextW(report_control, wide(&text).as_ptr());
-                }
-                7 => {
-                    use litetray_adapter_protocol::clock::Alignment;
-                    let alignment_index = |alignment| match alignment {
-                        Alignment::Native => 0,
-                        Alignment::Left => 1,
-                        Alignment::Center => 2,
-                        Alignment::Right => 3,
-                    };
-                    let column = (width - 284) / 2;
-                    for (title, line, color, color_id, font_id, x) in [
-                        (
-                            "第一行",
-                            &c.clock.top_style,
-                            &c.clock.top_color,
-                            801,
-                            806,
-                            224,
-                        ),
-                        (
-                            "第二行",
-                            &c.clock.bottom_style,
-                            &c.clock.bottom_color,
-                            802,
-                            809,
-                            248 + column,
-                        ),
-                    ] {
-                        self.label(title, x, 84, column, 24);
-                        self.edit(
-                            "字体",
-                            line.font_family.as_deref().unwrap_or(""),
-                            font_id,
-                            x,
-                            115,
-                            column - 88,
-                        );
-                        self.edit(
-                            "字号",
-                            &line
-                                .font_size
-                                .map(|size| size.to_string())
-                                .unwrap_or_default(),
-                            font_id + 1,
-                            x + column - 72,
-                            115,
-                            72,
-                        );
-                        self.edit("颜色", color, color_id, x, 180, column - 164);
-                        self.label("对齐", x + column - 148, 180, 148, 22);
-                        self.combo(
-                            &["沿用公共对齐", "保留原样", "左对齐", "居中", "右对齐"],
-                            line.alignment.map(|a| alignment_index(a) + 1).unwrap_or(0),
-                            font_id + 2,
-                            x + column - 148,
-                            205,
-                            148,
-                        );
-                    }
-                    self.label("字体、字号留空时沿用“时钟显示”页；字号范围 8–32。\r\n颜色留空使用原生颜色；支持 #RRGGBB 或 #AARRGGBB。",224,248,width-260,50);
-                    self.label("公共文字对齐", 224, 309, 190, 25);
-                    self.combo(
-                        &["保留原样", "左对齐", "居中", "右对齐"],
-                        alignment_index(c.clock.alignment),
-                        803,
-                        420,
-                        305,
-                        235,
-                    );
-                    self.label("悬停提示模板 · 留空保留原生提示", 224, 354, width - 260, 25);
-                    let tip = self.control(
-                        "EDIT",
-                        &c.clock.tooltip_line.replace('\n', "\r\n"),
-                        804,
-                        WS_TABSTOP
-                            | WS_BORDER
-                            | WS_VSCROLL
-                            | ES_MULTILINE as u32
-                            | ES_AUTOVSCROLL as u32
-                            | ES_WANTRETURN as u32,
-                        224,
-                        388,
-                        width - 260,
-                        76,
-                    );
-                    SendMessageW(tip, EM_SETLIMITTEXT, 1024, 0);
-                    self.label("支持 %date% %time% %weekday% %weather% 和换行。\r\n在原生预览时钟上停留鼠标可查看提示。",224,474,width-260,44);
-                    self.button("应用草稿到原生预览", 209, 224, 530, 250);
-                    self.button("重置本页", 805, 492, 530, 185);
-                }
+                1 => self.clock_settings(&c, width),
+                2 => self.tray_settings(&c, width),
+                3 => self.weather_settings(&c, width),
+                4 => self.general_settings(&c, width),
+                5 => self.about_settings(&c, width),
+                6 => self.migration_settings(width, height),
+                7 => self.style_settings(&c, width),
                 8 | 9 => {
                     let timers = self.page == 9;
                     ShowScrollBar(self.page_host, SB_VERT, 0);
@@ -1253,8 +908,8 @@ impl App {
                 }
                 _ => {}
             }
-            self.control(
-                "STATIC",
+            set_text(
+                self.field(STATUS),
                 &if self.page == 8 {
                     "选择日程后编辑 · 点击保存后生效".into()
                 } else if self.page == 9 {
@@ -1262,31 +917,33 @@ impl App {
                 } else {
                     self.status.clone()
                 },
-                STATUS,
-                SS_LEFT as u32,
-                224,
-                height - 79,
-                width - 415,
-                64,
             );
-            if self.page < 8 {
-                self.button(
-                    if self.page == 0 {
-                        "设置时钟"
-                    } else {
-                        "保存设置"
-                    },
-                    if self.page == 0 { 42 } else { SAVE },
-                    width - 121,
-                    height - 68,
-                    125,
-                );
-            }
+            set_text(
+                self.field(SAVE),
+                if self.page == 0 {
+                    "设置时钟"
+                } else {
+                    "保存设置"
+                },
+            );
+            ShowWindow(
+                self.field(SAVE),
+                if self.page < 8 { SW_SHOWNA } else { SW_HIDE },
+            );
             if self.page < 8 {
                 page::finish(self.page_host);
             }
             self.update_views();
-            InvalidateRect(self.hwnd, null(), 1);
+            ShowWindow(self.page_host, SW_SHOWNA);
+            if !old_page.is_null() {
+                DestroyWindow(old_page);
+            }
+            RedrawWindow(
+                self.hwnd,
+                null(),
+                null_mut(),
+                RDW_INVALIDATE | RDW_ALLCHILDREN,
+            );
         }
     }
 
@@ -1369,9 +1026,10 @@ impl App {
                     (&mut c.clock.bottom_style, 809, "第二行"),
                 ] {
                     let family = self.text(id).trim().to_owned();
-                    line.font_family = (!family.is_empty()).then_some(family);
+                    line.font_family =
+                        (!family.is_empty() && family != "沿用公共字体").then_some(family);
                     let size = self.text(id + 1);
-                    line.font_size = if size.trim().is_empty() {
+                    line.font_size = if size.trim().is_empty() || size == "沿用" {
                         None
                     } else {
                         Some(
@@ -1573,18 +1231,13 @@ impl App {
             }
             self.update_busy = true;
             self.set_status("正在连接 GitHub 检查更新…");
+            set_text(self.field(608), "正在检查 GitHub Releases 与 Tags…");
             let config = self.draft.updates.clone();
             let sender = self.tx.clone();
             let window = self.hwnd as usize;
             thread::spawn(move || {
-                let result = credentials::read(update::CREDENTIAL_TARGET).and_then(|token| {
-                    update::check(
-                        &http::Client::new(15),
-                        &config,
-                        token.as_deref(),
-                        env!("CARGO_PKG_VERSION"),
-                    )
-                });
+                let result =
+                    update::check(&http::Client::new(15), &config, env!("CARGO_PKG_VERSION"));
                 let _ = sender.send(Event::Update(result));
                 PostMessageW(window as HWND, WM_RESULT, 0, 0);
             });
@@ -1614,9 +1267,13 @@ impl App {
                         match result {
                             Ok(status) => {
                                 self.set_status(status.text());
+                                set_text(self.field(608), &status.text());
                                 self.update = Some(status);
                             }
-                            Err(error) => self.set_status(error),
+                            Err(error) => {
+                                set_text(self.field(608), &error);
+                                self.set_status(error);
+                            }
                         }
                     }
                 }
@@ -1953,6 +1610,9 @@ impl App {
     unsafe fn command(&mut self, id: u16) -> bool {
         unsafe {
             if (NAV..NAV + PAGES.len() as u16).contains(&id) {
+                if self.page == (id - NAV) as usize {
+                    return false;
+                }
                 if let Err(e) = self.collect_page() {
                     self.set_status(e);
                     return false;
@@ -1962,6 +1622,58 @@ impl App {
                 return false;
             }
             match id {
+                settings::PRESET..=833 => {
+                    if let Err(error) = self.collect_page() {
+                        self.set_status(error);
+                        return false;
+                    }
+                    let (name, top, bottom) = settings::PRESETS[(id - settings::PRESET) as usize];
+                    self.draft.clock.top_line = top.into();
+                    self.draft.clock.bottom_line = bottom.into();
+                    self.draft.clock.width = 0;
+                    self.draft.clock.show_seconds = false;
+                    self.draft.clock.font_family = design::font_face();
+                    self.draft.clock.font_size = 12;
+                    self.draft.clock.top_color.clear();
+                    self.draft.clock.bottom_color.clear();
+                    self.draft.clock.top_style = Default::default();
+                    self.draft.clock.bottom_style = Default::default();
+                    if id != settings::PRESET {
+                        self.draft.clock.top_style.font_size = Some(14);
+                    }
+                    self.draft.clock.alignment = if id == settings::PRESET + 3 {
+                        litetray_adapter_protocol::clock::Alignment::Center
+                    } else {
+                        litetray_adapter_protocol::clock::Alignment::Right
+                    };
+                    self.status = format!("已选择“{name}” · 保存设置后应用到任务栏");
+                    self.render();
+                }
+                812 | 813 => {
+                    use windows_sys::Win32::UI::Controls::Dialogs::*;
+                    let field = if id == 812 { 801 } else { 802 };
+                    let mut custom = [0u32; 16];
+                    let mut choice: CHOOSECOLORW = std::mem::zeroed();
+                    choice.lStructSize = size_of::<CHOOSECOLORW>() as u32;
+                    choice.hwndOwner = self.hwnd;
+                    choice.lpCustColors = custom.as_mut_ptr();
+                    choice.Flags = CC_FULLOPEN | CC_RGBINIT;
+                    choice.rgbResult = self.text_color();
+                    if ChooseColorW(&mut choice) != 0 {
+                        let c = choice.rgbResult;
+                        set_text(
+                            self.field(field),
+                            &format!("#{:02X}{:02X}{:02X}", c & 255, c >> 8 & 255, c >> 16 & 255),
+                        );
+                        if self.collect_page().is_ok() {
+                            widgets::update_preview(
+                                self.field(widgets::PREVIEW),
+                                &self.draft.clock,
+                            );
+                        }
+                    }
+                    self.receive();
+                }
                 212 => {
                     self.draft.tray.clock_enabled = true;
                     match self.save() {
@@ -2016,6 +1728,11 @@ impl App {
                 }
                 307 => self.refresh_displays(),
                 SAVE => {
+                    if self.page == 0 {
+                        self.page = 1;
+                        self.render();
+                        return false;
+                    }
                     if let Err(e) = self.save() {
                         self.set_status(format!("保存失败：{e}"));
                     }
@@ -2130,20 +1847,16 @@ impl App {
                     }
                     self.render();
                 }
-                412 | 413 | 605 | 606 => {
-                    let (target, field) = if id == 605 || id == 606 {
-                        (update::CREDENTIAL_TARGET, 604)
-                    } else {
-                        (
-                            if self.selected(410) == 0 {
-                                "LiteTray/weather/qweather"
-                            } else {
-                                "LiteTray/weather/openweather"
-                            },
-                            411,
-                        )
-                    };
-                    let result = if id == 413 || id == 606 {
+                412 | 413 => {
+                    let (target, field) = (
+                        if self.selected(410) == 0 {
+                            "LiteTray/weather/qweather"
+                        } else {
+                            "LiteTray/weather/openweather"
+                        },
+                        411,
+                    );
+                    let result = if id == 413 {
                         credentials::delete(target)
                     } else {
                         credentials::save(target, &self.text(field))
@@ -2151,7 +1864,7 @@ impl App {
                     match result {
                         Ok(()) => {
                             SetWindowTextW(self.field(field), wide("").as_ptr());
-                            self.set_status(if id == 413 || id == 606 {
+                            self.set_status(if id == 413 {
                                 "凭据已删除"
                             } else {
                                 "凭据已保存到 Windows 凭据管理器"
@@ -2511,6 +2224,14 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 }
                 WM_COMMAND => {
                     let id = (w & 0xffff) as u16;
+                    if matches!(app.page, 1 | 7)
+                        && matches!((w >> 16) as u32, EN_CHANGE | CBN_SELCHANGE)
+                    {
+                        if app.collect_page().is_ok() {
+                            widgets::update_preview(app.field(widgets::PREVIEW), &app.draft.clock);
+                        }
+                        return Some(0);
+                    }
                     if app.page == 2 && (id == 301 || id == 305) && (w >> 16) == 1 {
                         match app.collect_page() {
                             Ok(()) => set_text(app.field(306), &app.monitor_summary()),
@@ -2520,6 +2241,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     }
                     if (w >> 16) == BN_CLICKED as usize {
                         quit = app.command(id);
+                        if matches!(app.page, 1 | 7)
+                            && matches!(id, 203 | 204)
+                            && app.collect_page().is_ok()
+                        {
+                            widgets::update_preview(app.field(widgets::PREVIEW), &app.draft.clock);
+                        }
                     }
                     Some(0)
                 }
@@ -2832,12 +2559,17 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                     design::draw_combo(item, p.dark);
                     return Some(1);
                 }
+                if item.CtlType == ODT_LISTBOX {
+                    widgets::draw_list(item, p.dark);
+                    return Some(1);
+                }
                 if item.CtlType != ODT_BUTTON {
                     return None;
                 }
                 let t = design::Theme::new(p.dark);
                 let nav = (NAV as u32..NAV as u32 + PAGES.len() as u32).contains(&item.CtlID);
-                let selected = item.CtlID == p.active as u32;
+                let selected = item.CtlID == p.active as u32
+                    || !GetPropW(item.hwndItem, wide("LiteTray.Selected").as_ptr()).is_null();
                 let primary = item.CtlID == SAVE as u32 || item.CtlID == 42;
                 let pressed = item.itemState & ODS_SELECTED != 0;
                 let hover = !GetPropW(item.hwndItem, wide("LiteTray.Hover").as_ptr()).is_null();

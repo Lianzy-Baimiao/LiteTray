@@ -2,6 +2,74 @@
 //! owned windows; it has no Explorer connection, profile, tray icon or network.
 use super::*;
 use chrono::Days;
+pub(super) unsafe fn assert_external_foreground() {
+    unsafe {
+        // A shared interactive desktop may change naturally during a test.
+        // Fail if any window of the hidden test process took foreground.
+        let mut process = 0;
+        GetWindowThreadProcessId(GetForegroundWindow(), &mut process);
+        assert_ne!(
+            process,
+            GetCurrentProcessId(),
+            "hidden QA process took foreground"
+        );
+    }
+}
+#[test]
+fn settings_switches_preserve_chrome_drafts_and_native_font_choices() {
+    unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-settings-unused.json"),
+        );
+        app.page = 1;
+        app.render();
+        let navigation = app.field(NAV + 1);
+        let title = app.field(901);
+        assert!(
+            SendMessageW(app.field(205), CB_GETCOUNT, 0, 0) > 1,
+            "font picker must enumerate installed fonts"
+        );
+        set_text(app.field(201), "%time% · 自定义");
+        app.command(NAV + 7);
+        assert_eq!(
+            app.field(NAV + 1),
+            navigation,
+            "page changes must not recreate navigation"
+        );
+        assert_eq!(app.field(901), title, "header survives page changes");
+        assert_eq!(app.text(806), "沿用公共字体");
+        let text = app.field(804);
+        set_text(text, &"长备注\r\n".repeat(100));
+        assert_ne!(
+            GetWindowLongW(text, GWL_STYLE) as u32 & WS_VSCROLL,
+            0,
+            "overflow must remain scrollable"
+        );
+        set_text(text, "一行提示");
+        assert_eq!(
+            GetWindowLongW(text, GWL_STYLE) as u32 & WS_VSCROLL,
+            0,
+            "short text must not carry an empty scrollbar"
+        );
+        app.command(NAV + 1);
+        assert_eq!(app.text(201), "%time% · 自定义");
+        for index in 0..settings::PRESETS.len() {
+            app.command(settings::PRESET + index as u16);
+            app.collect_page().unwrap();
+            app.draft.validate().unwrap();
+            assert_eq!(app.draft.clock.width, 0);
+        }
+        assert_eq!(
+            IsWindowVisible(app.hwnd),
+            0,
+            "hidden rendering cannot show or activate settings"
+        );
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+    }
+}
 unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path) -> App {
     unsafe {
         let _ = RoInitialize(RO_INIT_SINGLETHREADED);
@@ -84,6 +152,7 @@ unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path) -> App {
         let mut app = App {
             hwnd,
             page_host: null_mut(),
+            shell_layout: None,
             organizer: store,
             agenda_state: [None, None],
             agenda_scope: None,
@@ -452,7 +521,7 @@ fn hidden_calendar_cache_reuses_controls_and_tracks_new_anchor() {
             96,
             &std::env::temp_dir().join("litetray-panel-cache-unused.json"),
         );
-        let foreground = GetForegroundWindow();
+
         let cold = Instant::now();
         app.prewarm_panels();
         let cold = cold.elapsed();
@@ -506,7 +575,7 @@ fn hidden_calendar_cache_reuses_controls_and_tracks_new_anchor() {
             samples[95]
         );
         assert!(samples[95] < 50_000);
-        assert_eq!(GetForegroundWindow(), foreground);
+        assert_external_foreground();
         app.close_panel();
         assert_eq!(IsWindow(panel), 0);
         DestroyWindow(app.hwnd);
@@ -535,11 +604,11 @@ fn opening_focus_bounce_does_not_hide_calendar_and_popup_is_topmost() {
             0,
             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
-        let foreground = GetForegroundWindow();
+
         SendMessageW(panel, WM_ACTIVATE, WA_INACTIVE as usize, 0);
         let visible = IsWindowVisible(panel) != 0;
         let topmost = GetWindowLongW(panel, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST != 0;
-        assert_eq!(GetForegroundWindow(), foreground);
+        assert_external_foreground();
         app.close_panel();
         DestroyWindow(app.hwnd);
         app.release_resources();
@@ -562,7 +631,7 @@ fn detached_calendar_keeps_its_position_and_lifetime_until_close() {
         app.prewarm_panels();
         let popup = app.panel;
         let view = GetDlgItem(popup, dashboard::ID as i32);
-        let foreground = GetForegroundWindow();
+
         let mut info: MONITORINFO = std::mem::zeroed();
         info.cbSize = size_of::<MONITORINFO>() as u32;
         GetMonitorInfoW(
@@ -632,7 +701,7 @@ fn detached_calendar_keeps_its_position_and_lifetime_until_close() {
         SendMessageW(popup, WM_COMMAND, panel::CLOSE as usize, 0);
         assert_eq!(IsWindowVisible(popup), 0);
         assert!(!panel::detached(popup));
-        assert_eq!(GetForegroundWindow(), foreground);
+        assert_external_foreground();
         app.close_panel();
         DestroyWindow(app.hwnd);
         app.release_resources();

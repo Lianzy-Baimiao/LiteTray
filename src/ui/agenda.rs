@@ -447,6 +447,9 @@ impl View {
             if class == "COMBOBOX" {
                 design::style_combo(hwnd, self.dark, self.dpi);
             }
+            if class == "EDIT" {
+                widgets::style_edit(hwnd, self.dark, self.dpi);
+            }
             self.children.push(hwnd);
             if id != 0 {
                 self.controls.insert(id, hwnd);

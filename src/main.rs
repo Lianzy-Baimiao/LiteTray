@@ -191,11 +191,9 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         Some("--check-updates") => {
-            let token = platform::credentials::read(update::CREDENTIAL_TARGET)?;
             let result = update::check(
                 &http::Client::new(15),
                 &config.updates,
-                token.as_deref(),
                 env!("CARGO_PKG_VERSION"),
             )?;
             println!("{}", result.text());

@@ -287,6 +287,7 @@ pub fn clock_input_node(nodes: &[ElementInfo], clock: &Clock) -> Result<usize, S
     {
         return Err("时钟输入索引无效".into());
     }
+    let mut path = vec![clock.container];
     let mut cursor = tree.parents[clock.container];
     let mut datetime = false;
     while let Some(index) = cursor {
@@ -305,13 +306,30 @@ pub fn clock_input_node(nodes: &[ElementInfo], clock: &Clock) -> Result<usize, S
                         )
                 })
             {
-                return Ok(index);
+                // Choose the innermost full-size layout so the event is handled
+                // before BOTH DateTimeIconContent and IconView class handlers.
+                // The outer template Grid is too late for a content override.
+                if let Some(&content) = path
+                    .iter()
+                    .take_while(|&&content| {
+                        nodes[content].class_name != "SystemTray.DateTimeIconContent"
+                    })
+                    .find(|&&content| {
+                        layout(&nodes[content].class_name)
+                            && nodes[content].width == nodes[index].width
+                            && nodes[content].height == nodes[index].height
+                    })
+                {
+                    return Ok(content);
+                }
+                break;
             }
             break;
         }
         if !layout(class) && class != "SystemTray.DateTimeIconContent" {
             break;
         }
+        path.push(index);
         cursor = tree.parents[index];
     }
     Ok(clock.container)
@@ -356,9 +374,32 @@ mod tests {
         nodes[7].height = Some(32.);
         let clock = analyze_panel(&nodes, false).unwrap().clock.unwrap();
         assert_eq!(clock.container, 7);
+        // Replay a bubbling tap from the padded content to IconView. XAML
+        // invokes a control's class handler before its instance handlers.
+        // Subscribing on IconView with handledEventsToo observes the action
+        // after the native calendar has already opened.
+        let input = clock_input_node(&nodes, &clock).unwrap();
+        let mut handled = false;
+        let mut native = 0;
+        let mut custom = 0;
+        for index in (2..=clock.container).rev() {
+            if matches!(index, 2 | 5) && !handled {
+                native += 1;
+                handled = true;
+            }
+            if index == input && !handled {
+                custom += 1;
+                handled = true;
+            }
+        }
+        assert_eq!(
+            (custom, native),
+            (1, 0),
+            "one click must open only our calendar"
+        );
         assert_eq!(
             clock_input_node(&nodes, &clock).unwrap(),
-            2,
+            6,
             "top/bottom padding must activate the calendar"
         );
         nodes.insert(10, node("OtherAction", "Button", 3));

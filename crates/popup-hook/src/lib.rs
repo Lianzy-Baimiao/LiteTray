@@ -370,9 +370,6 @@ mod tests {
                 ))
             });
             SetWindowSubclass(hwnd, Some(card_proc), SUBCLASS, 0);
-            let foreground = GetForegroundWindow();
-            let mut point: POINT = std::mem::zeroed();
-            GetCursorPos(&mut point);
             let mut positions = vec![];
             for _ in 0..100 {
                 SetWindowPos(
@@ -388,10 +385,12 @@ mod tests {
                 GetWindowRect(hwnd, &mut r);
                 positions.push((r.left, r.top));
             }
-            let mut after: POINT = std::mem::zeroed();
-            GetCursorPos(&mut after);
-            assert_eq!(foreground, GetForegroundWindow());
-            assert_eq!((point.x, point.y), (after.x, after.y));
+            // The user can keep moving the mouse or switching applications.
+            // Only this test's own activation is a failure; the fixture uses
+            // TEST_ANCHOR and never needs to change or freeze desktop input.
+            let mut foreground_pid = 0;
+            GetWindowThreadProcessId(GetForegroundWindow(), &mut foreground_pid);
+            assert_ne!(foreground_pid, GetCurrentProcessId());
             assert_eq!(IsWindowVisible(hwnd), 0);
             // Revocation/host absence must restore QQ's unmodified positioning.
             TEST_ANCHOR.with(|a| *a.borrow_mut() = None);

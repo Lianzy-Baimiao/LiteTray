@@ -1244,7 +1244,7 @@ mod visual_checks {
     unsafe fn check_date_repaints(dark: bool, flyout: bool) {
         unsafe {
             let _ = RoInitialize(RO_INIT_SINGLETHREADED);
-            let foreground = GetForegroundWindow();
+
             let parent = CreateWindowExW(
                 0,
                 wide("STATIC").as_ptr(),
@@ -1395,11 +1395,7 @@ mod visual_checks {
                 RemoveWindowSubclass(*child, Some(count_destroyed), 91);
             }
             DestroyWindow(parent);
-            assert_eq!(
-                GetForegroundWindow(),
-                foreground,
-                "hidden regression must not activate a window"
-            );
+            super::super::visual_checks::assert_external_foreground();
             assert_eq!(selected, date.succ_opt().unwrap());
             assert_eq!(
                 destroyed_on_selection, 0,

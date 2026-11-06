@@ -75,9 +75,11 @@ https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/host-standard-c
 
 ## 时钟输入与独立预览
 
-`input.rs` 在 XAML 所属 STA 上订阅 Tapped/KeyDown。Tapped 使用 AddHandler 的 handledEventsToo，通过标准 IReference<TappedEventHandler> 装箱，停止时使用同一盒子解除。委托只暴露 IUnknown 和对应 delegate IID，不声明 Agile；上下文使用线程绑定引用，输入回调只计算控件矩形和投递有界事件。键盘分支限制为 Enter/Space，过滤 WasKeyDown 重复及已 handled 的键盘事件；专属时钟的 Tapped 即使已被系统类处理也投递。发送成功才标记事件 handled，失败不改变原 handled 状态。解除订阅先停用上下文再移除事件盒子及键盘 token；若原生移除失败，模块保持映射至进程退出，避免残留委托调用已卸载代码。
+`input.rs` 在 XAML 所属 STA 上订阅普通 Tapped/KeyDown，停止时按注册 token 解除。委托只暴露 IUnknown 和对应 delegate IID，不声明 Agile；上下文使用线程绑定引用，输入回调只计算控件矩形和投递有界事件。键盘分支限制为 Enter/Space，过滤 WasKeyDown 重复；两类事件均跳过已 handled 的输入。发送成功才标记事件 handled，失败不改变原 handled 状态。解除订阅先停用上下文再移除事件 token；若原生移除失败，模块保持映射至进程退出，避免残留委托调用已卸载代码。
 
-5.1 的输入边界与格式化边界分离：文字和宽度仍只改 DateTimeStackPanel；输入可扩展到包含 SystemTray.DateTimeIconContent 且子树仅包含两行文字与已知布局的 SystemTray.IconView。出现未知按钮/其他动作时不扩展。整个扩展输入子树由会话守卫核对，避免动态插入其他操作后继续拦截。通知铃铛、显示桌面等兄弟区域不属于此输入目标。
+5.2 保持输入边界与格式化边界分离：文字和宽度仍只改 DateTimeStackPanel；找到包含 SystemTray.DateTimeIconContent 且子树仅包含两行文字与已知布局的 SystemTray.IconView 后，选取 DateTimeIconContent 内部最靠近文字、且与整个按钮同尺寸的布局子节点。禁止在 IconView 本身订阅 handledEventsToo：其类处理器可能已经打开系统日历，事后设置 Handled 无法撤销该动作。布局区未设置背景时，input_surface 加入透明画刷用于命中留白，结束时经 Property 租约恢复原始值/绑定，并保留外部写入。出现未知按钮/其他动作或尺寸不匹配时不扩展。整个扩展输入子树由会话守卫核对；通知铃铛、显示桌面等兄弟区域不属于此输入目标。
+
+回归分两层：捕获控件层级上的冒泡顺序回放验证 LiteTray=1、原生=0；独立 XAML 岛验证真实订阅、透明画刷、已处理事件跳过与背景恢复。这些检查不等同于向 Explorer 注入真实鼠标点击；实机自然点击结果单独记录。
 
 同一会话的控件共用 `Sequence`，同步重入时不再次消费输入。watchdog 发布闭包只持有 Context 的 Weak，检查持有的进程句柄、接收窗口、租期与 Active 状态后释放 Session 借用再调用发送方。若发送方同步停止会话，原生委托返回前重新检查停用标志，保留默认输入。会话被取出进行 COM 更新时，重入点击不发布事件。
 

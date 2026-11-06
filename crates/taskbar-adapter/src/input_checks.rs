@@ -32,6 +32,7 @@ fn stop(owner: &Owner) -> Vec<u8> {
     .expect("serializable command")
 }
 pub fn run(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, String> {
+    let mut checks = crate::input_surface::self_test(owner.clone(), frame.clone())?;
     let first = InputFixture::new(owner.clone(), frame.clone())?;
     let second = InputFixture::new(owner.clone(), frame.clone())?;
     let new_session = |owner: Owner| {
@@ -78,8 +79,8 @@ pub fn run(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, String> {
         "one monotonic sequence across both clocks",
     )?;
     require(
-        a.invoke_with_handled(true)? && events.borrow().len() == 3,
-        "clock still publishes a tap already handled by its native IconView",
+        a.invoke_with_handled(true)? && events.borrow().len() == 2,
+        "an already handled native tap cannot open a second calendar",
     )?;
     watchdog.receive(&stop(&owner))?;
     require(
@@ -235,10 +236,10 @@ pub fn run(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, String> {
         "endpoint destruction detaches both clocks",
     )?;
     // Keep the public checks compact; each group asserts its full lifecycle.
-    Ok(vec![
+    checks.extend([
         "input_session_prepared_is_inactive",
         "input_session_shared_sequence_and_reentrancy",
-        "input_session_native_handled_tap",
+        "input_session_handled_tap_does_not_publish_again",
         "input_session_stop_restores_and_detaches",
         "input_session_partial_prepare_rollback",
         "input_session_expiry_detaches",
@@ -247,5 +248,6 @@ pub fn run(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, String> {
         "input_session_native_endpoint_loss",
         "input_session_external_conflict_detaches",
         "input_session_owner_drop_detaches",
-    ])
+    ]);
+    Ok(checks)
 }

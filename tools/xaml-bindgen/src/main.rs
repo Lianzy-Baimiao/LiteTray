@@ -18,6 +18,8 @@ fn main() {
         "Windows.UI.Xaml.IUIElement",
         "Windows.UI.Xaml.IUIElementStatics",
         "Windows.UI.Xaml.Controls.IControl",
+        "Windows.UI.Xaml.Controls.IPanel",
+        "Windows.UI.Xaml.Controls.IPanelStatics",
         "Windows.UI.Xaml.FocusState",
         "Windows.UI.Xaml.Visibility",
         "Windows.UI.Xaml.Input.ITappedRoutedEventArgs",
@@ -110,7 +112,7 @@ fn main() {
     ] {
         source = source.replace(&format!("    {method}: usize,"), &format!("    pub {method}: unsafe extern \"system\" fn({signature}) -> windows_sys::core::HRESULT,"));
     }
-    for method in ["OpacityProperty", "IsHitTestVisibleProperty", "MinWidthProperty"] {
+    for method in ["OpacityProperty", "IsHitTestVisibleProperty", "MinWidthProperty", "BackgroundProperty"] {
         source = source.replace(&format!("    {method}: usize,"), &format!("    pub {method}: {getter},"));
     }
     let start = source.find("pub struct IFlyoutBase5_Vtbl").unwrap();

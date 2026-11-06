@@ -14,10 +14,10 @@ pub(super) unsafe fn create(parent: HWND, bounds: RECT) -> HWND {
         };
         RegisterClassW(&wc);
         let hwnd = CreateWindowExW(
-            WS_EX_CONTROLPARENT,
+            WS_EX_CONTROLPARENT | WS_EX_COMPOSITED,
             class.as_ptr(),
             wide("页面内容").as_ptr(),
-            WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_VSCROLL,
+            WS_CHILD | WS_CLIPCHILDREN | WS_VSCROLL,
             bounds.left,
             bounds.top,
             bounds.right - bounds.left,

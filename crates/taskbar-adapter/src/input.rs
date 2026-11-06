@@ -10,7 +10,7 @@ use litetray_adapter_protocol::{
     clock::Owner,
 };
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     ffi::c_void,
     ptr::null_mut,
     rc::Rc,
@@ -185,7 +185,7 @@ unsafe fn dispatch(
         };
         let mut already = false;
         check(handled(args.raw(), &mut already), "Handled")?;
-        if already && kind != Input::Pointer {
+        if already {
             return Ok(());
         }
         let sender = Object::query_borrowed(sender, &IID_IUIElement)?;
@@ -322,8 +322,9 @@ fn physical_bounds(rect: crate::xaml_abi::Rect, scale: f64, origin: POINT) -> Re
 pub struct Subscription {
     element: Object,
     context: Rc<Context>,
-    tap: Option<(Object, Object)>,
+    tap: Option<i64>,
     key: Option<i64>,
+    hit_area: RefCell<Option<crate::input_surface::Surface>>,
 }
 impl Subscription {
     pub fn prepare(
@@ -355,25 +356,17 @@ impl Subscription {
             context,
             tap: None,
             key: None,
+            hit_area: RefCell::new(crate::input_surface::Surface::prepare(element)?),
         };
         unsafe {
             let table = subscription.element.table::<IUIElement_Vtbl>();
-            let tap =
-                crate::input_box::boxed(handler(subscription.context.clone(), Input::Pointer)?)?;
-            let statics =
-                crate::xaml::factory("Windows.UI.Xaml.UIElement", &IID_IUIElementStatics)?;
-            let mut event = null_mut();
-            check(
-                (statics.table::<IUIElementStatics_Vtbl>().TappedEvent)(statics.raw(), &mut event),
-                "TappedEvent",
-            )?;
-            let event = Object::owned(event)?;
+            let tap = handler(subscription.context.clone(), Input::Pointer)?;
             let mut token = 0;
             check(
-                (table.AddHandler)(subscription.element.raw(), event.raw(), tap.raw(), true),
+                (table.Tapped)(subscription.element.raw(), tap.raw(), &mut token),
                 "Tapped subscription",
             )?;
-            subscription.tap = Some((event, tap));
+            subscription.tap = Some(token);
             let key = handler(subscription.context.clone(), Input::Keyboard)?;
             check(
                 (table.KeyDown)(subscription.element.raw(), key.raw(), &mut token),
@@ -387,6 +380,9 @@ impl Subscription {
         if self.tap.is_none() || self.key.is_none() {
             return Err("点击订阅已解除或不完整".into());
         }
+        if let Some(surface) = self.hit_area.borrow_mut().as_mut() {
+            surface.activate()?;
+        }
         self.context.active.set(true);
         Ok(())
     }
@@ -398,9 +394,9 @@ impl Subscription {
         let mut errors = Vec::new();
         unsafe {
             let table = self.element.table::<IUIElement_Vtbl>();
-            if let Some((event, handler)) = &self.tap {
+            if let Some(token) = self.tap {
                 match check(
-                    (table.RemoveHandler)(self.element.raw(), event.raw(), handler.raw()),
+                    (table.RemoveTapped)(self.element.raw(), token),
                     "Remove tapped handler",
                 ) {
                     Ok(()) => self.tap = None,
@@ -416,6 +412,11 @@ impl Subscription {
                     Err(e) => errors.push(e),
                 }
             }
+        }
+        if let Some(surface) = self.hit_area.borrow_mut().as_mut()
+            && let Err(e) = surface.restore()
+        {
+            errors.push(e);
         }
         if errors.is_empty() {
             Ok(())
