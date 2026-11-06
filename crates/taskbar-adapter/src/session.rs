@@ -40,6 +40,7 @@ pub struct Session {
     guards: Vec<crate::discovery::LeaseGuard>,
     bindings: Vec<Rc<crate::island::Binding>>,
     guards_prepared: bool,
+    native_sources: Vec<crate::taskbar_source::Source>,
 }
 impl Session {
     /// Captured targets must be disjoint; otherwise rollback order would
@@ -70,6 +71,7 @@ impl Session {
             guards: Vec::new(),
             bindings: Vec::new(),
             guards_prepared: false,
+            native_sources: vec![],
         })
     }
     pub fn state(&self) -> State {
@@ -77,6 +79,16 @@ impl Session {
     }
     pub fn owner(&self) -> &Owner {
         self.lease.owner()
+    }
+    pub(crate) fn retain_sources(
+        &mut self,
+        sources: Vec<crate::taskbar_source::Source>,
+    ) -> Result<(), String> {
+        if self.state != State::Prepared || !self.native_sources.is_empty() {
+            return Err("原生宿主只能在准备阶段保存一次".into());
+        }
+        self.native_sources = sources;
+        Ok(())
     }
     pub fn accepts_input(&self, now: u64) -> bool {
         self.state == State::Active && !self.lease.expired(now)
@@ -202,7 +214,12 @@ impl Session {
             .bindings
             .iter()
             .try_for_each(|g| g.validate())
-            .and_then(|_| self.guards.iter().try_for_each(|g| g.validate()));
+            .and_then(|_| self.guards.iter().try_for_each(|g| g.validate()))
+            .and_then(|_| {
+                self.targets
+                    .iter_mut()
+                    .try_for_each(|t| t.clock.verify_ownership())
+            });
         if let Err(error) = result {
             return match self.stop() {
                 Ok(()) => Err(error),
@@ -276,6 +293,22 @@ impl Session {
     }
     pub fn receive(&mut self, bytes: &[u8], now: u64) -> Result<(), String> {
         let command = Command::decode(bytes)?;
+        if command.owner != *self.owner() {
+            return Err("时钟会话身份不匹配".into());
+        }
+        // Restoration is allowed even after expiry or failed activation; it
+        // never grants a lease or writes a new frame. Closed stop is idempotent.
+        if matches!(command.change, Change::Stop) {
+            return self.stop();
+        }
+        if let Change::Start { frame } = &command.change {
+            if self.state != State::Prepared {
+                return Err("时钟会话不是待启动状态".into());
+            }
+            self.lease.check(&command, now)?;
+            self.start(frame.clone(), now)?;
+            return self.lease.commit(&command, now);
+        }
         if self.state != State::Active {
             return Err("时钟会话不再接受更新".into());
         }
@@ -284,10 +317,6 @@ impl Session {
             return Err("时钟会话已过期并恢复".into());
         }
         self.lease.check(&command, now)?;
-        // Explicit stop never depends on the old tree still being valid.
-        if matches!(&command.change, Change::Stop) {
-            return self.stop();
-        }
         self.validate_targets()?;
         match &command.change {
             Change::Update { frame } => self.apply(frame.clone())?,
@@ -298,6 +327,7 @@ impl Session {
             }
             Change::Heartbeat => {}
             Change::Stop => return self.stop(),
+            Change::Start { .. } => return Err("时钟会话已启动".into()),
         }
         self.validate_targets()?;
         self.lease.commit(&command, now)
@@ -406,6 +436,7 @@ impl Session {
             self.targets.clear();
             self.guards.clear();
             self.bindings.clear();
+            self.native_sources.clear();
             self.state = State::Closed;
             Ok(())
         } else {

@@ -10,7 +10,7 @@ use windows_sys::Win32::{
 };
 
 /// All entry addresses are validated before any undocumented function is called.
-unsafe fn validate_loaded(layout: &HostLayout) -> Result<usize, String> {
+pub(crate) unsafe fn validate_loaded(layout: &HostLayout) -> Result<usize, String> {
     unsafe {
         layout.validate()?;
         let module = GetModuleHandleW(wide("taskbar.dll").as_ptr()) as usize;
@@ -44,7 +44,7 @@ unsafe fn validate_loaded(layout: &HostLayout) -> Result<usize, String> {
         Ok(module)
     }
 }
-unsafe fn check_region(
+pub(crate) unsafe fn check_region(
     address: usize,
     length: usize,
     module: usize,
@@ -79,7 +79,7 @@ unsafe fn check_region(
         Ok(())
     }
 }
-unsafe fn pointer(address: usize) -> Result<usize, String> {
+pub(crate) unsafe fn pointer(address: usize) -> Result<usize, String> {
     unsafe {
         let bytes = read_memory(address, size_of::<usize>()).ok_or("无法读取原生对象指针")?;
         Ok(usize::from_ne_bytes(
@@ -89,8 +89,8 @@ unsafe fn pointer(address: usize) -> Result<usize, String> {
 }
 type GetHost = unsafe extern "system" fn(*mut c_void, *mut [usize; 2]) -> *mut c_void;
 type ReleaseHost = unsafe extern "system" fn(*mut c_void);
-struct SharedHost {
-    value: [usize; 2],
+pub(crate) struct SharedHost {
+    pub(crate) value: [usize; 2],
     release: ReleaseHost,
 }
 impl Drop for SharedHost {
@@ -102,12 +102,12 @@ impl Drop for SharedHost {
         }
     }
 }
-unsafe fn content(
+pub(crate) unsafe fn host(
     hwnd: HWND,
     secondary: bool,
     module: usize,
     layout: &HostLayout,
-) -> Result<xaml::Object, String> {
+) -> Result<SharedHost, String> {
     unsafe {
         let task_window = if secondary {
             FindWindowExW(hwnd, null_mut(), wide("WorkerW").as_ptr(), std::ptr::null())
@@ -160,6 +160,17 @@ unsafe fn content(
         if shared.value[0] == 0 || shared.value[1] == 0 {
             return Err("TaskbarHost 不可用".into());
         }
+        Ok(shared)
+    }
+}
+unsafe fn content(
+    hwnd: HWND,
+    secondary: bool,
+    module: usize,
+    layout: &HostLayout,
+) -> Result<xaml::Object, String> {
+    unsafe {
+        let shared = host(hwnd, secondary, module, layout)?;
         let element = pointer(
             shared.value[0]
                 .checked_add(layout.element_offset as usize)

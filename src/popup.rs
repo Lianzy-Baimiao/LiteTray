@@ -1,5 +1,7 @@
 //! Physical-screen placement shared by clock and tray entry points.
 pub use litetray_adapter_protocol::activation::Rect;
+pub const WIDTH: i32 = 660;
+pub const HEIGHT: i32 = 452;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Placement {
     pub rect: Rect,
@@ -14,8 +16,8 @@ pub fn place(anchor: Rect, work: Rect, dpi: u32) -> Result<Placement, String> {
     let w = i64::from(work.right) - i64::from(work.left);
     let h = i64::from(work.bottom) - i64::from(work.top);
     let margin = (10 * i64::from(dpi) / 96).min(w / 20).min(h / 20);
-    let preferred_w = 800 * i64::from(dpi) / 96;
-    let preferred_h = 550 * i64::from(dpi) / 96;
+    let preferred_w = i64::from(WIDTH + 2) * i64::from(dpi) / 96;
+    let preferred_h = i64::from(HEIGHT + 2) * i64::from(dpi) / 96;
     // Scale the entire native layout together on small work areas instead of
     // placing buttons outside the available display.
     let percent = 100_i64

@@ -107,6 +107,9 @@ fn command(owner: &Owner, sequence: u64, change: Change) -> Vec<u8> {
     .expect("serializable protocol")
 }
 fn native_send(endpoint: HWND, sender: HWND, tag: usize, bytes: &[u8]) -> Result<bool, String> {
+    Ok(native_result(endpoint, sender, tag, bytes)? == 1)
+}
+fn native_result(endpoint: HWND, sender: HWND, tag: usize, bytes: &[u8]) -> Result<usize, String> {
     let copy = COPYDATASTRUCT {
         dwData: tag,
         cbData: bytes.len() as u32,
@@ -127,7 +130,106 @@ fn native_send(endpoint: HWND, sender: HWND, tag: usize, bytes: &[u8]) -> Result
     {
         return Err("隔离原生消息发送超时或失败".into());
     }
-    Ok(accepted == 1)
+    Ok(accepted)
+}
+fn native_start_checks(primary: &Fixture) -> Result<Vec<&'static str>, String> {
+    use litetray_adapter_protocol::{clock::SessionStatus, taskbar::STATUS_TAG};
+    let receiver = Receiver::new()?;
+    let other = Receiver::new()?;
+    let owner = Owner {
+        nonce: 789,
+        process_id: unsafe { GetCurrentProcessId() },
+        receiver: receiver.0 as u64,
+    };
+    let target = Target {
+        id: 1,
+        clock: ClockLease::capture_native(&primary.time, &primary.date, &primary.container)?,
+    };
+    let watchdog = Watchdog::attach(Session::new(owner.clone(), vec![target], unsafe {
+        GetTickCount64()
+    })?)?;
+    let endpoint = watchdog.endpoint().ok_or("缺少隔离会话消息端点")?;
+    let owner_bytes = serde_json::to_vec(&owner).map_err(|e| e.to_string())?;
+    require(
+        primary.restored()?
+            && native_result(endpoint, receiver.0, STATUS_TAG, &owner_bytes)?
+                == SessionStatus::Prepared as usize,
+        "native preparation is read-only",
+    )?;
+    require(
+        native_result(endpoint, other.0, STATUS_TAG, &owner_bytes)? == 0,
+        "status rejects wrong receiver",
+    )?;
+    let mut wrong = owner.clone();
+    wrong.nonce += 1;
+    require(
+        native_result(
+            endpoint,
+            receiver.0,
+            STATUS_TAG,
+            &serde_json::to_vec(&wrong).unwrap(),
+        )? == 0,
+        "status rejects wrong nonce",
+    )?;
+    let start = command(&owner, 1, Change::Start { frame: frame() });
+    require(
+        !native_send(endpoint, other.0, COMMAND_TAG, &start)? && primary.restored()?,
+        "wrong sender cannot start",
+    )?;
+    require(
+        native_send(endpoint, receiver.0, COMMAND_TAG, &start)?
+            && native_result(endpoint, receiver.0, STATUS_TAG, &owner_bytes)?
+                == SessionStatus::Active as usize,
+        "native start confirms Active",
+    )?;
+    require(
+        !native_send(endpoint, receiver.0, COMMAND_TAG, &start)?,
+        "duplicate Start rejected",
+    )?;
+    unsafe {
+        let tb = primary.date.query(&IID_ITextBlock)?;
+        let value = crate::xaml::StringHandle::new("Latest system date")?;
+        check(
+            (tb.table::<ITextBlock_Vtbl>().SetText)(tb.raw(), value.0),
+            "native refresh while connected",
+        )?;
+    }
+    require(
+        primary.text()?.1 == frame().text.bottom
+            && native_send(
+                endpoint,
+                receiver.0,
+                COMMAND_TAG,
+                &command(&owner, 2, Change::Heartbeat),
+            )?,
+        "native refresh survives session checks",
+    )?;
+    let stop = command(&owner, 3, Change::Stop);
+    require(
+        native_send(endpoint, receiver.0, COMMAND_TAG, &stop)?
+            && native_send(endpoint, receiver.0, COMMAND_TAG, &stop)?,
+        "native stop idempotent",
+    )?;
+    require(
+        native_result(endpoint, receiver.0, STATUS_TAG, &owner_bytes)?
+            == SessionStatus::Closed as usize
+            && primary.text()? == ("System time".into(), "Latest system date".into())
+            && primary.width()?.is_nan(),
+        "Closed confirms restoration to latest native value",
+    )?;
+    // Restore the test fixture's local date for later independent checks.
+    unsafe {
+        let tb = primary.date.query(&IID_ITextBlock)?;
+        let value = crate::xaml::StringHandle::new("System date")?;
+        check(
+            (tb.table::<ITextBlock_Vtbl>().SetText)(tb.raw(), value.0),
+            "reset fixture date",
+        )?;
+    }
+    Ok(vec![
+        "native_prepared_start_status_restore",
+        "native_status_sender_and_owner_validation",
+    ])
 }
 fn native_transport_checks(
     primary: &Fixture,
@@ -496,6 +598,47 @@ pub fn run() -> Result<Vec<&'static str>, String> {
     let targets =
         || -> Result<Vec<Target>, String> { Ok(vec![primary.capture(1)?, secondary.capture(2)?]) };
     let mut checks = Vec::new();
+    {
+        let mut session = Session::new(owner.clone(), targets()?, 10)?;
+        require(
+            primary.restored()? && secondary.restored()?,
+            "prepare has no visible writes",
+        )?;
+        require(
+            session
+                .receive(&command(&owner, 1, Change::Tick { text: frame().text }), 11)
+                .is_err()
+                && primary.restored()?,
+            "prepared rejects updates",
+        )?;
+        let mut wrong = owner.clone();
+        wrong.nonce += 1;
+        require(
+            session
+                .receive(&command(&wrong, 1, Change::Start { frame: frame() }), 12)
+                .is_err()
+                && primary.restored()?,
+            "wrong owner cannot start prepared clock",
+        )?;
+        session.receive(&command(&owner, 1, Change::Start { frame: frame() }), 13)?;
+        require(
+            session.state() == State::Active && primary.width()? == 260.,
+            "authenticated start applies native frame",
+        )?;
+        require(
+            session
+                .receive(&command(&owner, 2, Change::Start { frame: frame() }), 14)
+                .is_err(),
+            "active start cannot recapture originals",
+        )?;
+        session.receive(&command(&owner, 3, Change::Stop), 20000)?;
+        session.receive(&command(&owner, 3, Change::Stop), 20001)?;
+        require(
+            primary.restored()? && secondary.restored()? && session.state() == State::Closed,
+            "late and repeated stop restores originals",
+        )?;
+        checks.push("session_two_phase_authenticated_start_and_expired_idempotent_stop");
+    }
     let mut session = Session::new(owner.clone(), targets()?, 100)?;
     session.start(frame(), 100)?;
     require(
@@ -617,6 +760,7 @@ pub fn run() -> Result<Vec<&'static str>, String> {
     checks.push("session_overlap_rejection");
 
     checks.extend(native_transport_checks(&primary, &secondary)?);
+    checks.extend(native_start_checks(&primary)?);
     checks.extend(child_process_checks(&primary, &secondary)?);
 
     // Native timer test: destroy only our synthetic host receiver and pump the

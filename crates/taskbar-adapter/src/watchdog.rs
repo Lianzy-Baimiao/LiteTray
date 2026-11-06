@@ -104,6 +104,13 @@ pub struct Watchdog {
 thread_local! {static WINDOWS:Cell<u32>=const{Cell::new(0)};}
 
 impl Watchdog {
+    pub(crate) fn retain_sources(
+        &self,
+        sources: Vec<crate::taskbar_source::Source>,
+    ) -> Result<(), String> {
+        self.context
+            .with_session(|session| session.retain_sources(sources))
+    }
     pub fn attach(session: Session) -> Result<Self, String> {
         unsafe {
             // Establish the timer before touching any properties. Failure to
@@ -141,8 +148,17 @@ impl Watchdog {
                 lpszClassName: class.as_ptr(),
                 ..std::mem::zeroed()
             };
-            if RegisterClassW(&wc) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS {
-                return Err("注册时钟监视窗口失败".into());
+            if RegisterClassW(&wc) == 0 {
+                if GetLastError() != ERROR_CLASS_ALREADY_EXISTS {
+                    return Err("注册时钟监视窗口失败".into());
+                }
+                let mut existing: WNDCLASSW = std::mem::zeroed();
+                if GetClassInfoW(instance, class.as_ptr(), &mut existing) == 0
+                    || existing.lpfnWndProc.map(|p| p as usize)
+                        != Some(procedure as *const () as usize)
+                {
+                    return Err("任务栏线程仍加载其他版本的时钟适配器，请先完成旧会话恢复".into());
+                }
             }
             owner.hwnd = CreateWindowExW(
                 0,
@@ -316,6 +332,27 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         return 0;
                     }
                     let copy = &*(l as *const COPYDATASTRUCT);
+                    if copy.dwData == litetray_adapter_protocol::taskbar::STATUS_TAG {
+                        if copy.cbData == 0 || copy.cbData > 1024 || copy.lpData.is_null() {
+                            return 0;
+                        }
+                        let bytes = std::slice::from_raw_parts(
+                            copy.lpData.cast::<u8>(),
+                            copy.cbData as usize,
+                        );
+                        let Ok(owner) = serde_json::from_slice::<
+                            litetray_adapter_protocol::clock::Owner,
+                        >(bytes) else {
+                            return 0;
+                        };
+                        let Ok(session) = context.session.try_borrow() else {
+                            return 0;
+                        };
+                        if session.as_ref().is_none_or(|s| s.owner() != &owner) {
+                            return 0;
+                        }
+                        return context.status() as LRESULT;
+                    }
                     if copy.dwData != litetray_adapter_protocol::clock::COMMAND_TAG
                         || copy.cbData == 0
                         || copy.cbData as usize > litetray_adapter_protocol::MAX_REQUEST

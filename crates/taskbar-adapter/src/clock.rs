@@ -72,8 +72,21 @@ pub(crate) struct ClockLease {
     identities: [usize; 3],
     last_text: Option<(String, String)>,
     decorations: crate::clock_style::Decorations,
+    native_text: Option<[crate::clock_text::TextLayer; 2]>,
 }
 impl ClockLease {
+    pub(crate) fn capture_native(
+        time: &Object,
+        date: &Object,
+        container: &Object,
+    ) -> Result<Self, String> {
+        let mut lease = Self::capture(time, date, container)?;
+        lease.native_text = Some([
+            crate::clock_text::TextLayer::prepare(time)?,
+            crate::clock_text::TextLayer::prepare(date)?,
+        ]);
+        Ok(lease)
+    }
     pub fn capture(time: &Object, date: &Object, container: &Object) -> Result<Self, String> {
         unsafe {
             if same_object(time, date)? {
@@ -113,6 +126,7 @@ impl ClockLease {
                 ],
                 last_text: None,
                 decorations: crate::clock_style::Decorations::capture(time, date, container)?,
+                native_text: None,
             })
         }
     }
@@ -196,13 +210,21 @@ impl ClockLease {
             &bottom_family,
             &width,
         ])?;
+        if let Err(error) = self.write_native_text(top, bottom) {
+            let restore = self.restore();
+            return restore.and(Err(error));
+        }
         self.live = true;
         self.last_text = Some((top.to_owned(), bottom.to_owned()));
         Ok(())
     }
     fn write(&mut self, values: &[&Object]) -> Result<(), String> {
         self.verify_ownership()?;
-        for (i, value) in values.iter().enumerate() {
+        for (i, value) in values
+            .iter()
+            .enumerate()
+            .skip(if self.native_text.is_some() { 2 } else { 0 })
+        {
             if let Err(error) = self.properties[i].set(value) {
                 return match self.restore() {
                     Ok(()) => Err(error),
@@ -227,6 +249,14 @@ impl ClockLease {
         {
             return Ok(());
         }
+        if self.native_text.is_some() {
+            if let Err(error) = self.write_native_text(top, bottom) {
+                let restore = self.restore();
+                return restore.and(Err(error));
+            }
+            self.last_text = Some((top.to_owned(), bottom.to_owned()));
+            return Ok(());
+        }
         let values = [boxed_text(top)?, boxed_text(bottom)?];
         for (i, (text, value)) in [(top, &values[0]), (bottom, &values[1])]
             .into_iter()
@@ -248,6 +278,13 @@ impl ClockLease {
     }
     pub fn restore(&mut self) -> Result<(), String> {
         let mut errors = Vec::new();
+        if let Some(layers) = &mut self.native_text {
+            for layer in layers {
+                if let Err(error) = layer.stop() {
+                    errors.push(error);
+                }
+            }
+        }
         if let Err(error) = self.decorations.restore() {
             errors.push(error);
         }
@@ -275,11 +312,34 @@ impl ClockLease {
             .contains(&(object.query(&IID_IUnknown)?.raw() as usize)))
     }
     pub fn clean(&self) -> bool {
-        self.properties.iter().all(|p| !p.dirty) && self.decorations.clean()
+        self.properties.iter().all(|p| !p.dirty)
+            && self.decorations.clean()
+            && self
+                .native_text
+                .as_ref()
+                .is_none_or(|layers| layers.iter().all(|layer| layer.clean()))
     }
-    fn verify_ownership(&mut self) -> Result<(), String> {
+    fn write_native_text(&mut self, top: &str, bottom: &str) -> Result<(), String> {
+        if let Some(layers) = &mut self.native_text {
+            layers[0].set(top)?;
+            layers[1].set(bottom)?;
+        }
+        Ok(())
+    }
+    pub(crate) fn verify_ownership(&mut self) -> Result<(), String> {
         let mut failure = self.decorations.validate().err();
-        for property in &self.properties {
+        if let Some(layers) = &self.native_text {
+            for layer in layers {
+                if let Err(error) = layer.validate() {
+                    failure = Some(error);
+                }
+            }
+        }
+        for property in self
+            .properties
+            .iter()
+            .skip(if self.native_text.is_some() { 2 } else { 0 })
+        {
             match property.owns_current() {
                 Ok(true) => {}
                 Ok(false) => {
@@ -502,6 +562,7 @@ pub(crate) fn self_test() -> Result<serde_json::Value, String> {
         ];
         checks.extend(crate::lifecycle_checks::run()?);
         checks.extend(crate::clock_style_checks::run()?);
+        checks.extend(crate::clock_text_checks::run()?);
         Ok(
             serde_json::json!({"passed":true,"environment":"isolated_xaml_in_host_process","explorer_accessed":false,"checks":checks}),
         )

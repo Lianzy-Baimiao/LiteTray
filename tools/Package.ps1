@@ -16,7 +16,13 @@ Copy-Item -LiteralPath $BinaryPath -Destination (Join-Path $output 'LiteTray.exe
 Copy-Item -LiteralPath $adapter -Destination (Join-Path $output 'litetray_taskbar_adapter.dll')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination (Join-Path $output 'README.md')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD-PARTY-NOTICES.md') -Destination (Join-Path $output 'THIRD-PARTY-NOTICES.md')
-$hashes=foreach($name in @('LiteTray.exe','litetray_taskbar_adapter.dll','README.md','THIRD-PARTY-NOTICES.md')){
+$documents=@('docs/implementation-plan.md','docs/progress.md','docs/taskbar-source-binding.md','docs/images/panel-light.png','docs/images/panel-dark.png','crates/taskbar-adapter/ABI.md')
+foreach($name in $documents){
+    $destination=Join-Path $output $name
+    [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null
+    Copy-Item -LiteralPath (Join-Path $projectRoot $name) -Destination $destination
+}
+$hashes=foreach($name in (@('LiteTray.exe','litetray_taskbar_adapter.dll','README.md','THIRD-PARTY-NOTICES.md')+$documents)){
     $hash=Get-FileHash -LiteralPath (Join-Path $output $name) -Algorithm SHA256
     $hash.Hash.ToLowerInvariant()+'  '+$name
 }

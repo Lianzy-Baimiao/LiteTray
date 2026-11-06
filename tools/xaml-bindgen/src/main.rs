@@ -31,6 +31,7 @@ fn main() {
         "Windows.UI.Core.CorePhysicalKeyStatus",
         "Windows.UI.Xaml.IXamlRoot",
         "Windows.UI.Xaml.IDependencyObject",
+        "Windows.UI.Xaml.IDependencyObject2",
         "Windows.UI.Xaml.IDependencyProperty",
         "Windows.UI.Xaml.IDependencyPropertyStatics",
         "Windows.UI.Xaml.Data.IBindingExpression",
@@ -63,6 +64,14 @@ fn main() {
     // No slot is added or removed by the substitutions below.
     let mut source = std::fs::read_to_string(&output).unwrap();
     let getter = "unsafe extern \"system\" fn(*mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> windows_sys::core::HRESULT";
+    for (method, signature) in [
+        ("RegisterPropertyChangedCallback", "*mut core::ffi::c_void, *mut core::ffi::c_void, *mut core::ffi::c_void, *mut i64"),
+        ("UnregisterPropertyChangedCallback", "*mut core::ffi::c_void, *mut core::ffi::c_void, i64"),
+    ] {
+        let before = format!("    {method}: usize,");
+        assert_eq!(source.matches(&before).count(), 1);
+        source = source.replace(&before, &format!("    pub {method}: unsafe extern \"system\" fn({signature}) -> windows_sys::core::HRESULT,"));
+    }
     let patches=[
         ("    XamlRoot: usize,".to_owned(),format!("    pub XamlRoot: {getter},")),
         ("    Parent: usize,".to_owned(),format!("    pub Parent: {getter},")),

@@ -17,26 +17,26 @@ impl Theme {
     pub fn new(dark: bool) -> Self {
         if dark {
             Self {
-                bg: rgb(24, 27, 33),
-                surface: rgb(33, 37, 45),
-                field: rgb(41, 46, 56),
-                text: rgb(240, 243, 249),
-                muted: rgb(157, 168, 186),
-                border: rgb(53, 60, 72),
+                bg: rgb(28, 29, 32),
+                surface: rgb(37, 39, 43),
+                field: rgb(48, 50, 56),
+                text: rgb(241, 242, 244),
+                muted: rgb(177, 181, 191),
+                border: rgb(65, 68, 76),
                 accent: rgb(146, 185, 255),
                 tint: rgb(43, 62, 89),
                 on_accent: rgb(20, 37, 62),
             }
         } else {
             Self {
-                bg: rgb(242, 245, 250),
-                surface: rgb(255, 255, 255),
-                field: rgb(246, 248, 252),
-                text: rgb(28, 39, 58),
-                muted: rgb(106, 119, 139),
-                border: rgb(225, 231, 240),
-                accent: rgb(44, 100, 219),
-                tint: rgb(230, 239, 255),
+                bg: rgb(243, 243, 243),
+                surface: rgb(250, 251, 252),
+                field: rgb(240, 242, 245),
+                text: rgb(32, 34, 37),
+                muted: rgb(98, 103, 115),
+                border: rgb(222, 226, 232),
+                accent: rgb(35, 95, 187),
+                tint: rgb(231, 238, 249),
                 on_accent: rgb(255, 255, 255),
             }
         }

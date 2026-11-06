@@ -168,6 +168,7 @@ impl Frame {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Change {
+    Start { frame: Frame },
     Update { frame: Frame },
     Tick { text: Text },
     Heartbeat,
@@ -188,7 +189,7 @@ impl Command {
         }
         self.owner.validate()?;
         match &self.change {
-            Change::Update { frame } => frame.validate(),
+            Change::Start { frame } | Change::Update { frame } => frame.validate(),
             Change::Tick { text } => text.validate(),
             _ => Ok(()),
         }

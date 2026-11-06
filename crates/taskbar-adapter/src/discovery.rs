@@ -14,6 +14,7 @@ use std::ptr::null_mut;
 use windows_sys::core::IID_IUnknown;
 
 pub(crate) struct View {
+    native_clock: bool,
     panel: Object,
     ancestors: Vec<Object>,
     objects: Vec<Object>,
@@ -124,7 +125,9 @@ impl View {
         if !same_object(&xaml::root_content(&panel)?, root)? {
             return Err("托盘容器不属于给定的 XamlRoot".into());
         }
-        Self::from_panel(&panel)
+        let mut view = Self::from_panel(&panel)?;
+        view.native_clock = true;
+        Ok(view)
     }
     pub(crate) fn from_panel(panel: &Object) -> Result<Self, String> {
         let ancestors = ancestry(panel)?;
@@ -150,6 +153,7 @@ impl View {
             Err(error) => (None, Some(error)),
         };
         Ok(Self {
+            native_clock: false,
             panel: panel.query(&IID_IUnknown)?,
             ancestors,
             objects,
@@ -170,7 +174,8 @@ impl View {
     /// visible text. The caller must rediscover and capture new originals.
     fn revalidate(&self) -> Result<Self, String> {
         self.selection()?;
-        let fresh = Self::from_panel(&self.panel)?;
+        let mut fresh = Self::from_panel(&self.panel)?;
+        fresh.native_clock = self.native_clock;
         fresh.selection()?;
         if self.ancestors.len() != fresh.ancestors.len() {
             return Err("托盘容器已迁移到其他父级或 XamlRoot".into());
@@ -210,7 +215,11 @@ impl View {
         })?;
         Ok(Target {
             id,
-            clock: ClockLease::capture(
+            clock: (if fresh.native_clock {
+                ClockLease::capture_native
+            } else {
+                ClockLease::capture
+            })(
                 &fresh.objects[clock.time],
                 &fresh.objects[clock.date],
                 &fresh.objects[clock.container],

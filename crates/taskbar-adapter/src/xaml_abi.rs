@@ -187,6 +187,25 @@ pub struct IDependencyObject_Vtbl {
     ) -> windows_sys::core::HRESULT,
     Dispatcher: usize,
 }
+pub const IID_IDependencyObject2: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0x29fed85d_3d22_43a1_add0_17027c08b212);
+#[repr(C)]
+pub struct IDependencyObject2_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    pub RegisterPropertyChangedCallback: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut i64,
+    )
+        -> windows_sys::core::HRESULT,
+    pub UnregisterPropertyChangedCallback: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        i64,
+    )
+        -> windows_sys::core::HRESULT,
+}
 pub const IID_IDependencyProperty: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0x85b13970_9bc4_4e96_acf1_30c8fd3d55c8);
 #[repr(C)]

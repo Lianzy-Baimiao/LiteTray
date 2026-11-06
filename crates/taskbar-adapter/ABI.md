@@ -1,5 +1,17 @@
 # Windows XAML 接口与调用边界
 
+## 开发版 3 的实验任务栏连接
+
+当前增加 `taskbar` Prepare/Reply/Status 协议与 `clock::Change::Start`。宿主明确请求连接，适配器先保存原值和输入绑定，返回已验证目标与端点；随后 Start 才修改时钟。停止不授予新租期，在过期及重复停止时仍允许恢复，Closed 是恢复确认。准备和状态验证拒绝其他 owner、接收窗口及会话 nonce。
+
+`taskbar_source.rs` 使用当前两个系统模块的完整 hash、加载身份及已核对私有字段；仅实验原位路径启用。Session 持有其私有宿主引用，在输入、属性和窗口绑定都释放后清理。DLL 在 Explorer 内固定加载到进程结束，以覆盖晚到回调及恢复重试。与此不同，独立预览继续使用其原有可释放运行环境。
+
+原位时钟的 Text 由 Shell 持续写入，不能把每次系统刷新当作一般外部冲突。`clock_text.rs` 使用准确的 IDependencyObject2 接口和线程绑定 DependencyPropertyChangedCallback：只观察两行 Text，捕获系统刚写入的原值或绑定，在同步回调中重新设置自定义文本；后续停止恢复最新快照。自身写入有重入门闩，委托对上下文持有 Weak，不构成控件引用环。属性/绑定/解除失败会通过会话检查恢复，其余字体、颜色、宽度等仍遵循冲突保护。相同普通值的再次写入不会触发属性事件，这不是跨插件排他锁。
+
+隔离检查先证明直接写 Text 和 held Storyboard 都无法抵抗系统刷新，再在相同真实 TextBlock 用例验证同步回调：120 次系统写入、自定义 Tick、最新值恢复、绑定恢复、重复 Stop、Drop 与回调释放均通过。另通过真实 WM_COPYDATA 验证 Prepared→Start→Active→Stop→Closed 和 sender/nonce 拒绝。通用检查现为 138 项，版本限定自有 Shell 宿主检查另计 6 项。
+
+**这些是自有进程结果。实验 TaskbarHost 获取和 Explorer 内的整个连接仍未实机验证，完整多托盘和自动重连也未完成。** 下文保留普通属性、预览、模型事务的详细机制；普通属性的冲突语义不适用于上述专用原位 Text 观察器。
+
 `src/xaml_abi.rs` 由 `tools/xaml-bindgen` 从 Windows 自带的 `Windows.UI.Xaml.winmd` 生成。构建使用已签入的定义，不需要开发机的 winmd，CI 也不从运行环境重新生成接口。
 
 生成命令：

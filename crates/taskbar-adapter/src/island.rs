@@ -70,6 +70,9 @@ fn window(native: &Object) -> Result<HWND, String> {
     }
 }
 impl Binding {
+    pub(crate) fn window(&self) -> HWND {
+        self.window
+    }
     /// Only accepts an actual DesktopWindowXamlSource and the root content
     /// already used for discovery. A caller cannot supply an arbitrary HWND.
     pub(crate) fn capture(

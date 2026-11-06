@@ -5,6 +5,8 @@
 mod clock;
 mod clock_style;
 mod clock_style_checks;
+mod clock_text;
+mod clock_text_checks;
 mod discovery;
 mod discovery_checks;
 mod input;
@@ -18,6 +20,8 @@ mod routing;
 mod routing_checks;
 mod session;
 mod shell_source_checks;
+mod taskbar;
+mod taskbar_source;
 mod tray;
 mod tray_checks;
 mod visibility;
@@ -112,6 +116,7 @@ pub unsafe extern "system" fn LiteTrayCallWndProc(code: i32, w: WPARAM, l: LPARA
                 }
             }
             if call.message == WM_COPYDATA && call.lParam != 0 && is_taskbar(call.hwnd) {
+                taskbar::request(call.hwnd, call.wParam as HWND, call.lParam);
                 inspect_request(call.hwnd, call.wParam as HWND, call.lParam);
             }
         }

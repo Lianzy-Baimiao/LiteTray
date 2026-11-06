@@ -1,132 +1,80 @@
 # LiteTray · 轻托盘
 
-轻量 Windows 任务栏增强软件：接管 Taskbar multi-tray 与 Taskbar Clock Customization 的目标功能，并提供点击时钟打开的日历、天气面板。
+Rust 原生 Windows 任务栏工具，目标是替代 Windhawk 的 Taskbar Clock Customization 和 Taskbar multi-tray，提供可配置时钟、日历与天气。私有开发仓库，当前版本为 **开发版 3**。
 
-Rust 原生 Windows 应用，GitHub 仓库保持私有。
+## 当前能做什么
 
-## 当前实现状态
+| 功能 | 当前状态 |
+| --- | --- |
+| 日历与天气同屏面板 | 已编写原生界面；浅深色、月份切换、键盘日期选择、农历、三日天气与缓存状态 |
+| 时钟配置 | 两行模板、秒、各行字体/字号/颜色/对齐、悬停提示、Windhawk 设置迁移 |
+| 天气 | 五种来源、顺序切换、失败托底、城市绑定的离线缓存、Windows 凭据管理器 |
+| 任务栏原位时钟 | **实验启动链路已实现，尚未通过 Explorer 实机验收**；仅接受当前核对的系统模块 |
+| 多屏托盘 | 范围选择与底层模型事务已编写；真实图标交互、回调与多屏接管仍未完成 |
+| 关于与更新 | GitHub Releases 检查、版本与权限错误提示；不自动执行下载文件 |
 
-当前为开发中的原生预览版本：原生设置窗口、托盘入口、日历天气面板、模板配置、多个天气来源、离线缓存、GitHub Releases 更新检查及 Windows 凭据管理器集成已经编写。**Explorer 多屏托盘和原生时钟接管尚未完成，当前 EXE 还不能替代这两个 Windhawk 模块。**
+**当前仍不能认定为两个 Windhawk 模块的完整替代品。** 独立时钟预览和离屏界面图都不证明任务栏替换成功。
 
-- [产品与实现规格](docs/implementation-plan.md)
-- [实现与验证进度](docs/progress.md)
-- 本机调查记录在本地 `docs/baseline.md`，包含环境信息，不提交到仓库。
-- `tools/Export-WindhawkProfile.ps1`：只读取这两个模块的设置，导出到独立文件，原设置保持不变。
-- `local/windhawk-profile.json`：本机导出结果；属于本地配置，不纳入版本控制。
+## 本轮实际改动
 
-## 只读导出
+- 接通设置页、任务栏线程入口、原生 source 解析、会话握手、Start、逐秒更新、点击事件和显式恢复。
+- 时钟文本通过同步属性回调处理系统刷新，记录最新系统值，停止后恢复该值或原绑定。样式保持原有冲突检测。
+- 会话失联由原生线程定时器恢复；通信出错后停止反复发送更新。**Explorer 重启后自动重连尚未实现。**
+- 面板按选定的日历天气同屏方案重新排版，660×452 逻辑像素；真实控件与离屏绘制共用布局代码。取消巨大的重复时间及宣传文案，补足天气空状态。
 
-在项目目录的 PowerShell 中运行：
+以下是同一原生绘制代码生成的**离屏检查图，天气为示例**，不是桌面接管截图：
 
-```powershell
-.\tools\Export-WindhawkProfile.ps1
-```
+![浅色日历天气面板](docs/images/panel-light.png)
 
-默认输出到项目 `local` 目录。已存在输出时不会覆盖，需显式传入 `-Force`。导出不包含模块源码，也不访问天气服务。
+## 使用与设置
 
-设置中的“配置迁移”页可以选择该 JSON，预览每个字段的转换结果，再采用到设置草稿；点击“保存设置”后写入 LiteTray。支持两行日期/时间模板、秒数、两行独立字体、字号与对齐、宽度、天气刷新间隔及多屏组件范围。不能转换的模板会保留整行现有值，报告列出原因。报告可导出到配置目录。
+默认打开设置，关闭设置窗口会收至托盘；从托盘菜单或常规设置退出程序。配置保存在 `%LOCALAPPDATA%\LiteTray`。开机启动默认关闭。
 
-旧配置中的 wttr.in 网页变量可近似转换为内置天气摘要；城市坐标、天气来源顺序和凭据仍使用现有 LiteTray 配置。旧显示器序号需要重新核对。迁移不会改变 Windhawk，也不自动启用尚未完成的任务栏接管。
+“时钟显示”页分开提供“测试独立时钟预览”和“连接任务栏时钟（实验）”。连接流程核对实际系统模块、任务栏窗口、屏幕、原生时钟元素与会话端点，收到 Active 后才显示连接运行中；失败返回错误。“停止并恢复”需要原生端确认 Closed。实验会话不随软件重新启动自动开启；保存设置会停止已有实验连接，需要再次显式连接。
 
-命令行也支持只读预览：`LiteTray.exe --preview-windhawk <导出文件.json> [新报告.json]`。指定输出时拒绝覆盖已有文件，包括来源文件。
+实验原位路径当前只接受 Windows 11 build 26300.9711 x64 已核对的 taskbar.dll 与 twinui.pcshell.dll 哈希。其他系统版本拒绝套用私有偏移。Windows 10、系统升级、多屏热插拔、混合 DPI、自动隐藏与原系统点击行为仍需兼容验证。DLL 为保证回调生命周期，会固定加载到 Explorer 结束；停止成功后释放本次时钟属性、点击及私有宿主引用。
 
-## 构建与运行
-
-需要 Rust stable 和 Windows C++ 链接工具。支持 MSVC（建议用于 CI/发布）和 GNU MinGW（本机开发）。
-
-```powershell
-# MSVC / 配置完整的工具链
-cargo build --workspace --release
-cargo test --workspace --all-targets
-
-# 本机 GNU 工具链；不修改全局环境
-.\tools\Invoke-Cargo.ps1 build --workspace --release
-.\tools\Invoke-Cargo.ps1 test --workspace --all-targets
-```
-
-本机脚本优先使用 `LITETRAY_MINGW_BIN`，否则读取用户 `tools\mingw64\bin`。GNU 构建产物位于用户 `.cargo-target\litetray\release\LiteTray.exe`。MSVC 默认位于 `target\release\LiteTray.exe`。
-
-运行参数：
-
-```text
-LiteTray.exe --settings
-LiteTray.exe --calendar
-LiteTray.exe --clock-preview
-LiteTray.exe --background
-LiteTray.exe --diagnose [output.json]
-LiteTray.exe --weather-check [output.json]
-LiteTray.exe --check-updates
-LiteTray.exe --probe-taskbar [output.json]
-LiteTray.exe --prepare-symbols [existing-symbol-cache]
-LiteTray.exe --inspect-taskbar [output.json]
-LiteTray.exe --self-test-clock
-LiteTray.exe --self-test-shell-source
-LiteTray.exe --self-test-preview-recovery
-LiteTray.exe --preview-windhawk <profile.json> [new-report.json]
-```
-
-默认打开设置；关闭窗口收至托盘，右键托盘菜单可以退出。开机启动是可选项，默认关闭。配置保存在 `%LOCALAPPDATA%\LiteTray`；开发检查可用 `LITETRAY_DATA_DIR` 指向隔离目录。
-
-显式指定不同配置目录时可以并行运行独立实例；同一目录仍保持单实例。隔离的是配置和缓存，凭据管理器中的服务凭据仍按 Windows 用户共享。
-
-“多屏托盘”页提供原生多选列表，显示屏幕名称、当前 DISPLAY 编号、主屏标记和分辨率；单击或空格切换选择。“刷新显示器”保留尚未保存的选择，收到显示设备变化通知后会延后刷新列表。只有点击“保存设置”才写入配置。
-
-指定屏幕按 Windows 的 `monitorDevicePath` 保存，再解析成当前桌面区域，不依赖可能重新编号的 `\\.\DISPLAY1`。该路径属于 Windows 设备实例，换接口、重装驱动等操作后可能改变；未匹配的已保存项会保留并提示，旧 DISPLAY 编号需要重新选择。复制显示共用一个桌面区域，须选中同组全部屏幕；身份存在歧义时不匹配。此选择目前用于设置和诊断，尚未连接真实任务栏接管。
-
-`--diagnose` 和设置页导出的诊断包含活动屏幕设备路径、任务栏所在桌面区域、已保存范围的匹配及未匹配结果。显示器读取使用 Windows 公开只读 API；当前实机只验证了一块 HDMI 屏幕，重编号、复制显示和断开连接规则有逻辑测试，真实多屏插拔仍待验收。
-
-诊断中的 `target_plan` 根据当前启用标记和显示范围列出时钟目标、托盘数据来源及组件可见性操作；默认接管标记关闭时计划为空。选择副屏不会隐式修改主屏时钟，主屏仍可作为托盘模型来源；“仅影响复制的副屏”保留主屏组件。该计划不执行接管。原生会话准备器已经在独立 XAML 控件中验证，支持只接管托盘或只修改组件可见性，停止时恢复原值和绑定；生产接入与点击路由尚待完成。
-
-由范围计划准备的会话会持续核对来源和目标的原生身份。控件替换、重命名、重复区域、父级/root 变化或窗口失效会触发停止和恢复；普通模型集合增删及无关模板内容变化允许继续。窗口显示器/工作区/DPI 与 XAML 缩放变化也有失效检查，但真实硬件插拔及混合 DPI 尚未验收。此检查不自动重连 Explorer，也不替代生产窗口与 XAML 根的对应验证。
-
-范围会话现在要求由实际 XAML source 提供原生子窗口及内容根，拒绝交换窗口、交换根或任意拼接输入 HWND；source 内容替换、关闭及子窗口重设父级也会停止会话。自定义点击订阅与该绑定共用生命周期，只对选中时钟启用。上述路径已在本进程真实 XAML island 和自己创建的内部 Shell 宿主验证；真实任务栏对象的关联与启动仍未完成，见 [source 调查](docs/taskbar-source-binding.md)。
-
-“时钟显示”页的“打开原生时钟预览”或 `--clock-preview` 可打开独立 XAML 时钟窗口，使用当前两行模板、字体和宽度。鼠标点击或聚焦后按回车可打开 LiteTray 日历天气面板，面板的 Esc 关闭已实测。空格处理已编写，仍待可靠的界面验收。预览始终使用 LiteTray 面板；系统日历选项留待任务栏接管验证。此窗口不接管任务栏，也不代表已能停用 Windhawk。
-
-“时钟样式”页可以分别设置两行字体、字号、RGB/ARGB 颜色和对齐。字体、字号留空时继承“时钟显示”页的公共值；单行对齐可沿用公共值，也可明确选择“保留原样”。悬停提示支持多行日期、时间、天气模板。迁移支持 Windhawk 的独立字体、字号、十六进制颜色和 Left/Center/Right 对齐，非法或未支持值逐项报告。
-
-界面已改用共享配色、图标侧栏、圆角内容卡片和控件状态；主页与弹出面板使用同一套日历天气同屏布局。日期格为有名称的原生按钮，支持月份切换、返回今天、方向键选择和 Esc 关闭；设置窗口调整大小后保留选中日期。天气区显示实际数据、三日预报、来源时间与缓存状态，没有数据时显示明确的空状态。
-
-**本次 UI 重做尚未通过实机视觉和交互验收**：启动新版设置窗口的操作被自动审批以 `blocked by policy` 拒绝，未尝试其他启动方式。编译和逻辑测试通过不代表界面验收通过。新版窗口标题标记“界面预览 2”。现有旧进程不会自动升级；不同目录的旧实例仍运行时，新版现在会明确提示版本冲突及双方路径，不再静默打开旧窗口。先从旧版“常规设置 → 退出程序”或托盘菜单退出旧版，再打开新包；只关闭窗口会收至托盘。
-
-预览的点击和文字由同一会话管理，失联或停止时同时解除输入和恢复原值。文件选择对话框保持打开超过 58 秒后，时钟和点击仍正常，已做实机检查；睡眠恢复与真实任务栏仍需单独验收。
-
-预览会话意外停止后，宿主确认旧会话已关闭，再按 1 秒、5 秒间隔尝试重建；连续三次故障暂停自动恢复，运行稳定 60 秒后清除连续失败计数。原状态恢复连续失败时保留旧连接并暂停重建，不能直接丢弃旧连接。时钟页显示状态和原因，可使用“重试预览连接”；自动重建保留隐藏状态，显示时不主动请求焦点。旧会话排队中的点击会被丢弃。以上恢复目前只用于独立预览，尚未连接 Explorer。
-
-面板按触发控件的物理屏幕矩形定位，托盘入口优先使用 Shell 返回的图标矩形；布局考虑工作区边界、负坐标和 DPI。不同任务栏方向与小屏缩放已做几何测试，真实混合 DPI 多屏组合仍待验收。
-
-`--probe-taskbar` 通过同目录 Rust DLL 在 Explorer 任务栏线程执行一次受限只读探测，返回窗口树与模块身份后移除 hook，不修改托盘。`--prepare-symbols` 校验当前 taskbar.dll 的 PE/PDB 身份，优先使用独立缓存，也可显式导入匹配的已有 PDB；缺失时从 Microsoft 符号服务器下载，使用 DbgHelp 验证 GUID/age 后保存按模块 SHA-256 命名的符号映射及完整接口布局。`--inspect-taskbar` 的代码进一步核对加载模块和函数入口，读取受限 XAML 树；当前未完成实机验收，不会启用写入。
-
-只读检查报告的 `topology` 字段进一步限定原生托盘容器，识别通知图标、隐藏图标、系统图标、控制中心、时钟与通知入口。时钟只选择独立的两行文字容器；重复节点、未知类型、不可见或未布局状态会报告不可用。识别结果可以准备可恢复的时钟/模型事务，已在本进程夹具中验证；真实 SystemTray 类、显示器选择、点击路由和接入仍待验收。
-
-`--self-test-clock` 在 **LiteTray 自己进程** 的新 XAML 控件中检查时钟文本和样式写入、原值/原绑定恢复、部分失败回滚、会话更新、外部修改保留与失联恢复。另启动同一程序的隔离测试子进程，验证真实跨进程更新和子进程结束后的自动恢复，并创建隐藏的 XAML Island 验证输入订阅与释放。托盘模型事务共享 DataContext、ItemsSource 和非可视 Content；独立 island 验证集合增删传播、来源替换/清空、原绑定恢复及与时钟一起停止。当前合计 131 个隔离场景，约 20 秒，包含选定目标、独立托盘会话、可见性恢复、宿主预览重建和真实 Windows 定时器的 15 秒心跳超时验证。`--self-test-preview-recovery` 可单独运行其中 8 项宿主恢复检查，使用真实 DLL 和隐藏窗口，退避时间由测试控制，无需等待超时。它们不访问 Explorer，也不修改任务栏。适合开发检查，不代表已经实现任务栏接管：
-
-```powershell
-.\tools\Test-XamlClock.ps1 -BinaryPath <release目录>\LiteTray.exe
-```
-
-`--self-test-shell-source` 是另一组独立进程检查，只对本机已核对 SHA-256 和 PE/PDB 身份的 `twinui.pcshell.dll` 运行；其他版本拒绝私有调用。它创建两个自己的隐藏 Shell XAML 宿主，验证实际 source、父窗口、内容根、时钟/模型/输入及恢复，共 6 项。没有初始化普通预览、访问用户配置或连接 Explorer。它证明当前版本的内部宿主桥可行，结果仍明确标记 `production_taskbar_verified: false`。该检查不包含在上述 131 项或通用 CI 中，可用 `tools/Test-ShellSource.ps1 -BinaryPath <release目录>\LiteTray.exe` 单独运行。
-
-接口来源和隔离边界见 [ABI 说明](crates/taskbar-adapter/ABI.md)，上游参考与许可见 [第三方声明](THIRD-PARTY-NOTICES.md)。
+开发版标题包含“开发版 3”。从其他目录运行的旧 LiteTray 不会自动升级；新版检测到旧实例时会明确显示双方路径，避免静默打开旧界面。`LITETRAY_DATA_DIR` 可指定独立开发配置目录，凭据管理器仍按 Windows 用户共享。
 
 ## 天气来源
 
-| 来源 | 认证 | 用途 |
+| 来源 | 认证 | 数据用途 |
 | --- | --- | --- |
 | Open-Meteo | 常规非商业免费接口无需 Key | 当前预估与三日预报 |
-| MET Norway | 无需 Key，携带可识别 User-Agent | 逐小时预报托底 |
-| 和风天气 | 控制台 API Host + API Key | 当前观测 |
+| MET Norway | 无需 Key，带可识别 User-Agent | 逐小时预报托底 |
+| 和风天气 | API Host + API Key | 当前观测 |
 | OpenWeather | API Key | 当前观测 |
 | wttr.in | 无需 Key | 最后备用 |
 
-支持添加、移除和调整来源顺序，按超时/错误/数据过期自动切换。缓存与城市坐标绑定；全部失败才使用未超过保留期限的离线缓存，并明确标记“非实时”。免费服务没有稳定性保证，商业发布需核对各服务条款与额度。
+支持调整顺序和刷新间隔。来源失败或过期后依次尝试，全部失败时使用有效缓存，并标记非实时。首次失败显示暂无数据；不会用示例值填充正式界面。Key 和 GitHub Token 存放于 Windows 凭据管理器，不写入配置 JSON。各服务的发布用途和额度须遵守其条款。
 
-API Key 与 GitHub Token 使用 Windows 凭据管理器，不进入 JSON 配置、日志或 Git 仓库。更新检查读取 GitHub Releases，正确区分没有 Release、私有仓库无权限、限流与新版本；不静默执行下载内容。
+## 构建与检查
 
-## 实现方向与兼容范围
+需要 Rust stable 与 Windows C++ 链接工具。支持 MSVC，以及本机 GNU MinGW 开发工具链。
 
-按用户决定采用 Rust：`windows-sys` 驱动 Win32 原生窗口和控件，`windows` 调用系统农历，网络使用系统 TLS。网络、配置、日历计算放在独立宿主；后续 Rust DLL 中只保留显示、输入转发和原生托盘适配。
+```powershell
+.\tools\Invoke-Cargo.ps1 build --workspace --release --locked
+.\tools\Invoke-Cargo.ps1 test --workspace --all-targets --locked
+.\tools\Invoke-Cargo.ps1 -CargoArguments @('clippy','--workspace','--all-targets','--locked','--','-D','warnings')
+.\tools\Test-XamlClock.ps1 -BinaryPath <release目录>\LiteTray.exe
+.\tools\Test-ShellSource.ps1 -BinaryPath <release目录>\LiteTray.exe
+.\tools\Render-Panel.ps1
+```
 
-开发目标为 Windows 11 build 26300.9711 x64。架构保留 Windows 10 经典任务栏适配分支；当前尚未完成 Windows 10 或未来版本的运行验证，不宣称所有 Windows 版本兼容。现代 Rust 工具链下不把 Windows 7/8 列为当前支持目标。
+本机 GNU 产物在 `%USERPROFILE%\.cargo-target\litetray\release`。MSVC 可直接使用 `cargo`，默认产物在 `target\release`。`tools/Package.ps1` 将 EXE、同版本 DLL、说明及 SHA-256 清单放入指定目录。
 
-首先验证当前 Windows build 上的任务栏接入和退出恢复，再完成多屏托盘、时钟与面板的纵向闭环。完整接管通过之前，不能宣称已经支持替代 Windhawk。
+原生检查只创建 LiteTray 自身的 XAML 控件与隐藏宿主，不访问 Explorer。当前 75 项单元测试、138 项通用 XAML 场景与 6 项当前系统专用私有宿主场景通过；UI 离屏检查单独产生 6 张浅深色、缩放与空状态图。**这些检查不代替真实任务栏或桌面鼠标交互验收。**
+
+此前自动审批对新版 GUI 启动及 Explorer 接入返回 `blocked by policy`；本轮没有换方式重试相同操作。因此真实系统托盘替换和新版桌面交互仍未验证，尚无同口径性能对比结论。
+
+## 配置迁移与命令行
+
+`tools/Export-WindhawkProfile.ps1` 只读导出两个模块的设置，原设置不变。设置中的“配置迁移”页先预览逐字段转换报告，采用草稿并保存后写入 LiteTray。无法转换的格式保留原行并报告原因。迁移不会自动停用 Windhawk 或启用任务栏连接。
+
+常用参数：`--settings`、`--calendar`、`--background`、`--clock-preview`、`--diagnose [file]`、`--weather-check [file]`、`--check-updates`、`--preview-windhawk <profile.json> [new-report.json]`。原生开发检查与只读探测参数见 `--help`。
+
+- [完整产品规格](docs/implementation-plan.md)
+- [开发与验证记录](docs/progress.md)
+- [任务栏 source 依据与限制](docs/taskbar-source-binding.md)
+- [原生 ABI 说明](crates/taskbar-adapter/ABI.md)
+- [第三方声明](THIRD-PARTY-NOTICES.md)

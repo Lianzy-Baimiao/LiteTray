@@ -20,6 +20,9 @@ pub(crate) struct BoundView<'a> {
     binding: Rc<Binding>,
 }
 impl<'a> BoundView<'a> {
+    pub(crate) fn input_window(&self) -> u64 {
+        self.binding.window() as u64
+    }
     pub(crate) fn capture(route: Route, view: &'a View, source: &Object) -> Result<Self, String> {
         check_window(&route)?;
         let binding = Binding::capture(route.window as HWND, source, &view.root_content()?)?;
