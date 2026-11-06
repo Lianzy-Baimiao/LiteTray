@@ -41,6 +41,10 @@ fn main() {
         "Windows.UI.Xaml.Media.IVisualTreeHelperStatics",
         "Windows.UI.Xaml.Controls.ITextBlock",
         "Windows.UI.Xaml.Controls.ITextBlockStatics",
+        "Windows.UI.Xaml.Controls.IItemsControl",
+        "Windows.UI.Xaml.Controls.IItemsControlStatics",
+        "Windows.UI.Xaml.Controls.IContentControl",
+        "Windows.UI.Xaml.Controls.IContentControlStatics",
     ]);
     if std::env::args().any(|a| a == "--raw") {
         return;
@@ -59,13 +63,18 @@ fn main() {
         ("    FontSizeProperty: usize,".to_owned(),format!("    pub FontSizeProperty: {getter},")),
         ("    FontFamilyProperty: usize,".to_owned(),format!("    pub FontFamilyProperty: {getter},")),
         ("    ParentBinding: usize,".to_owned(),format!("    pub ParentBinding: {getter},")),
+        ("    DataContextProperty: usize,".to_owned(),format!("    pub DataContextProperty: {getter},")),
+        ("    ItemsSourceProperty: usize,".to_owned(),format!("    pub ItemsSourceProperty: {getter},")),
+        ("    ContentProperty: usize,".to_owned(),format!("    pub ContentProperty: {getter},")),
+        ("    Items: usize,".to_owned(),format!("    pub Items: {getter},")),
         ("    InitializeForCurrentThread: usize,".to_owned(),format!("    pub InitializeForCurrentThread: {getter},")),
         ("    CreateInstanceWithName: usize,".to_owned(),"    pub CreateInstanceWithName: unsafe extern \"system\" fn(*mut core::ffi::c_void, windows_sys::core::HSTRING, *mut core::ffi::c_void, *mut *mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> windows_sys::core::HRESULT,".into()),
         ("    GetChild: usize,".to_owned(),"    pub GetChild: unsafe extern \"system\" fn(*mut core::ffi::c_void, *mut core::ffi::c_void, i32, *mut *mut core::ffi::c_void) -> windows_sys::core::HRESULT,".into()),
         ("    GetChildrenCount: usize,".to_owned(),"    pub GetChildrenCount: unsafe extern \"system\" fn(*mut core::ffi::c_void, *mut core::ffi::c_void, *mut i32) -> windows_sys::core::HRESULT,".into()),
         ("    GetParent: usize,".to_owned(),"    pub GetParent: unsafe extern \"system\" fn(*mut core::ffi::c_void, *mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> windows_sys::core::HRESULT,".into()),
     ];
-    // Content is present on both XamlRoot and DesktopWindowXamlSource.
+    // Object-valued ContentControl.Content is generated directly; these two
+    // opaque UIElement slots belong to XamlRoot and DesktopWindowXamlSource.
     assert_eq!(source.matches("    Content: usize,").count(), 2);
     source = source.replace(
         "    Content: usize,",

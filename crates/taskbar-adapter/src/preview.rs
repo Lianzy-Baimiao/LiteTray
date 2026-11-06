@@ -367,6 +367,87 @@ pub(crate) struct InputFixture {
     control: Object,
     preview: Preview,
 }
+/// A separate hidden XAML island used to validate native model sharing. Its
+/// controls and models are released before the hosting source and manager.
+pub(crate) struct ModelFixture {
+    root: Object,
+    _preview: Preview,
+}
+impl ModelFixture {
+    pub(crate) fn new(owner: Owner, frame: Frame, markup: &str) -> Result<Self, String> {
+        let mut preview = Preview::create(owner, frame, false)?;
+        if let Some(watchdog) = preview.watchdog.take() {
+            watchdog.stop()?;
+        }
+        preview.focus = None;
+        unsafe {
+            let focus = RemovePropW(preview.window, wide(FOCUS_PROPERTY).as_ptr());
+            if !focus.is_null() {
+                drop(Object::owned(focus)?);
+            }
+        }
+        let root = load(markup)?.query(&IID_IUIElement)?;
+        let source = preview.source.as_ref().ok_or("模型检查缺少 XAML source")?;
+        unsafe {
+            check(
+                (source.table::<IDesktopWindowXamlSource_Vtbl>().SetContent)(
+                    source.raw(),
+                    root.raw(),
+                ),
+                "Set model fixture content",
+            )?;
+        }
+        let fixture = Self {
+            root,
+            _preview: preview,
+        };
+        fixture.layout()?;
+        Ok(fixture)
+    }
+    pub(crate) fn find(&self, name: &str) -> Result<Object, String> {
+        let root = self.root.query(&IID_IFrameworkElement)?;
+        let name = StringHandle::new(name)?;
+        unsafe {
+            let mut value = null_mut();
+            check(
+                (root.table::<IFrameworkElement_Vtbl>().FindName)(root.raw(), name.0, &mut value),
+                "Find model fixture",
+            )?;
+            Object::owned(value)
+        }
+    }
+    pub(crate) fn layout(&self) -> Result<(), String> {
+        unsafe {
+            let table = self.root.table::<IUIElement_Vtbl>();
+            check(
+                (table.Measure)(
+                    self.root.raw(),
+                    Size {
+                        Width: 520.,
+                        Height: 130.,
+                    },
+                ),
+                "Measure model fixture",
+            )?;
+            check(
+                (table.Arrange)(
+                    self.root.raw(),
+                    Rect {
+                        X: 0.,
+                        Y: 0.,
+                        Width: 520.,
+                        Height: 130.,
+                    },
+                ),
+                "Arrange model fixture",
+            )?;
+            check(
+                (table.UpdateLayout)(self.root.raw()),
+                "Layout model fixture",
+            )
+        }
+    }
+}
 impl InputFixture {
     pub(crate) fn new(owner: Owner, frame: Frame) -> Result<Self, String> {
         let mut preview = Preview::create(owner, frame, false)?;
@@ -378,6 +459,16 @@ impl InputFixture {
             .as_ref()
             .ok_or("预览控件缺失")?
             .query(&IID_IUIElement)?;
+        // A hidden island can defer its default ContentControl template and
+        // report zero desired height. Give the isolated input fixture a real
+        // explicit hit area; production preview layout remains content-sized.
+        unsafe {
+            let framework = control.query(&IID_IFrameworkElement)?;
+            check(
+                (framework.table::<IFrameworkElement_Vtbl>().SetMinHeight)(framework.raw(), 64.),
+                "Hidden input fixture minimum height",
+            )?;
+        }
         let root = crate::xaml::root_content(&control)?.query(&IID_IFrameworkElement)?;
         let find = |name: &str| -> Result<Object, String> {
             unsafe {
@@ -444,6 +535,43 @@ impl InputFixture {
             element: self.control.query(&IID_IUIElement)?,
             island: self.preview.island,
         })
+    }
+    /// Hidden islands do not receive the normal visible-window layout pass
+    /// after a clock width/text update. Arrange explicitly before input QA.
+    pub(crate) fn layout(&self) -> Result<(), String> {
+        let root = crate::xaml::root_content(&self.control)?.query(&IID_IUIElement)?;
+        unsafe {
+            let control = self.control.query(&IID_IControl)?;
+            let mut applied = false;
+            check(
+                (control.table::<IControl_Vtbl>().ApplyTemplate)(control.raw(), &mut applied),
+                "Apply hidden clock template",
+            )?;
+            let table = root.table::<IUIElement_Vtbl>();
+            check(
+                (table.Measure)(
+                    root.raw(),
+                    Size {
+                        Width: 520.,
+                        Height: 130.,
+                    },
+                ),
+                "Measure clock fixture",
+            )?;
+            check(
+                (table.Arrange)(
+                    root.raw(),
+                    Rect {
+                        X: 0.,
+                        Y: 0.,
+                        Width: 520.,
+                        Height: 130.,
+                    },
+                ),
+                "Arrange clock fixture",
+            )?;
+            check((table.UpdateLayout)(root.raw()), "Layout clock fixture")
+        }
     }
     pub(crate) fn restored(&self) -> Result<bool, String> {
         unsafe {

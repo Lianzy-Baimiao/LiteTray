@@ -3,6 +3,7 @@
 use crate::clock::ClockLease;
 use crate::{
     input::{Probe, Sequence, Subscription},
+    tray::{ModelLease, Pair},
     xaml::Object,
 };
 use litetray_adapter_protocol::activation::Activation;
@@ -34,6 +35,7 @@ pub struct Session {
     frame: Option<Frame>,
     inputs: Vec<(u64, Subscription)>,
     inputs_prepared: bool,
+    tray: Option<ModelLease>,
 }
 impl Session {
     /// Captured targets must be disjoint; otherwise rollback order would
@@ -59,6 +61,7 @@ impl Session {
             frame: None,
             inputs: vec![],
             inputs_prepared: false,
+            tray: None,
         })
     }
     pub fn state(&self) -> State {
@@ -132,6 +135,23 @@ impl Session {
             .1
             .probe()
     }
+    /// Tray properties participate in the same start/stop lifetime as clocks.
+    pub(crate) fn prepare_tray(&mut self, pairs: Vec<Pair>) -> Result<(), String> {
+        if self.state != State::Prepared || self.tray.is_some() {
+            return Err("托盘模型只能在准备阶段配置一次".into());
+        }
+        for pair in &pairs {
+            for target in &self.targets {
+                if target.clock.references(&pair.source)?
+                    || target.clock.references(&pair.target)?
+                {
+                    return Err("托盘模型控件与时钟目标重叠".into());
+                }
+            }
+        }
+        self.tray = Some(ModelLease::capture(pairs)?);
+        Ok(())
+    }
     /// On failure the caller retains this session to retry unfinished restores.
     pub fn start(&mut self, frame: Frame, now: u64) -> Result<(), String> {
         if self.state != State::Prepared {
@@ -143,6 +163,14 @@ impl Session {
             return Err("时钟初始化已超时".into());
         }
         self.apply(frame)?;
+        if let Some(tray) = &mut self.tray
+            && let Err(error) = tray.start()
+        {
+            return match self.stop() {
+                Ok(()) => Err(error),
+                Err(restore) => Err(format!("{error}；{restore}")),
+            };
+        }
         for (_, input) in &self.inputs {
             if let Err(error) = input.activate() {
                 return match self.stop() {
@@ -212,6 +240,29 @@ impl Session {
         {
             self.stop()?;
         }
+        if self.state == State::Active
+            && let Some(tray) = &mut self.tray
+        {
+            // A failed model refresh rolls back its group synchronously.
+            // Suspend input before any of those COM calls can reenter it.
+            for (_, input) in &self.inputs {
+                input.suspend();
+            }
+            if let Err(error) = tray.refresh() {
+                return match self.stop() {
+                    Ok(()) => Err(error),
+                    Err(restore) => Err(format!("{error}；{restore}")),
+                };
+            }
+            for (_, input) in &self.inputs {
+                if let Err(error) = input.activate() {
+                    return match self.stop() {
+                        Ok(()) => Err(error),
+                        Err(restore) => Err(format!("{error}；{restore}")),
+                    };
+                }
+            }
+        }
         Ok(())
     }
     pub fn stop(&mut self) -> Result<(), String> {
@@ -229,6 +280,11 @@ impl Session {
             if let Err(error) = input.detach() {
                 errors.push(format!("时钟 {id} 点击恢复：{error}"));
             }
+        }
+        if let Some(tray) = &mut self.tray
+            && let Err(error) = tray.stop()
+        {
+            errors.push(format!("托盘模型恢复：{error}"));
         }
         for target in self.targets.iter_mut().rev() {
             if let Err(error) = target.clock.restore() {

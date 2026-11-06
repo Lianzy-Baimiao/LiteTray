@@ -33,11 +33,19 @@ impl Object {
         unsafe { &**(self.raw() as *const *const T) }
     }
     pub fn query(&self, iid: &GUID) -> Result<Self, String> {
+        self.try_query(iid)?.ok_or("XAML 接口不受支持".into())
+    }
+    /// Only E_NOINTERFACE means an absent capability. A disconnected or
+    /// otherwise failing COM object must not be treated as a safe model.
+    pub fn try_query(&self, iid: &GUID) -> Result<Option<Self>, String> {
         unsafe {
             let mut result = null_mut();
             let hr = (self.table::<IUnknown_Vtbl>().QueryInterface)(self.raw(), iid, &mut result);
+            if hr == 0x80004002u32 as i32 {
+                return Ok(None);
+            }
             check(hr, "QueryInterface")?;
-            Self::owned(result)
+            Ok(Some(Self::owned(result)?))
         }
     }
     /// Borrow a trusted live COM object long enough to obtain our own interface.
@@ -78,6 +86,36 @@ impl Object {
             let mut value = null_mut();
             check(get(self.raw(), &mut value), "XAML string property")?;
             string_owned(value, limit)
+        }
+    }
+    /// Compare full HSTRING values for ownership; display-oriented bounded
+    /// extraction must not treat different long strings as the same value.
+    pub(crate) fn same_string(&self, other: &Object) -> Result<bool, String> {
+        unsafe {
+            let get = |object: &Object| -> Result<StringHandle, String> {
+                let mut value = null_mut();
+                check(
+                    (object.table::<IPropertyValue_Vtbl>().GetString)(object.raw(), &mut value),
+                    "PropertyValue.String equality",
+                )?;
+                Ok(StringHandle(value))
+            };
+            let a = get(self)?;
+            let b = get(other)?;
+            let (mut alen, mut blen) = (0, 0);
+            let aptr = WindowsGetStringRawBuffer(a.0, &mut alen);
+            let bptr = WindowsGetStringRawBuffer(b.0, &mut blen);
+            if alen != blen {
+                return Ok(false);
+            }
+            if alen == 0 {
+                return Ok(true);
+            }
+            if aptr.is_null() || bptr.is_null() {
+                return Err("XAML 字符串无效".into());
+            }
+            Ok(std::slice::from_raw_parts(aptr, alen as usize)
+                == std::slice::from_raw_parts(bptr, blen as usize))
         }
     }
 }
@@ -287,5 +325,20 @@ mod tests {
         );
         assert_eq!(offset_of!(ITextBlock_Vtbl, Text), 26 * slot);
         assert_eq!(offset_of!(ITextBlockStatics_Vtbl, TextProperty), 16 * slot);
+        assert_eq!(
+            offset_of!(IFrameworkElementStatics_Vtbl, DataContextProperty),
+            20 * slot
+        );
+        assert_eq!(offset_of!(IItemsControl_Vtbl, ItemsSource), 6 * slot);
+        assert_eq!(offset_of!(IItemsControl_Vtbl, Items), 8 * slot);
+        assert_eq!(
+            offset_of!(IItemsControlStatics_Vtbl, ItemsSourceProperty),
+            6 * slot
+        );
+        assert_eq!(offset_of!(IContentControl_Vtbl, Content), 6 * slot);
+        assert_eq!(
+            offset_of!(IContentControlStatics_Vtbl, ContentProperty),
+            6 * slot
+        );
     }
 }

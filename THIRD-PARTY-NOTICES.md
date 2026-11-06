@@ -5,6 +5,12 @@ ITaskListWndSite / GetTaskbarHost discovery approach documented in these MIT
 licensed Windhawk modules, reimplemented in Rust with module identity, section,
 prologue, pointer and lifetime validation:
 
+The tray model sharing in `crates/taskbar-adapter/src/tray.rs` also follows
+Taskbar multi-tray's use of DataContext, ItemsSource and non-visual Content
+references. It is implemented as a Rust transaction with bounded validation,
+original-binding restoration and joint clock/session shutdown. It does not
+copy or move a UIElement between visual trees.
+
 - Taskbar multi-tray 1.3.0, by EDM115:
   https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-multi-tray.wh.cpp
 - Taskbar notification icon spacing, by Michael Maltsev (m417z), referenced by

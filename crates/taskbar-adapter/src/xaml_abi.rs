@@ -49,6 +49,39 @@ pub const IID_IBindingExpressionBase: windows_sys::core::GUID =
 pub struct IBindingExpressionBase_Vtbl {
     pub base__: windows_sys::core::IInspectable_Vtbl,
 }
+pub const IID_IContentControl: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0xa26dd1dc_cd44_435c_be94_01d6241c231c);
+#[repr(C)]
+pub struct IContentControl_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    pub Content: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    pub SetContent: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    ContentTemplate: usize,
+    SetContentTemplate: usize,
+    ContentTemplateSelector: usize,
+    SetContentTemplateSelector: usize,
+    ContentTransitions: usize,
+    SetContentTransitions: usize,
+}
+pub const IID_IContentControlStatics: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0x116982a4_5cf5_4c05_a53f_15e4876c85ec);
+#[repr(C)]
+pub struct IContentControlStatics_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    pub ContentProperty: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    ContentTemplateProperty: usize,
+    ContentTemplateSelectorProperty: usize,
+    ContentTransitionsProperty: usize,
+}
 pub const IID_IControl: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0xa8912263_2951_4f58_a9c5_5a134eaa7f07);
 #[repr(C)]
@@ -338,7 +371,10 @@ pub struct IFrameworkElementStatics_Vtbl {
     VerticalAlignmentProperty: usize,
     MarginProperty: usize,
     NameProperty: usize,
-    DataContextProperty: usize,
+    pub DataContextProperty: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
     StyleProperty: usize,
     FlowDirectionProperty: usize,
 }
@@ -364,6 +400,71 @@ pub struct IGeneralTransform_Vtbl {
         Rect,
         *mut Rect,
     ) -> windows_sys::core::HRESULT,
+}
+pub const IID_IItemsControl: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0xf4a91dd8_d979_4381_8652_bda0342a765e);
+#[repr(C)]
+pub struct IItemsControl_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    pub ItemsSource: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    pub SetItemsSource: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    pub Items: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    ItemTemplate: usize,
+    SetItemTemplate: usize,
+    ItemTemplateSelector: usize,
+    SetItemTemplateSelector: usize,
+    ItemsPanel: usize,
+    SetItemsPanel: usize,
+    pub DisplayMemberPath: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut windows_sys::core::HSTRING,
+    ) -> windows_sys::core::HRESULT,
+    pub SetDisplayMemberPath: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        windows_sys::core::HSTRING,
+    ) -> windows_sys::core::HRESULT,
+    ItemContainerStyle: usize,
+    SetItemContainerStyle: usize,
+    ItemContainerStyleSelector: usize,
+    SetItemContainerStyleSelector: usize,
+    ItemContainerGenerator: usize,
+    ItemContainerTransitions: usize,
+    SetItemContainerTransitions: usize,
+    GroupStyle: usize,
+    GroupStyleSelector: usize,
+    SetGroupStyleSelector: usize,
+    pub IsGrouping:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+}
+pub const IID_IItemsControlStatics: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0x37dabd89_dcfb_45b8_9afe_874df097905e);
+#[repr(C)]
+pub struct IItemsControlStatics_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    pub ItemsSourceProperty: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    ItemTemplateProperty: usize,
+    ItemTemplateSelectorProperty: usize,
+    ItemsPanelProperty: usize,
+    DisplayMemberPathProperty: usize,
+    ItemContainerStyleProperty: usize,
+    ItemContainerStyleSelectorProperty: usize,
+    ItemContainerTransitionsProperty: usize,
+    GroupStyleSelectorProperty: usize,
+    IsGroupingProperty: usize,
+    GetItemsOwner: usize,
+    ItemsControlFromItemContainer: usize,
 }
 pub const IID_IKeyRoutedEventArgs: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0xd4cd3dfe_4079_42e9_a39a_3095d3f049c6);

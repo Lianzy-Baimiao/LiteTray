@@ -293,7 +293,10 @@ fn physical_bounds(rect: crate::xaml_abi::Rect, scale: f64, origin: POINT) -> Re
         || rect.Width <= 0.
         || rect.Height <= 0.
     {
-        return Err("XAML 点击几何信息无效".into());
+        return Err(format!(
+            "XAML 点击几何信息无效：x={}, y={}, width={}, height={}, scale={scale}",
+            rect.X, rect.Y, rect.Width, rect.Height
+        ));
     }
     let values = [
         origin.x as f64 + rect.X as f64 * scale,

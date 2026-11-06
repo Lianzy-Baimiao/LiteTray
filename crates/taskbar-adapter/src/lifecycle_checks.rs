@@ -706,6 +706,7 @@ pub fn run() -> Result<Vec<&'static str>, String> {
     checks.push("native_watchdog_resource_cleanup");
     checks.extend(crate::preview::self_test(owner.clone(), frame())?);
     checks.extend(crate::input_checks::run(owner.clone(), frame())?);
+    checks.extend(crate::tray_checks::run(owner.clone(), frame())?);
     // A competing writer changes the second clock after LiteTray starts. The
     // first clock is updated before the second reports a conflict; both must
     // leave the session while the competing writer's value survives.
