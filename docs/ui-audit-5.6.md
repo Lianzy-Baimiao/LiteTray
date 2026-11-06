@@ -66,3 +66,9 @@
 - 只读任务栏检查：主副屏显示原有已保存时钟内容，顶层／两屏捕获及几何错误均为空，托盘输入代理 `active=true`。后台工作集一次采样约 25.9 MiB。
 
 本地证据：`local/ui56-tests.txt`、`local/ui56-final-renders/`、`local/hidden-startup-packages/5.6-layout*.json`、`local/ui56-deployment.json`、`local/ui56-live-windows.json`、`local/ui56-live-taskbar.json`。旧宿主备份为 `local/LiteTray-ui55-before-ui56.exe`。
+
+## 5.6.1 导航焦点修正
+
+左侧导航不再调用 `DrawFocusRect` 绘制异或虚线框。鼠标点击保留选中背景和左侧标记；键盘焦点使用背景和文字强调，普通按钮仅在系统允许显示焦点提示时绘制焦点框。原生键盘导航检查与 Clippy 通过。
+
+2026-11-07 04:54:29 已后台切换为 5.6.1，宿主 PID 39036，Explorer PID 34284 未变化。实际发布包的独立隐藏进程首次打开验证通过；主副屏捕获及几何错误为空，托盘输入代理保持启用。证据：`local/ui561-deployment.json`、`local/ui561-live-taskbar.json`。

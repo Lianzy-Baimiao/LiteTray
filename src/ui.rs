@@ -44,7 +44,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.6";
+const UI_REVISION: &str = "开发版 5.6.1";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -2671,6 +2671,7 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                     || !GetPropW(item.hwndItem, wide("LiteTray.Selected").as_ptr()).is_null();
                 let primary = item.CtlID == SAVE as u32 || item.CtlID == 42;
                 let pressed = item.itemState & ODS_SELECTED != 0;
+                let keyboard_focus = item.itemState & (ODS_FOCUS | ODS_NOFOCUSRECT) == ODS_FOCUS;
                 let hover = !GetPropW(item.hwndItem, wide("LiteTray.Hover").as_ptr()).is_null();
                 let dpi = GetDpiForWindow(hwnd).max(96) as i32;
                 let s = |n: i32| n * dpi / 96;
@@ -2680,7 +2681,7 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                 design::fill(item.hDC, item.rcItem, base);
                 let color = if primary {
                     t.accent
-                } else if selected || pressed || hover {
+                } else if selected || pressed || hover || nav && keyboard_focus {
                     t.tint
                 } else if nav {
                     t.bg
@@ -2701,7 +2702,11 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                         icons[(item.CtlID - NAV as u32) as usize],
                         design::rect(s(17), 0, s(26), rect.bottom),
                         icon_font,
-                        if selected { t.accent } else { t.muted },
+                        if selected || keyboard_focus {
+                            t.accent
+                        } else {
+                            t.muted
+                        },
                         DT_LEFT | DT_VCENTER | DT_SINGLELINE,
                     );
                     DeleteObject(icon_font);
@@ -2726,7 +2731,7 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                         t.muted
                     } else if primary {
                         t.on_accent
-                    } else if selected {
+                    } else if selected || nav && keyboard_focus {
                         t.accent
                     } else {
                         t.text
@@ -2737,7 +2742,10 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                         DT_CENTER | DT_VCENTER | DT_SINGLELINE
                     },
                 );
-                if item.itemState & ODS_FOCUS != 0 {
+                // Navigation uses its fill and text color for keyboard focus.
+                // DrawFocusRect XORs a dotted outline, which becomes a colored
+                // hairline after a mouse click and fights the selected state.
+                if !nav && keyboard_focus {
                     let mut focus = item.rcItem;
                     InflateRect(&mut focus, -s(3), -s(3));
                     DrawFocusRect(item.hDC, &focus);
