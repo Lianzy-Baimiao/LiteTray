@@ -41,6 +41,9 @@ fn on_isolated_desktop(check: impl FnOnce() + Send + 'static) {
         );
         return;
     }
+    isolated_desktop_check(check);
+}
+fn isolated_desktop_check(check: impl FnOnce() + Send + 'static) {
     use windows_sys::Win32::System::StationsAndDesktops::*;
     unsafe {
         let name = wide(&format!(
@@ -64,6 +67,88 @@ fn on_isolated_desktop(check: impl FnOnce() + Send + 'static) {
         if let Err(error) = result {
             std::panic::resume_unwind(error);
         }
+    }
+}
+// Match Start-Process -WindowStyle Hidden, including the first ShowWindow's
+// STARTUPINFO override. CREATE_NO_WINDOW alone does not set that override.
+fn on_startup_desktop(show: SHOW_WINDOW_CMD, check: impl FnOnce() + Send + 'static) {
+    const CHILD: &str = "--skip=litetray-hidden-startup-child";
+    if std::env::args().any(|arg| arg == CHILD) {
+        unsafe {
+            let mut startup: STARTUPINFOW = std::mem::zeroed();
+            GetStartupInfoW(&mut startup);
+            assert_ne!(startup.dwFlags & STARTF_USESHOWWINDOW, 0);
+            assert_eq!(startup.wShowWindow, show as u16);
+        }
+        isolated_desktop_check(check);
+        return;
+    }
+    use windows_sys::Win32::{Security::SECURITY_ATTRIBUTES, Storage::FileSystem::*};
+    unsafe {
+        let name = thread::current().name().unwrap().to_owned();
+        let executable = std::env::current_exe().unwrap();
+        let log = std::env::temp_dir().join(format!(
+            "litetray-hidden-startup-{}-{}.log",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let security = SECURITY_ATTRIBUTES {
+            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: null_mut(),
+            bInheritHandle: 1,
+        };
+        let output = CreateFileW(
+            wide(&log.to_string_lossy()).as_ptr(),
+            GENERIC_WRITE,
+            FILE_SHARE_READ,
+            &security,
+            CREATE_ALWAYS,
+            FILE_ATTRIBUTE_TEMPORARY,
+            null_mut(),
+        );
+        assert_ne!(output, INVALID_HANDLE_VALUE);
+        let startup = STARTUPINFOW {
+            cb: size_of::<STARTUPINFOW>() as u32,
+            dwFlags: STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES,
+            wShowWindow: show as u16,
+            hStdOutput: output,
+            hStdError: output,
+            ..std::mem::zeroed()
+        };
+        let mut process: PROCESS_INFORMATION = std::mem::zeroed();
+        let mut command = wide(&format!(
+            "\"{}\" --exact {name} --test-threads=1 --nocapture {CHILD}",
+            executable.display()
+        ));
+        let created = CreateProcessW(
+            wide(&executable.to_string_lossy()).as_ptr(),
+            command.as_mut_ptr(),
+            null(),
+            null(),
+            1,
+            CREATE_NO_WINDOW,
+            null(),
+            null(),
+            &startup,
+            &mut process,
+        );
+        CloseHandle(output);
+        assert_ne!(created, 0, "cannot launch hidden startup test");
+        CloseHandle(process.hThread);
+        let completed = WaitForSingleObject(process.hProcess, 20_000) == WAIT_OBJECT_0;
+        if !completed {
+            TerminateProcess(process.hProcess, 1);
+            WaitForSingleObject(process.hProcess, 2_000);
+        }
+        let mut code = 1;
+        GetExitCodeProcess(process.hProcess, &mut code);
+        CloseHandle(process.hProcess);
+        let output = std::fs::read_to_string(&log).unwrap_or_default();
+        let _ = std::fs::remove_file(log);
+        assert!(
+            completed && code == 0,
+            "hidden startup test failed: {output}"
+        );
     }
 }
 unsafe fn dispatch_settings_requests() {
@@ -174,6 +259,77 @@ fn settings_open_first_click_survives_calendar_reentry() {
             "settings icon click was dropped while calendar view was updating"
         );
     });
+}
+unsafe fn startup_settings_case(from_calendar: bool) {
+    unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-settings-startup-unused.json"),
+        );
+        app.render();
+        let hwnd = app.hwnd;
+        let mut icon = null_mut();
+        if from_calendar {
+            app.prewarm_panels();
+            let popup = app.panel_cache[0];
+            app.panel = popup;
+            // Production opens the calendar with SetWindowPos. Do not pre-hide
+            // settings via ShowWindow: that would consume the startup override.
+            panel::open(
+                popup,
+                popup::Rect {
+                    left: 0,
+                    top: 0,
+                    right: 100,
+                    bottom: 40,
+                },
+                false,
+            );
+            assert_ne!(IsWindowVisible(popup), 0);
+            icon = GetDlgItem(GetDlgItem(popup, dashboard::ID as i32), 40);
+        }
+        assert_eq!(IsWindowVisible(hwnd), 0);
+        STATE.with(|s| *s.borrow_mut() = Some(app));
+        if from_calendar {
+            SendMessageW(icon, BM_CLICK, 0, 0);
+        } else {
+            SendMessageW(hwnd, WM_SHOW_SETTINGS, 0, 0);
+        }
+        dispatch_settings_requests();
+        wait_settings(hwnd);
+        let shown = IsWindowVisible(hwnd) != 0;
+        let restored = IsIconic(hwnd) == 0;
+        let requested = GetPropW(hwnd, wide("LiteTray.SettingsOpen.Requested").as_ptr()) as usize;
+        let completed = GetPropW(hwnd, wide("LiteTray.SettingsOpen.Completed").as_ptr()) as usize;
+        STATE.with(|s| {
+            let mut app = s.borrow_mut().take().unwrap();
+            app.close_panel();
+            DestroyWindow(hwnd);
+            app.release_resources();
+        });
+        RoUninitialize();
+        assert!(
+            shown && restored && requested == 1 && completed == 1,
+            "first request after process startup failed: visible={shown}, restored={restored}, requested={requested}, completed={completed}"
+        );
+    }
+}
+#[test]
+fn settings_open_first_click_after_hidden_process_startup() {
+    on_startup_desktop(SW_HIDE, || unsafe { startup_settings_case(true) });
+}
+#[test]
+fn settings_open_first_request_after_hidden_process_startup() {
+    on_startup_desktop(SW_HIDE, || unsafe { startup_settings_case(false) });
+}
+#[test]
+fn settings_open_first_click_after_normal_process_startup() {
+    on_startup_desktop(SW_SHOWNORMAL, || unsafe { startup_settings_case(true) });
+}
+#[test]
+fn settings_open_first_request_after_minimized_process_startup() {
+    on_startup_desktop(SW_SHOWMINIMIZED, || unsafe { startup_settings_case(false) });
 }
 #[test]
 fn settings_open_first_click_from_hidden_window() {

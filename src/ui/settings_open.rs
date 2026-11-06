@@ -66,7 +66,15 @@ pub(super) unsafe fn message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Opti
         let foreground = GetForegroundWindow();
         let minimized = IsIconic(hwnd) != 0;
         ShowWindow(hwnd, if minimized { SW_RESTORE } else { SW_SHOW });
-        let activated = SetForegroundWindow(hwnd) != 0;
+        // On a process's first ShowWindow, Windows can replace our command
+        // with STARTUPINFO.wShowWindow (e.g. Start-Process -WindowStyle Hidden).
+        // An explicit user open must still show a usable window on that click.
+        let show_retried = IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0;
+        if show_retried && IsWindow(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
+        let activated =
+            IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) == 0 && SetForegroundWindow(hwnd) != 0;
         if IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) == 0 {
             increment(hwnd, "LiteTray.SettingsOpen.Completed");
             // Retain the source's foreground entitlement through activation.
@@ -89,6 +97,11 @@ pub(super) unsafe fn message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Opti
         );
         property(hwnd, "LiteTray.SettingsOpen.Activated", activated as usize);
         property(hwnd, "LiteTray.SettingsOpen.Restored", minimized as usize);
+        property(
+            hwnd,
+            "LiteTray.SettingsOpen.ShowRetried",
+            show_retried as usize,
+        );
         property(
             hwnd,
             "LiteTray.SettingsOpen.Micros",

@@ -44,7 +44,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.4.1";
+const UI_REVISION: &str = "开发版 5.4.2";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -360,8 +360,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             } else if mode == "--calendar" {
                 PostMessageW(hwnd, WM_SHOW_PANEL, 0, 0);
             } else {
-                ShowWindow(hwnd, SW_SHOW);
-                UpdateWindow(hwnd);
+                PostMessageW(hwnd, WM_SHOW_SETTINGS, 0, 0);
             }
         }
         SetTimer(hwnd, 1, 1000, None);

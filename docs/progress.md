@@ -299,3 +299,21 @@ Release 复现了父级已附加但时钟尚未完成布局的竞争；等待条
 03:20 已部署 5.4.1。两个 DLL 哈希与 5.4 完全相同，因此在现有 dist/LiteTray-ui54-inline 目录只更新宿主与文档，旧 EXE 备份到 local/LiteTray-ui54-before-settings-open.exe；另有完整包 dist/LiteTray-ui541-settings-open。宿主 PID 31380 → 42440，任务栏 Explorer 保持 PID 34284、启动于 03:02:21，文件管理器 Explorer 12816 与 QQ 20412 也未重启。主副屏托盘图标顺序、宽度、右侧和垂直对齐通过，QQ 钩子 ready=true。只读检查确认实际窗口标题为 5.4.1，设置与日历保持隐藏，未模拟正式实例的设置点击来抢占用户前台。
 
 本地证据：local/settings-open-before.log、local/settings-open-queued.log、local/settings-open-restored.log、local/settings-open-handoff-before.log、local/settings-open-calendar-before.log、local/settings-open-regression.log、local/settings-open-tests-final.log、local/settings-open-clippy-final.log、local/settings-open-deployment.json、local/settings-open-live.json、local/settings-open-window-state.json。
+
+## 2026-11-07 开发版 5.4.2：隐藏启动覆盖首次设置显示
+
+用户反馈 5.4.1 第一次点击仍打不开。03:27 读取正式实例的窗口属性：Requested=1、Completed=0、Activated=1，但设置窗口 visible=false。命令已经抵达；5.4.1 的测试没有覆盖真实隐藏启动。
+
+根因是发布时使用 Start-Process -WindowStyle Hidden。Windows 会用 STARTUPINFO 的 SW_HIDE 覆盖进程第一次 ShowWindow 的 SW_SHOW；日历通过 SetWindowPos 显示，不会提前消耗这个覆盖。旧测试提前 ShowWindow(SW_HIDE) 或显示弹层，绕过了真正的首次调用；同一进程重复 100 次也无法覆盖新的进程启动条件。
+
+先增加真实 STARTF_USESHOWWINDOW 的全新子进程测试，不提前隐藏设置。命令 `tools/Invoke-Cargo.ps1 -CargoArguments @('test','--bin','LiteTray','process_startup','--locked','--','--test-threads=1','--nocapture')` 修复前：隐藏启动的齿轮点击、直接打开都失败（visible=false、Requested=1、Completed=0），普通启动通过。直接打开的最小复现排除了日历转发与收起行为。
+
+修复后首次显示立即检查可见性及最小化状态；若启动参数覆盖了显示，在同一请求内调用 SW_RESTORE。确认窗口可见且未最小化后再申请前台。直接启动设置也走统一入口。保留 ShowRetried 窗口属性，便于区分首次显示覆盖。没有增加定时重试、启动延迟或网络操作。
+
+新增 4 项进程启动回归（隐藏启动齿轮、隐藏启动直接打开、普通启动对照、最小化启动）。设置相关 11 项通过，完整测试 128 项通过、4 项原有测试忽略，Clippy -D warnings 通过。子进程仅使用非输入桌面，不调用 SwitchDesktop。
+
+另外使用实际发布 EXE 在独立非输入桌面和独立测试配置中冷启动。5.4.1 齿轮入口再次失败；5.4.2 齿轮、托盘设置命令、直接打开三个入口分别在全新进程中一次成功：Requested=Completed=1，visible=true，minimized=false，ShowRetried=1，内部耗时约 35–43ms。测试包配置关闭任务栏接入和天气；没有操作正式实例的设置入口或用户鼠标键盘。
+
+证据：local/settings-hidden-startup-before.log、settings-hidden-startup-minimized.log、settings-hidden-startup-fixed.log、settings-hidden-startup-tests.log、settings-hidden-startup-clippy.log、settings-hidden-startup-build.log；实际包对照脚本 local/Check-HiddenStartupPackage.ps1，结果 local/hidden-startup-packages/5.4.1-before.json 与 5.4.2-after.json。
+
+03:35 已切换至 5.4.2，正式宿主 PID 42440 → 44300，保留原目录 dist/LiteTray-ui54-inline；旧 EXE 备份 local/LiteTray-ui541-before-hidden-startup.exe，完整包 dist/LiteTray-ui542-hidden-startup。EXE SHA256 E85C86E4D6909F831AF5539F62F3C8CE0B8CE85F47B9412ABA63E835CA3C3154。两份任务栏／QQ DLL 哈希保持不变，Explorer 34284、文件管理器 Explorer 12816、QQ 20412 启动时间均未变化。正式窗口标题确认为 5.4.2；设置、日历保持隐藏，打开计数为 0，保留给用户的真实第一次点击。只读任务栏检查主副屏 error/geometry_error 均为空，托盘输入仍 active=true。部署与现场记录见 local/settings-hidden-startup-deployment.json、settings-hidden-startup-live-before.json、settings-hidden-startup-live-after.json、settings-hidden-startup-taskbar.json。
