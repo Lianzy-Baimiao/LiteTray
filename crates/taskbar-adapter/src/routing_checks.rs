@@ -30,6 +30,7 @@ const MARKUP: &str = r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xam
   <ContentControl x:Name="MainStack" DataContext="System model" Content="System" Visibility="Collapsed"/>
   <ContentControl x:Name="NonActivatableStack" DataContext="Privacy model" Content="Privacy" Visibility="Collapsed"/>
   <ContentControl x:Name="ControlCenterButton" DataContext="Control center model" Content="Control center" Visibility="Collapsed"/>
+  <Grid x:Name="UnusedSurface" Height="0"/>
   <ContentControl x:Name="NotificationCenterButton" MinHeight="80">
     <Grid><StackPanel x:Name="ClockText" Width="200" Height="60">
       <TextBlock x:Name="TimeInnerTextBlock" Text="Original time" Width="200" Height="30"/>
@@ -84,6 +85,16 @@ fn set_context(node: &Object, value: &str) -> Result<(), String> {
                 boxed_text(value)?.raw(),
             ),
             "Check DataContext",
+        )
+    }
+}
+fn rename(node: &Object, value: &str) -> Result<(), String> {
+    let node = node.query(&IID_IFrameworkElement)?;
+    let value = crate::xaml::StringHandle::new(value)?;
+    unsafe {
+        check(
+            (node.table::<IFrameworkElement_Vtbl>().SetName)(node.raw(), value.0),
+            "Rename route fixture",
         )
     }
 }
@@ -267,6 +278,19 @@ pub(crate) fn run(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, Strin
     )?;
     checks.push("routing_tray_only_watchdog_commands_and_restore");
 
+    let plan = Plan::build(&routes, &["B".into()], options())?;
+    let mut session = routing::prepare(&plan, &views, owner.clone(), now)?;
+    session.start(frame.clone(), now)?;
+    rename(&target_control, "ReplacedControlCenterButton")?;
+    require(
+        session.poll(now + 1, true).is_err()
+            && session.state() == State::Closed
+            && text(&time)? == "Original time",
+        "runtime replacement stops and restores the old lease",
+    )?;
+    rename(&target_control, "ControlCenterButton")?;
+    checks.push("routing_runtime_surface_replacement_stops_and_restores");
+
     // A conflict after capture fails the whole start and rolls back clocks
     // and models already written, while preserving the competing visibility.
     let plan = Plan::build(&routes, &["B".into()], options())?;
@@ -303,7 +327,280 @@ pub(crate) fn run(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, Strin
         "empty session cannot activate",
     )?;
     checks.push("routing_empty_session_cannot_activate");
+    checks.extend(runtime_guard_checks(owner.clone(), frame.clone())?);
+    checks.extend(crate::window_guard::self_test()?);
     checks.extend(visibility_checks(owner, frame)?);
+    Ok(checks)
+}
+struct GuardFixture {
+    source_view: View,
+    target_view: View,
+    routes: [Route; 2],
+    source: ModelFixture,
+    target: ModelFixture,
+}
+impl GuardFixture {
+    fn new(owner: Owner, frame: Frame) -> Result<Self, String> {
+        let source = ModelFixture::new(owner.clone(), frame.clone(), MARKUP)?;
+        let target = ModelFixture::new(owner, frame, MARKUP)?;
+        let source_view = View::from_panel(&source.find("SystemTrayFrameGrid")?)?;
+        let target_view = View::from_panel(&target.find("SystemTrayFrameGrid")?)?;
+        let routes = [route(&source, false, "A"), route(&target, true, "B")];
+        Ok(Self {
+            source_view,
+            target_view,
+            routes,
+            source,
+            target,
+        })
+    }
+    fn session(&self, owner: Owner) -> Result<Session, String> {
+        let plan = Plan::build(&self.routes, &["B".into()], options())?;
+        routing::prepare(
+            &plan,
+            &[
+                BoundView {
+                    route: self.routes[0].clone(),
+                    view: &self.source_view,
+                },
+                BoundView {
+                    route: self.routes[1].clone(),
+                    view: &self.target_view,
+                },
+            ],
+            owner,
+            unsafe { GetTickCount64() },
+        )
+    }
+}
+fn set_content(node: &Object, value: &Object) -> Result<(), String> {
+    let node = node.query(&IID_IContentControl)?;
+    unsafe {
+        check(
+            (node.table::<IContentControl_Vtbl>().SetContent)(node.raw(), value.raw()),
+            "Set guard fixture Content",
+        )
+    }
+}
+fn runtime_guard_checks(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, String> {
+    let mut checks = Vec::new();
+    {
+        use windows_core::{IInspectable, IUnknown, Interface};
+        let fixture = ModelFixture::new(
+            owner.clone(),
+            frame.clone(),
+            r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"><StackPanel x:Name="SystemTrayFrameGrid"><ItemsControl x:Name="NotificationAreaIcons"><x:String>Original</x:String></ItemsControl></StackPanel></Grid>"#,
+        )?;
+        let view = View::from_panel(&fixture.find("SystemTrayFrameGrid")?)?;
+        let guard = view.lease_guard(
+            &[litetray_adapter_protocol::topology::Role::NotificationIcons],
+            false,
+        )?;
+        let items = fixture
+            .find("NotificationAreaIcons")?
+            .query(&IID_IItemsControl)?;
+        let mut raw = std::ptr::null_mut();
+        unsafe {
+            check(
+                (items.table::<IItemsControl_Vtbl>().Items)(items.raw(), &mut raw),
+                "Guard test Items",
+            )?;
+        }
+        let object = unsafe { Object::owned(raw) }?;
+        let object_raw = object.raw();
+        let vector: windows_collections::IVector<IInspectable> =
+            unsafe { IUnknown::from_raw_borrowed(&object_raw) }
+                .ok_or("Missing items")?
+                .cast()
+                .map_err(|e| e.to_string())?;
+        let value = boxed_text("Added icon model")?;
+        let value_raw = value.raw();
+        let inspectable: IInspectable = unsafe { IUnknown::from_raw_borrowed(&value_raw) }
+            .ok_or("Missing item")?
+            .cast()
+            .map_err(|e| e.to_string())?;
+        vector.Append(&inspectable).map_err(|e| e.to_string())?;
+        fixture.layout()?;
+        guard.validate()?;
+        require(
+            vector.Size().map_err(|e| e.to_string())? == 2,
+            "native item added",
+        )?;
+        vector.RemoveAt(0).map_err(|e| e.to_string())?;
+        fixture.layout()?;
+        guard.validate()?;
+        checks.push("guard_native_collection_add_remove_preserves_session_structure");
+    }
+    let fixture = GuardFixture::new(owner.clone(), frame.clone())?;
+    let control = fixture.target.find("ControlCenterButton")?;
+    let time = fixture.target.find("TimeInnerTextBlock")?;
+    let mut session = fixture.session(owner.clone())?;
+    rename(&control, "ChangedBeforeStart")?;
+    require(
+        session
+            .start(frame.clone(), unsafe { GetTickCount64() })
+            .is_err()
+            && session.state() == State::Closed
+            && text(&time)? == "Original time"
+            && !visible(&control)?,
+        "stale structure rejected before first write",
+    )?;
+    rename(&control, "ControlCenterButton")?;
+    checks.push("guard_structure_change_before_start_prevents_writes");
+
+    let mut session = fixture.session(owner.clone())?;
+    session.start(frame.clone(), unsafe { GetTickCount64() })?;
+    // Real template child replacement below a model surface must not kill a
+    // clock lease; collection/model refresh can naturally generate new visuals.
+    let bell = fixture.target.find("Bell")?;
+    set_content(
+        &bell,
+        &crate::clock::load(
+            r#"<StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"><TextBlock Text="New"/><TextBlock Text="notification content"/></StackPanel>"#,
+        )?,
+    )?;
+    fixture.target.layout()?;
+    session.poll(unsafe { GetTickCount64() }, true)?;
+    require(
+        session.state() == State::Active && text(&time)? == frame.text.top,
+        "unrelated generated visual changes do not invalidate guard",
+    )?;
+    session.stop()?;
+    checks.push("guard_unrelated_template_children_can_change");
+
+    let fixture = GuardFixture::new(owner.clone(), frame.clone())?;
+    let time = fixture.target.find("TimeInnerTextBlock")?;
+    let source_control = fixture.source.find("ControlCenterButton")?;
+    let session = fixture.session(owner.clone())?;
+    let watchdog = Watchdog::attach(session)?;
+    watchdog.start(frame.clone())?;
+    rename(&source_control, "ChangedSource")?;
+    let command = serde_json::to_vec(&Command {
+        version: VERSION,
+        owner: owner.clone(),
+        sequence: 1,
+        change: Change::Heartbeat,
+    })
+    .map_err(|e| e.to_string())?;
+    require(
+        watchdog.receive(&command).is_err()
+            && watchdog.state() == State::Closed
+            && text(&time)? == "Original time",
+        "source invalidation rejects heartbeat and restores selected target",
+    )?;
+    rename(&source_control, "ControlCenterButton")?;
+    checks.push("guard_source_change_rejects_heartbeat_and_restores");
+
+    let mut session = fixture.session(owner.clone())?;
+    session.start(frame.clone(), unsafe { GetTickCount64() })?;
+    rename(
+        &fixture.target.find("UnusedSurface")?,
+        "ControlCenterButton",
+    )?;
+    require(
+        session.poll(unsafe { GetTickCount64() }, true).is_err()
+            && session.state() == State::Closed
+            && text(&time)? == "Original time",
+        "new duplicate role invalidates active target even when old object remains",
+    )?;
+    checks.push("guard_new_duplicate_role_invalidates_active_session");
+
+    let fixture = GuardFixture::new(owner.clone(), frame.clone())?;
+    let session = fixture.session(owner.clone())?;
+    let watchdog = Watchdog::attach(session)?;
+    let published = std::rc::Rc::new(std::cell::Cell::new(0));
+    let count = published.clone();
+    watchdog.prepare_inputs(
+        vec![
+            fixture
+                .target
+                .input("ClockText", fixture.routes[1].window)?,
+        ],
+        move |_| {
+            count.set(count.get() + 1);
+            true
+        },
+    )?;
+    watchdog.start(frame.clone())?;
+    fixture.target.layout()?;
+    let probe = watchdog.input_probe(fixture.routes[1].window)?;
+    require(
+        probe.invoke()? && published.get() == 1,
+        "valid input still publishes",
+    )?;
+    rename(
+        &fixture.source.find("ControlCenterButton")?,
+        "SourceChangedBeforeClick",
+    )?;
+    require(
+        !probe.invoke()?
+            && published.get() == 1
+            && watchdog.state() == State::Closed
+            && text(&fixture.target.find("TimeInnerTextBlock")?)? == "Original time",
+        "input-time guard stops stale session before publishing and preserves default input",
+    )?;
+    checks.push("guard_stale_input_stops_before_publish");
+
+    let fixture = GuardFixture::new(owner.clone(), frame.clone())?;
+    let old_time = fixture.target.find("TimeInnerTextBlock")?;
+    let mut session = fixture.session(owner.clone())?;
+    session.start(frame.clone(), unsafe { GetTickCount64() })?;
+    let replacement = crate::clock::load(
+        r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"><StackPanel x:Name="ClockText" Width="200" Height="60"><TextBlock x:Name="TimeInnerTextBlock" Text="Replacement time" Width="200" Height="30"/><TextBlock x:Name="DateInnerTextBlock" Text="Replacement date" Width="200" Height="30"/></StackPanel></Grid>"#,
+    )?;
+    set_content(
+        &fixture.target.find("NotificationCenterButton")?,
+        &replacement,
+    )?;
+    fixture.target.layout()?;
+    require(
+        session.poll(unsafe { GetTickCount64() }, true).is_err()
+            && session.state() == State::Closed
+            && text(&old_time)? == "Original time",
+        "same-name replacement stops old session and restores retained original",
+    )?;
+    let fresh = View::from_panel(&fixture.target.find("SystemTrayFrameGrid")?)?;
+    let mut new_session = Session::new(owner.clone(), vec![fresh.clock_target(1)?], unsafe {
+        GetTickCount64()
+    })?;
+    new_session.start(frame.clone(), unsafe { GetTickCount64() })?;
+    new_session.stop()?;
+    let root = replacement.query(&IID_IFrameworkElement)?;
+    let name = crate::xaml::StringHandle::new("TimeInnerTextBlock")?;
+    let mut node = std::ptr::null_mut();
+    unsafe {
+        check(
+            (root.table::<IFrameworkElement_Vtbl>().FindName)(root.raw(), name.0, &mut node),
+            "Replacement clock lookup",
+        )?;
+    }
+    require(
+        text(&unsafe { Object::owned(node) }?)? == "Replacement time",
+        "fresh session restores new object's own value",
+    )?;
+    checks.push("guard_same_name_replacement_requires_fresh_originals");
+
+    let fixture = GuardFixture::new(owner.clone(), frame.clone())?;
+    let time = fixture.target.find("TimeInnerTextBlock")?;
+    let session = fixture.session(owner)?;
+    let watchdog = Watchdog::attach(session)?;
+    watchdog.start(frame)?;
+    fixture.target.detach()?;
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+            watchdog.endpoint().ok_or("Missing watchdog")?,
+            windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER,
+            1,
+            0,
+        );
+    }
+    require(
+        watchdog.state() == State::Closed
+            && watchdog.error().is_some()
+            && text(&time)? == "Original time",
+        "watchdog timer restores detached target root",
+    )?;
+    checks.push("guard_native_watchdog_restores_detached_root");
     Ok(checks)
 }
 fn visibility_checks(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, String> {

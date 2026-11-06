@@ -191,13 +191,15 @@ impl Watchdog {
                 if !unsafe { context.alive() } {
                     return false;
                 }
-                let allowed = context.session.try_borrow().ok().is_some_and(|session| {
-                    session
-                        .as_ref()
-                        .is_some_and(|s| s.accepts_input(unsafe { GetTickCount64() }))
-                });
-                // Drop the session borrow before publishing can reenter shutdown.
-                allowed && publish(event)
+                // Take Session out while COM validation can pump messages.
+                // Stale controls stop and detach before anything is published.
+                let allowed = context
+                    .with_session(|session| session.validate_input(unsafe { GetTickCount64() }));
+                if let Err(error) = allowed {
+                    *context.error.borrow_mut() = Some(error);
+                    return false;
+                }
+                publish(event)
             })
         })
     }

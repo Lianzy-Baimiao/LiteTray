@@ -41,7 +41,7 @@ https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/host-standard-c
 
 每个已写属性保存实际 local value，后续更新和恢复先核对属性归属；其他组件新写的值、尺寸或绑定会被保留。检测到冲突会停止会话。相同可见文本上的新绑定也视为外部写入。无法区分外部组件再次写入完全相同的普通值，这不构成通用跨插件锁。
 
-隔离检查目前覆盖 90 个场景，包含两组真实 XAML 控件、配置更新、乱序/其他会话消息、超时、退出、窗口消失、外部写入冲突，以及实际 WM_COPYDATA 的包边界、跨线程样式更新、跨进程文字更新和宿主进程退出。隐藏 XAML Island 检查输入事件订阅/解除、事件发布失败保留默认行为、坐标和委托释放；独立 island 再验证输入与会话统一停止、回滚、外部冲突、回调重入和失联路径，并验证下述托盘模型与范围可见性事务。实等 15 秒验证原生计时器自动恢复；12 次完整启停通过原生消息停止，再比较进程句柄数与 USER 对象数，确认该检查场景没有累积原生资源。此结果不代表长期运行或 Explorer 的内存增量测量。
+隔离检查目前覆盖 101 个场景，包含两组真实 XAML 控件、配置更新、乱序/其他会话消息、超时、退出、窗口消失、外部写入冲突，以及实际 WM_COPYDATA 的包边界、跨线程样式更新、跨进程文字更新和宿主进程退出。隐藏 XAML Island 检查输入事件订阅/解除、事件发布失败保留默认行为、坐标和委托释放；独立 island 再验证输入与会话统一停止、回滚、外部冲突、回调重入和失联路径，并验证下述托盘模型与范围可见性事务。实等 15 秒验证原生计时器自动恢复；12 次完整启停通过原生消息停止，再比较进程句柄数与 USER 对象数，确认该检查场景没有累积原生资源。此结果不代表长期运行或 Explorer 的内存增量测量。
 
 跨进程场景启动同一 LiteTray.exe 的内部测试子进程，创建独立 HWND 并发送一次更新。子进程核对目标为同路径 LiteTray 的 watchdog 窗口，父进程验证实际 XAML 文本后只结束自己创建的测试子进程，再等待原生计时器恢复。测试有有界输入、响应和进程存活时限，不读取用户配置、不发现任务栏、不安装 hook。
 
@@ -100,10 +100,20 @@ View 保留节点引用和到 XamlRoot 的父级链，准备时钟与模型时�
 
 协议 `routing::Plan::build` 将已解析的桌面设备列表和功能选项转换为单次窗口路由计划。路由需唯一，最多 16 个选定区域；跨进程/跨线程的模型共享被拒绝。模型来源是唯一主任务栏，可位于选定范围之外；时钟与可见性只作用于计划内目标。该计划是本地生成的输出结构，不是新增的远程启动命令。
 
-适配层 `routing::prepare` 从显式 BoundView 中捕获时钟、模型和可见性，核对当前 PID/TID、原生窗口和完整路由记录。BoundView 的调用方必须已经验证窗口与 XamlRoot 的关联及当前显示器映射；函数不会根据 HWND 推测 root，也不发现或接入 Explorer。捕获本身不写属性；所持窗口、root 及模块必须覆盖整个会话生命周期。
+适配层 `routing::prepare` 从显式 BoundView 中捕获时钟、模型和可见性，核对当前 PID/TID、原生窗口和完整路由记录。BoundView 的调用方必须已经验证窗口与 XamlRoot 的关联及当前显示器映射；函数不会根据 HWND 推测 root，也不发现或接入 Explorer。捕获本身不写 XAML 显示属性；所持窗口、root 及模块必须覆盖整个会话生命周期。
 
 `VisibilityLease` 仅修改直接托盘模型区域的 Visibility，禁止通知按钮和时钟区域。依赖属性入口从 winmd 生成 IUIElementStatics.VisibilityProperty。枚举值由新建的临时 XAML Grid 读取原生装箱对象；判等仅接受标准参数化 `IReference<Windows.UI.Xaml.Visibility>` 的精确签名，不把任意 OtherType 当成整数。所有目标先捕获、全部原值核对后写入；Session 负责部分失败整组回滚与 poll 中的归属冲突停用。
 
 Object::clone 使用 AddRef 保留当前接口指针，不借由 QueryInterface(IUnknown) 改变接口。Property::capture 另将传入属性规范化为 IDependencyProperty，再调用 GetBindingExpression/ReadLocalValue。回归用单控件验证从不同 COM 接口身份传入的依赖属性仍能正确捕获、写入和恢复。
 
 Session 的 Prepared 状态可以暂时没有时钟，`start_tray` 要求至少有模型或可见性事务；普通 `start(frame)` 仍要求时钟目标。独立托盘拒绝时钟更新，拒绝的命令不推进序号或续租。Watchdog 的宿主句柄和定时器保持同一生命周期；仅可见性会话也会在过期时恢复原绑定。真实系统区域的动态可见性、菜单和交互仍需 Explorer 实机适配验收。
+
+## 活跃会话身份检查
+
+`View::lease_guard` 在准备时重新校验快照，捕获所用直接区域、内部列表及其至 root 的父级关系；时钟另保存布局子树。LeaseGuard 保留真正的 IXamlRoot 身份，不只比较 Content 指针；每次检查核对缩放、区域的唯一性、节点名称/类型及父级。条目内部生成的图标、无关通知内容不纳入整树身份比较；时钟输入容器内的节点数量和顺序仍严格核对，最多 80 节点/40 层。
+
+`WindowGuard` 使用 SetPropW/GetPropW 的独立令牌识别当前窗口生命周期，限定当前 PID/TID，并读取 MonitorFromWindow/GetMonitorInfoW/GetDpiForWindow 的快照。仅在标记仍匹配时 RemovePropW；释放与准备失败不覆盖别人后来写入的属性。准备阶段因此会添加自己的窗口标记，但不会改动 XAML 显示属性。这个标记不是针对恶意同用户进程的身份认证，也不能证明窗口与 XAML 根对应。
+
+Session 启动和有效命令批次前后、poll、输入发布前核对所持 guard；来源窗口和来源模型区域也检查。拒绝的旧结构不续租，统一停止并在恢复成功后释放 guard。对于显式 Stop、已处于 Restoring 的重试，不要求旧树可访问后才尝试恢复保留的原属性。Watchdog 输入回调使用 with_session 临时取走状态来执行 COM 检查，重入消息不能再次访问同一 Session；失败保留默认输入，停止后的原生委托不再发布。
+
+当前仅验证本进程的窗口、标准 XAML 控件和隐藏 island。窗口销毁已实测；没有强迫 Windows 重用同一个 HWND，也没有真实硬件插拔/混合 DPI 验证。显示器快照不包含完整 DisplayConfig 物理目标映射，宿主仍须处理拓扑通知并重建范围计划。检查允许正常模型条目变化，不会自动建立新会话；生产重连和模块卸载仍待完成。

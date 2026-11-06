@@ -19,7 +19,81 @@ pub(crate) struct View {
     objects: Vec<Object>,
     pub report: Report,
 }
+/// Identity snapshot retained by an active session. Model collection changes
+/// inside a known surface are allowed; replacing the surface or moving it to
+/// another root invalidates the lease before the next native write.
+pub(crate) struct LeaseGuard {
+    panel: Object,
+    surfaces: Vec<(Role, Object)>,
+    root: Object,
+    scale: f64,
+    nodes: Vec<GuardNode>,
+    clock_tree: Vec<GuardNode>,
+}
+struct GuardNode {
+    object: Object,
+    parent: Option<Object>,
+    name: String,
+    class_name: String,
+}
 impl View {
+    pub(crate) fn lease_guard(&self, roles: &[Role], clock: bool) -> Result<LeaseGuard, String> {
+        let fresh = self.revalidate()?;
+        let selection = fresh.selection()?;
+        let mut indices = vec![0usize];
+        let mut guarded_roles = roles.to_vec();
+        if clock {
+            let role = selection.clock.as_ref().ok_or("时钟检查目标缺失")?.surface;
+            if !guarded_roles.contains(&role) {
+                guarded_roles.push(role);
+            }
+        }
+        let mut surfaces = Vec::new();
+        for role in guarded_roles {
+            let surface = surface(selection, role)?;
+            indices.push(surface.node);
+            indices.extend(surface.items);
+            surfaces.push((role, fresh.objects[surface.node].clone()));
+        }
+        if clock {
+            let clock = selection.clock.as_ref().ok_or("时钟检查目标缺失")?;
+            indices.extend([clock.time, clock.date, clock.container]);
+        }
+        indices.sort_unstable();
+        indices.dedup();
+        let mut nodes = Vec::new();
+        for index in indices {
+            for object in ancestry(&fresh.objects[index])? {
+                if !nodes
+                    .iter()
+                    .any(|n: &GuardNode| n.object.raw() == object.raw())
+                {
+                    nodes.push(GuardNode::capture(&object)?);
+                }
+            }
+        }
+        let clock_tree = if clock {
+            clock_nodes(
+                &fresh.objects[selection
+                    .clock
+                    .as_ref()
+                    .ok_or("时钟检查目标缺失")?
+                    .container],
+            )?
+        } else {
+            vec![]
+        };
+        let root = xaml::root(&fresh.panel)?;
+        let scale = root_scale(&root)?;
+        Ok(LeaseGuard {
+            panel: fresh.panel.clone(),
+            surfaces,
+            root,
+            scale,
+            nodes,
+            clock_tree,
+        })
+    }
     /// Only this entry is used for a native TaskbarHost root. It deliberately
     /// has no fallback to recursive substring/name matching.
     pub(crate) fn discover(root: &Object) -> Result<Self, String> {
@@ -204,6 +278,128 @@ impl View {
         }
         Ok(pairs)
     }
+}
+impl LeaseGuard {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        // Recheck retained edges, not every generated icon/item descendant.
+        // Text, size and owned visibility are deliberately not structural.
+        let direct = children(&self.panel)?
+            .into_iter()
+            .map(|object| Ok((name(&object)?, object)))
+            .collect::<Result<Vec<_>, String>>()?;
+        for (role, object) in &self.surfaces {
+            let matches = direct
+                .iter()
+                .filter(|(name, _)| name == role.name())
+                .collect::<Vec<_>>();
+            if matches.len() != 1 || !same_object(object, &matches[0].1)? {
+                return Err("托盘区域已替换或出现重复角色".into());
+            }
+        }
+        for node in &self.nodes {
+            if !same_object(&xaml::root(&node.object)?, &self.root)? {
+                return Err("托盘控件已脱离原 XamlRoot".into());
+            }
+            node.validate()?;
+        }
+        if root_scale(&self.root)? != self.scale {
+            return Err("XAML 缩放已变化，需要重新识别".into());
+        }
+        if let Some(container) = self.clock_tree.first() {
+            let current = clock_nodes(&container.object)?;
+            if current.len() != self.clock_tree.len() {
+                return Err("时钟输入区域结构已变化".into());
+            }
+            for (old, new) in self.clock_tree.iter().zip(current) {
+                if !same_object(&old.object, &new.object)? {
+                    return Err("时钟输入区域控件已替换".into());
+                }
+                old.validate()?;
+            }
+        }
+        Ok(())
+    }
+}
+fn root_scale(root: &Object) -> Result<f64, String> {
+    let root = root.query(&IID_IXamlRoot)?;
+    let mut scale = 0.;
+    unsafe {
+        check(
+            (root.table::<IXamlRoot_Vtbl>().RasterizationScale)(root.raw(), &mut scale),
+            "Guard XAML scale",
+        )?;
+    }
+    if !scale.is_finite() || !(0.5..=8.).contains(&scale) {
+        return Err("XAML 缩放不可用".into());
+    }
+    Ok(scale)
+}
+impl GuardNode {
+    fn capture(object: &Object) -> Result<Self, String> {
+        Ok(Self {
+            object: object.query(&IID_IUnknown)?,
+            parent: parent(object)?,
+            name: name(object)?,
+            class_name: object.class_name()?,
+        })
+    }
+    fn validate(&self) -> Result<(), String> {
+        if name(&self.object)? != self.name || self.object.class_name()? != self.class_name {
+            return Err("托盘控件名称或类型已变化".into());
+        }
+        let current = parent(&self.object)?;
+        let same = match (&self.parent, &current) {
+            (None, None) => true,
+            (Some(a), Some(b)) => same_object(a, b)?,
+            _ => false,
+        };
+        if !same {
+            return Err("托盘控件父级已变化".into());
+        }
+        Ok(())
+    }
+}
+fn parent(object: &Object) -> Result<Option<Object>, String> {
+    let helper = factory(
+        "Windows.UI.Xaml.Media.VisualTreeHelper",
+        &IID_IVisualTreeHelperStatics,
+    )?;
+    let node = object.query(&IID_IDependencyObject)?;
+    let mut value = null_mut();
+    unsafe {
+        check(
+            (helper.table::<IVisualTreeHelperStatics_Vtbl>().GetParent)(
+                helper.raw(),
+                node.raw(),
+                &mut value,
+            ),
+            "Guard parent",
+        )?;
+        if value.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(Object::owned(value)?))
+        }
+    }
+}
+fn clock_nodes(container: &Object) -> Result<Vec<GuardNode>, String> {
+    let mut nodes: Vec<GuardNode> = Vec::new();
+    let mut pending = vec![(container.clone(), 0)];
+    while let Some((node, depth)) = pending.pop() {
+        if nodes.len() >= 80 || depth > 40 {
+            return Err("时钟区域结构超限".into());
+        }
+        for old in &nodes {
+            if same_object(&old.object, &node)? {
+                return Err("时钟区域重复控件".into());
+            }
+        }
+        nodes.push(GuardNode::capture(&node)?);
+        for child in children(&node)?.into_iter().rev() {
+            pending.push((child, depth + 1));
+        }
+    }
+    Ok(nodes)
 }
 fn ancestry(panel: &Object) -> Result<Vec<Object>, String> {
     let root = xaml::root_content(panel)?;

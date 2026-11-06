@@ -56,8 +56,38 @@ pub(crate) fn prepare(
     let mut clocks = Vec::new();
     let mut pairs = Vec::new();
     let mut visibility = Vec::new();
+    let mut guards = Vec::new();
+    let mut windows = Vec::new();
+    if let Some(source) = source {
+        let mut roles = Vec::new();
+        for role in plan.targets.iter().flat_map(|t| &t.models) {
+            if !roles.contains(role) {
+                roles.push(*role);
+            }
+        }
+        guards.push(source.lease_guard(&roles, false)?);
+        windows.push(crate::window_guard::WindowGuard::capture(
+            plan.source.as_ref().ok_or("缺少来源窗口")?.window as HWND,
+        )?);
+    }
     for target in &plan.targets {
         let view = find(&target.route, views)?;
+        let mut roles = target.models.clone();
+        for change in &target.visibility {
+            if !roles.contains(&change.role) {
+                roles.push(change.role);
+            }
+        }
+        guards.push(view.lease_guard(&roles, target.clock)?);
+        if plan
+            .source
+            .as_ref()
+            .is_none_or(|r| r.window != target.route.window)
+        {
+            windows.push(crate::window_guard::WindowGuard::capture(
+                target.route.window as HWND,
+            )?);
+        }
         if target.clock {
             clocks.push(view.clock_target(target.route.window)?);
         }
@@ -80,5 +110,6 @@ pub(crate) fn prepare(
     if !visibility.is_empty() {
         session.prepare_visibility(visibility)?;
     }
+    session.prepare_guards(guards, windows)?;
     Ok(session)
 }

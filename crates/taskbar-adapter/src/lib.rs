@@ -18,6 +18,7 @@ mod tray;
 mod tray_checks;
 mod visibility;
 mod watchdog;
+mod window_guard;
 mod xaml;
 mod xaml_abi;
 use std::ptr::null_mut;

@@ -374,6 +374,13 @@ pub(crate) struct ModelFixture {
     preview: Preview,
 }
 impl ModelFixture {
+    pub(crate) fn input(&self, name: &str, id: u64) -> Result<InputTarget, String> {
+        Ok(InputTarget {
+            id,
+            element: self.find(name)?,
+            island: self.preview.island,
+        })
+    }
     pub(crate) fn window(&self) -> HWND {
         self.preview.window
     }

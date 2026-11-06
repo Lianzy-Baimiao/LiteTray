@@ -201,7 +201,7 @@ pub(crate) fn factory(name: &str, iid: &GUID) -> Result<Object, String> {
         Object::owned(factory)
     }
 }
-pub fn root_content(element: &Object) -> Result<Object, String> {
+pub(crate) fn root(element: &Object) -> Result<Object, String> {
     unsafe {
         let ui = element.query(&IID_IUIElement10)?;
         let mut root = null_mut();
@@ -209,7 +209,12 @@ pub fn root_content(element: &Object) -> Result<Object, String> {
             (ui.table::<IUIElement10_Vtbl>().XamlRoot)(ui.raw(), &mut root),
             "UIElement.XamlRoot",
         )?;
-        let root = Object::owned(root)?.query(&IID_IXamlRoot)?;
+        Object::owned(root)?.query(&IID_IXamlRoot)
+    }
+}
+pub fn root_content(element: &Object) -> Result<Object, String> {
+    unsafe {
+        let root = root(element)?;
         let mut content = null_mut();
         check(
             (root.table::<IXamlRoot_Vtbl>().Content)(root.raw(), &mut content),

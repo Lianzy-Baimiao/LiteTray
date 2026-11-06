@@ -37,6 +37,9 @@ pub struct Session {
     inputs_prepared: bool,
     tray: Option<ModelLease>,
     visibility: Option<crate::visibility::VisibilityLease>,
+    guards: Vec<crate::discovery::LeaseGuard>,
+    windows: Vec<crate::window_guard::WindowGuard>,
+    guards_prepared: bool,
 }
 impl Session {
     /// Captured targets must be disjoint; otherwise rollback order would
@@ -64,6 +67,9 @@ impl Session {
             inputs_prepared: false,
             tray: None,
             visibility: None,
+            guards: Vec::new(),
+            windows: Vec::new(),
+            guards_prepared: false,
         })
     }
     pub fn state(&self) -> State {
@@ -171,6 +177,45 @@ impl Session {
         self.visibility = Some(crate::visibility::VisibilityLease::capture(targets)?);
         Ok(())
     }
+    pub(crate) fn prepare_guards(
+        &mut self,
+        guards: Vec<crate::discovery::LeaseGuard>,
+        windows: Vec<crate::window_guard::WindowGuard>,
+    ) -> Result<(), String> {
+        if self.state != State::Prepared || self.guards_prepared {
+            return Err("托盘身份检查只能在准备阶段配置一次".into());
+        }
+        if guards.is_empty() || guards.len() > MAX_CLOCKS + 1 || windows.len() > MAX_CLOCKS + 1 {
+            return Err("托盘身份检查目标数量超限".into());
+        }
+        self.guards = guards;
+        self.windows = windows;
+        self.guards_prepared = true;
+        Ok(())
+    }
+    fn validate_targets(&mut self) -> Result<(), String> {
+        let result = self
+            .windows
+            .iter()
+            .try_for_each(|g| g.validate())
+            .and_then(|_| self.guards.iter().try_for_each(|g| g.validate()));
+        if let Err(error) = result {
+            return match self.stop() {
+                Ok(()) => Err(error),
+                Err(restore) => Err(format!("{error}；{restore}")),
+            };
+        }
+        Ok(())
+    }
+    pub(crate) fn validate_input(&mut self, now: u64) -> Result<(), String> {
+        if !self.accepts_input(now) {
+            if self.state == State::Active {
+                self.stop()?;
+            }
+            return Err("当前会话不能转发输入".into());
+        }
+        self.validate_targets()
+    }
     /// On failure the caller retains this session to retry unfinished restores.
     pub fn start(&mut self, frame: Frame, now: u64) -> Result<(), String> {
         if self.targets.is_empty() {
@@ -193,6 +238,7 @@ impl Session {
             self.stop()?;
             return Err("时钟初始化已超时".into());
         }
+        self.validate_targets()?;
         if let Some(frame) = frame {
             self.apply(frame)?;
         }
@@ -212,6 +258,7 @@ impl Session {
                 Err(restore) => Err(format!("{error}；{restore}")),
             };
         }
+        self.validate_targets()?;
         for (_, input) in &self.inputs {
             if let Err(error) = input.activate() {
                 return match self.stop() {
@@ -233,6 +280,11 @@ impl Session {
             return Err("时钟会话已过期并恢复".into());
         }
         self.lease.check(&command, now)?;
+        // Explicit stop never depends on the old tree still being valid.
+        if matches!(&command.change, Change::Stop) {
+            return self.stop();
+        }
+        self.validate_targets()?;
         match &command.change {
             Change::Update { frame } => self.apply(frame.clone())?,
             Change::Tick { text } => {
@@ -243,6 +295,7 @@ impl Session {
             Change::Heartbeat => {}
             Change::Stop => return self.stop(),
         }
+        self.validate_targets()?;
         self.lease.commit(&command, now)
     }
     fn apply(&mut self, frame: Frame) -> Result<(), String> {
@@ -284,6 +337,9 @@ impl Session {
         {
             self.stop()?;
         }
+        if self.state == State::Active {
+            self.validate_targets()?;
+        }
         if self.state == State::Active
             && let Some(visibility) = &self.visibility
             && let Err(error) = visibility.validate()
@@ -307,6 +363,7 @@ impl Session {
                     Err(restore) => Err(format!("{error}；{restore}")),
                 };
             }
+            self.validate_targets()?;
             for (_, input) in &self.inputs {
                 if let Err(error) = input.activate() {
                     return match self.stop() {
@@ -353,6 +410,8 @@ impl Session {
         if errors.is_empty() {
             self.inputs.clear();
             self.targets.clear();
+            self.guards.clear();
+            self.windows.clear();
             self.state = State::Closed;
             Ok(())
         } else {
