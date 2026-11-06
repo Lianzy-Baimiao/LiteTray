@@ -968,8 +968,12 @@ pub struct IUIElement_Vtbl {
         unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
     pub SetIsHitTestVisible:
         unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_sys::core::HRESULT,
-    Visibility: usize,
-    SetVisibility: usize,
+    pub Visibility: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut Visibility,
+    ) -> windows_sys::core::HRESULT,
+    pub SetVisibility:
+        unsafe extern "system" fn(*mut core::ffi::c_void, Visibility) -> windows_sys::core::HRESULT,
     pub RenderSize:
         unsafe extern "system" fn(*mut core::ffi::c_void, *mut Size) -> windows_sys::core::HRESULT,
     pub UseLayoutRounding:
@@ -1436,4 +1440,11 @@ impl VirtualKey {
     pub const GamepadRightThumbstickDown: Self = Self(216i32);
     pub const GamepadRightThumbstickRight: Self = Self(217i32);
     pub const GamepadRightThumbstickLeft: Self = Self(218i32);
+}
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct Visibility(pub i32);
+impl Visibility {
+    pub const Visible: Self = Self(0i32);
+    pub const Collapsed: Self = Self(1i32);
 }

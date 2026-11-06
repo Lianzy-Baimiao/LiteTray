@@ -16,7 +16,10 @@ try {
     }
     # Flush asynchronous redirected output before inspecting the result.
     $process.WaitForExit()
-    if($process.ExitCode -ne 0){throw "Isolated XAML check failed: $(Get-Content -LiteralPath $stderr -Raw)"}
+    if($process.ExitCode -ne 0){
+        $exitDescription='{0} (0x{1:X8})' -f $process.ExitCode, ([long]$process.ExitCode -band 0xffffffffL)
+        throw "Isolated XAML check failed with exit $exitDescription. Logs: $output. $(Get-Content -LiteralPath $stderr -Raw)"
+    }
     $result=Get-Content -LiteralPath $stdout -Raw|ConvertFrom-Json
     if($result.passed -ne $true -or $result.explorer_accessed -ne $false -or $result.environment -ne 'isolated_xaml_in_host_process'){throw 'Invalid isolated check result.'}
     $result|ConvertTo-Json -Depth 5

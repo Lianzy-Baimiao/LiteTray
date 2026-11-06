@@ -209,6 +209,22 @@ pub struct Tree {
     pub elements: Vec<ElementInfo>,
     pub truncated: bool,
 }
+pub(crate) fn visibility(node: &Object) -> Result<Option<bool>, String> {
+    let Some(ui) = node.try_query(&IID_IUIElement)? else {
+        return Ok(None);
+    };
+    unsafe {
+        let mut value = Visibility::Collapsed;
+        if (ui.table::<IUIElement_Vtbl>().Visibility)(ui.raw(), &mut value) < 0 {
+            return Ok(None);
+        }
+        Ok(match value.0 {
+            0 => Some(true),
+            1 => Some(false),
+            _ => None,
+        })
+    }
+}
 pub fn inspect(root: Object) -> Result<Tree, String> {
     walk(root, |_, _| Ok(()))
 }
@@ -257,6 +273,7 @@ pub(crate) fn walk(
             } else {
                 None
             };
+            let visible = visibility(&node)?;
             let info = ElementInfo {
                 name: name.clone(),
                 class_name: class_name.clone(),
@@ -264,6 +281,7 @@ pub(crate) fn walk(
                 width,
                 height,
                 text,
+                visible,
             };
             visit(&node, &info)?;
             elements.push(info);

@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 pub mod activation;
 pub mod clock;
+pub mod topology;
 pub const VERSION: u32 = 1;
 pub const REQUEST_TAG: usize = 0x4c544101;
 pub const RESPONSE_TAG: usize = 0x4c544102;
@@ -182,6 +183,8 @@ pub struct ElementInfo {
     pub width: Option<f64>,
     pub height: Option<f64>,
     pub text: Option<String>,
+    #[serde(default)]
+    pub visible: Option<bool>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskbarInspection {
@@ -192,6 +195,8 @@ pub struct TaskbarInspection {
     pub date_elements: Vec<String>,
     pub truncated: bool,
     pub error: Option<String>,
+    #[serde(default)]
+    pub topology: Option<topology::Report>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InspectResponse {

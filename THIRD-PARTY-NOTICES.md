@@ -9,7 +9,10 @@ The tray model sharing in `crates/taskbar-adapter/src/tray.rs` also follows
 Taskbar multi-tray's use of DataContext, ItemsSource and non-visual Content
 references. It is implemented as a Rust transaction with bounded validation,
 original-binding restoration and joint clock/session shutdown. It does not
-copy or move a UIElement between visual trees.
+copy or move a UIElement between visual trees. The exact frame/panel and tray
+surface names used by `discovery.rs` and `adapter-protocol::topology` follow
+the same module's documented CollectTrayElements path, with independent Rust
+checks for ambiguity, clock containment and object lifetime.
 
 - Taskbar multi-tray 1.3.0, by EDM115:
   https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-multi-tray.wh.cpp

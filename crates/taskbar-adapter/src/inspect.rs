@@ -213,8 +213,19 @@ pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
                 date_elements: vec![],
                 truncated: false,
                 error: None,
+                topology: None,
             };
-            match content(hwnd, secondary, module, layout).and_then(xaml::inspect) {
+            match content(hwnd, secondary, module, layout).and_then(|root| {
+                report.topology = Some(match crate::discovery::View::discover(&root) {
+                    Ok(view) => view.report,
+                    Err(error) => litetray_adapter_protocol::topology::Report {
+                        elements: vec![],
+                        selection: None,
+                        error: Some(error),
+                    },
+                });
+                xaml::inspect(root)
+            }) {
                 Ok(tree) => {
                     report.truncated = tree.truncated;
                     for element in &tree.elements {

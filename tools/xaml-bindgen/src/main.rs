@@ -18,6 +18,7 @@ fn main() {
         "Windows.UI.Xaml.IUIElement",
         "Windows.UI.Xaml.Controls.IControl",
         "Windows.UI.Xaml.FocusState",
+        "Windows.UI.Xaml.Visibility",
         "Windows.UI.Xaml.Input.ITappedRoutedEventArgs",
         "Windows.UI.Xaml.Input.IKeyRoutedEventArgs",
         "Windows.UI.Xaml.Hosting.IDesktopWindowXamlSource",

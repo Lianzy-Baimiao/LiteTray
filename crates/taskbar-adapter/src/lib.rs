@@ -3,6 +3,8 @@
 //! after the synchronous roundtrip completes.
 #![cfg(windows)]
 mod clock;
+mod discovery;
+mod discovery_checks;
 mod input;
 mod input_checks;
 mod inspect;

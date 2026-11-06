@@ -371,7 +371,7 @@ pub(crate) struct InputFixture {
 /// controls and models are released before the hosting source and manager.
 pub(crate) struct ModelFixture {
     root: Object,
-    _preview: Preview,
+    preview: Preview,
 }
 impl ModelFixture {
     pub(crate) fn new(owner: Owner, frame: Frame, markup: &str) -> Result<Self, String> {
@@ -397,12 +397,25 @@ impl ModelFixture {
                 "Set model fixture content",
             )?;
         }
-        let fixture = Self {
-            root,
-            _preview: preview,
-        };
+        let fixture = Self { root, preview };
         fixture.layout()?;
         Ok(fixture)
+    }
+    pub(crate) fn detach(&self) -> Result<(), String> {
+        let source = self
+            .preview
+            .source
+            .as_ref()
+            .ok_or("模型检查缺少 XAML source")?;
+        unsafe {
+            check(
+                (source.table::<IDesktopWindowXamlSource_Vtbl>().SetContent)(
+                    source.raw(),
+                    null_mut(),
+                ),
+                "Detach isolated model root",
+            )
+        }
     }
     pub(crate) fn find(&self, name: &str) -> Result<Object, String> {
         let root = self.root.query(&IID_IFrameworkElement)?;

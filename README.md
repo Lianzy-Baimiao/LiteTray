@@ -75,7 +75,9 @@ LiteTray.exe --preview-windhawk <profile.json> [new-report.json]
 
 `--probe-taskbar` 通过同目录 Rust DLL 在 Explorer 任务栏线程执行一次受限只读探测，返回窗口树与模块身份后移除 hook，不修改托盘。`--prepare-symbols` 校验当前 taskbar.dll 的 PE/PDB 身份，优先使用独立缓存，也可显式导入匹配的已有 PDB；缺失时从 Microsoft 符号服务器下载，使用 DbgHelp 验证 GUID/age 后保存按模块 SHA-256 命名的符号映射及完整接口布局。`--inspect-taskbar` 的代码进一步核对加载模块和函数入口，读取受限 XAML 树；当前未完成实机验收，不会启用写入。
 
-`--self-test-clock` 在 **LiteTray 自己进程** 的新 XAML 控件中检查时钟文本和样式写入、原值/原绑定恢复、部分失败回滚、会话更新、外部修改保留与失联恢复。另启动同一程序的隔离测试子进程，验证真实跨进程更新和子进程结束后的自动恢复，并创建隐藏的 XAML Island 验证输入订阅与释放。新增托盘模型事务共享 DataContext、ItemsSource 和非可视 Content；两个独立 island 验证集合增删传播、来源替换/清空、原绑定恢复及与时钟一起停止。当前合计 70 个隔离场景，约 20 秒，包含真实 Windows 定时器的 15 秒心跳超时验证。它不访问 Explorer，也不修改任务栏。适合开发检查，不代表已经实现任务栏接管：
+只读检查报告的 `topology` 字段进一步限定原生托盘容器，识别通知图标、隐藏图标、系统图标、控制中心、时钟与通知入口。时钟只选择独立的两行文字容器；重复节点、未知类型、不可见或未布局状态会报告不可用。识别结果可以准备可恢复的时钟/模型事务，已在本进程夹具中验证；真实 SystemTray 类、显示器选择、点击路由和接入仍待验收。
+
+`--self-test-clock` 在 **LiteTray 自己进程** 的新 XAML 控件中检查时钟文本和样式写入、原值/原绑定恢复、部分失败回滚、会话更新、外部修改保留与失联恢复。另启动同一程序的隔离测试子进程，验证真实跨进程更新和子进程结束后的自动恢复，并创建隐藏的 XAML Island 验证输入订阅与释放。新增托盘模型事务共享 DataContext、ItemsSource 和非可视 Content；两个独立 island 验证集合增删传播、来源替换/清空、原绑定恢复及与时钟一起停止。当前合计 79 个隔离场景，约 20 秒，包含真实 Windows 定时器的 15 秒心跳超时验证。它不访问 Explorer，也不修改任务栏。适合开发检查，不代表已经实现任务栏接管：
 
 ```powershell
 .\tools\Test-XamlClock.ps1 -BinaryPath <release目录>\LiteTray.exe
