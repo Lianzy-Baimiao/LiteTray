@@ -4,6 +4,9 @@
 #![cfg(windows)]
 mod clock;
 mod inspect;
+mod lifecycle_checks;
+mod session;
+mod watchdog;
 mod xaml;
 mod xaml_abi;
 use std::ptr::null_mut;

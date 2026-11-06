@@ -23,6 +23,8 @@ fn main() {
         "Windows.UI.Xaml.Media.IFontFamilyFactory",
         "Windows.UI.Xaml.Hosting.IWindowsXamlManagerStatics",
         "Windows.Foundation.IPropertyValueStatics",
+        "Windows.Foundation.IPropertyValue",
+        "Windows.Foundation.PropertyType",
         "Windows.UI.Xaml.Markup.IXamlReaderStatics",
         "Windows.UI.Xaml.Media.IVisualTreeHelperStatics",
         "Windows.UI.Xaml.Controls.ITextBlock",

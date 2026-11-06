@@ -234,6 +234,128 @@ pub struct IFrameworkElementStatics_Vtbl {
     StyleProperty: usize,
     FlowDirectionProperty: usize,
 }
+pub const IID_IPropertyValue: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0x4bd682dd_7554_40e9_9a9b_82654ede7e62);
+#[repr(C)]
+pub struct IPropertyValue_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    pub Type: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut PropertyType,
+    ) -> windows_sys::core::HRESULT,
+    pub IsNumericScalar:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub GetUInt8:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u8) -> windows_sys::core::HRESULT,
+    pub GetInt16:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut i16) -> windows_sys::core::HRESULT,
+    pub GetUInt16:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u16) -> windows_sys::core::HRESULT,
+    pub GetInt32:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut i32) -> windows_sys::core::HRESULT,
+    pub GetUInt32:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32) -> windows_sys::core::HRESULT,
+    pub GetInt64:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut i64) -> windows_sys::core::HRESULT,
+    pub GetUInt64:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u64) -> windows_sys::core::HRESULT,
+    pub GetSingle:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut f32) -> windows_sys::core::HRESULT,
+    pub GetDouble:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut f64) -> windows_sys::core::HRESULT,
+    pub GetChar16:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u16) -> windows_sys::core::HRESULT,
+    pub GetBoolean:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub GetString: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut windows_sys::core::HSTRING,
+    ) -> windows_sys::core::HRESULT,
+    pub GetGuid: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut windows_sys::core::GUID,
+    ) -> windows_sys::core::HRESULT,
+    GetDateTime: usize,
+    GetTimeSpan: usize,
+    GetPoint: usize,
+    GetSize: usize,
+    GetRect: usize,
+    pub GetUInt8Array: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut u32,
+        *mut *mut u8,
+    ) -> windows_sys::core::HRESULT,
+    pub GetInt16Array: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut u32,
+        *mut *mut i16,
+    ) -> windows_sys::core::HRESULT,
+    pub GetUInt16Array: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut u32,
+        *mut *mut u16,
+    ) -> windows_sys::core::HRESULT,
+    pub GetInt32Array: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut u32,
+        *mut *mut i32,
+    ) -> windows_sys::core::HRESULT,
+    pub GetUInt32Array: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut u32,
+        *mut *mut u32,
+    ) -> windows_sys::core::HRESULT,
+    pub GetInt64Array: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut u32,
+        *mut *mut i64,
+    ) -> windows_sys::core::HRESULT,
+    pub GetUInt64Array: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut u32,
+        *mut *mut u64,
+    ) -> windows_sys::core::HRESULT,
+    pub GetSingleArray: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut u32,
+        *mut *mut f32,
+    ) -> windows_sys::core::HRESULT,
+    pub GetDoubleArray: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut u32,
+        *mut *mut f64,
+    ) -> windows_sys::core::HRESULT,
+    pub GetChar16Array: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut u32,
+        *mut *mut u16,
+    ) -> windows_sys::core::HRESULT,
+    pub GetBooleanArray: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut u32,
+        *mut *mut bool,
+    ) -> windows_sys::core::HRESULT,
+    pub GetStringArray: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut u32,
+        *mut *mut windows_sys::core::HSTRING,
+    ) -> windows_sys::core::HRESULT,
+    pub GetInspectableArray: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut u32,
+        *mut *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    pub GetGuidArray: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut u32,
+        *mut *mut windows_sys::core::GUID,
+    ) -> windows_sys::core::HRESULT,
+    GetDateTimeArray: usize,
+    GetTimeSpanArray: usize,
+    GetPointArray: usize,
+    GetSizeArray: usize,
+    GetRectArray: usize,
+}
 pub const IID_IPropertyValueStatics: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0x629bdbc8_d932_4ff4_96b9_8d96c5c1e858);
 #[repr(C)]
@@ -597,4 +719,50 @@ pub struct IXamlRoot_Vtbl {
     Changed: usize,
     pub RemoveChanged:
         unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+}
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct PropertyType(pub i32);
+impl PropertyType {
+    pub const Empty: Self = Self(0i32);
+    pub const UInt8: Self = Self(1i32);
+    pub const Int16: Self = Self(2i32);
+    pub const UInt16: Self = Self(3i32);
+    pub const Int32: Self = Self(4i32);
+    pub const UInt32: Self = Self(5i32);
+    pub const Int64: Self = Self(6i32);
+    pub const UInt64: Self = Self(7i32);
+    pub const Single: Self = Self(8i32);
+    pub const Double: Self = Self(9i32);
+    pub const Char16: Self = Self(10i32);
+    pub const Boolean: Self = Self(11i32);
+    pub const String: Self = Self(12i32);
+    pub const Inspectable: Self = Self(13i32);
+    pub const DateTime: Self = Self(14i32);
+    pub const TimeSpan: Self = Self(15i32);
+    pub const Guid: Self = Self(16i32);
+    pub const Point: Self = Self(17i32);
+    pub const Size: Self = Self(18i32);
+    pub const Rect: Self = Self(19i32);
+    pub const OtherType: Self = Self(20i32);
+    pub const UInt8Array: Self = Self(1025i32);
+    pub const Int16Array: Self = Self(1026i32);
+    pub const UInt16Array: Self = Self(1027i32);
+    pub const Int32Array: Self = Self(1028i32);
+    pub const UInt32Array: Self = Self(1029i32);
+    pub const Int64Array: Self = Self(1030i32);
+    pub const UInt64Array: Self = Self(1031i32);
+    pub const SingleArray: Self = Self(1032i32);
+    pub const DoubleArray: Self = Self(1033i32);
+    pub const Char16Array: Self = Self(1034i32);
+    pub const BooleanArray: Self = Self(1035i32);
+    pub const StringArray: Self = Self(1036i32);
+    pub const InspectableArray: Self = Self(1037i32);
+    pub const DateTimeArray: Self = Self(1038i32);
+    pub const TimeSpanArray: Self = Self(1039i32);
+    pub const GuidArray: Self = Self(1040i32);
+    pub const PointArray: Self = Self(1041i32);
+    pub const SizeArray: Self = Self(1042i32);
+    pub const RectArray: Self = Self(1043i32);
+    pub const OtherTypeArray: Self = Self(1044i32);
 }

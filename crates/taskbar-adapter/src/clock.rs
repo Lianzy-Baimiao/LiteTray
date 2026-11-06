@@ -17,6 +17,7 @@ struct Property {
     property: Object,
     original: Original,
     dirty: bool,
+    written: Option<Object>,
 }
 impl Property {
     fn capture(target: &Object, property: Object) -> Result<Self, String> {
@@ -86,26 +87,86 @@ impl Property {
                 property,
                 original,
                 dirty: false,
+                written: None,
             })
         }
     }
     fn set(&mut self, value: &Object) -> Result<(), String> {
+        if self.dirty && !self.owns_current()? {
+            return Err("时钟属性已被其他组件修改".into());
+        }
+        self.written = Some(value.query(&IID_IUnknown)?);
         // A failed native setter may have produced side effects, so include it
         // in rollback even when HRESULT indicates a failure.
         self.dirty = true;
         unsafe {
-            check(
+            let result = check(
                 (self.target.table::<IDependencyObject_Vtbl>().SetValue)(
                     self.target.raw(),
                     self.property.raw(),
                     value.raw(),
                 ),
                 "SetValue",
-            )
+            );
+            // XAML may canonicalize a boxed value. Read its actual local value
+            // after the setter so ownership compares the native representation.
+            self.written = self.read_local()?;
+            result
+        }
+    }
+    fn read_local(&self) -> Result<Option<Object>, String> {
+        unsafe {
+            let mut value = null_mut();
+            check(
+                (self.target.table::<IDependencyObject_Vtbl>().ReadLocalValue)(
+                    self.target.raw(),
+                    self.property.raw(),
+                    &mut value,
+                ),
+                "ReadLocalValue ownership",
+            )?;
+            if value.is_null() {
+                Ok(None)
+            } else {
+                Ok(Some(Object::owned(value)?))
+            }
+        }
+    }
+    fn owns_current(&self) -> Result<bool, String> {
+        if !self.dirty {
+            return Ok(true);
+        }
+        unsafe {
+            let framework = self.target.query(&IID_IFrameworkElement2)?;
+            let mut binding = null_mut();
+            check(
+                (framework
+                    .table::<IFrameworkElement2_Vtbl>()
+                    .GetBindingExpression)(
+                    framework.raw(), self.property.raw(), &mut binding
+                ),
+                "GetBindingExpression ownership",
+            )?;
+            if !binding.is_null() {
+                drop(Object::owned(binding)?);
+                return Ok(false);
+            }
+        }
+        match (self.read_local()?, &self.written) {
+            (Some(current), Some(written)) => equal_value(&current, written),
+            (None, None) => Ok(true),
+            _ => Ok(false),
         }
     }
     fn restore(&mut self) -> Result<(), String> {
         if !self.dirty {
+            return Ok(());
+        }
+        if !self.owns_current()? {
+            // The external writer now owns this property. Preserve that value
+            // and restore only the other properties still owned by LiteTray.
+            self.dirty = false;
+            self.written = None;
             return Ok(());
         }
         unsafe {
@@ -136,12 +197,45 @@ impl Property {
                 }
             }
             self.dirty = false;
+            self.written = None;
         }
         Ok(())
     }
 }
 fn same_object(a: &Object, b: &Object) -> Result<bool, String> {
     Ok(a.query(&IID_IUnknown)?.raw() == b.query(&IID_IUnknown)?.raw())
+}
+fn equal_value(a: &Object, b: &Object) -> Result<bool, String> {
+    if same_object(a, b)? {
+        return Ok(true);
+    }
+    let (Ok(a), Ok(b)) = (a.query(&IID_IPropertyValue), b.query(&IID_IPropertyValue)) else {
+        return Ok(false);
+    };
+    unsafe {
+        let (at, bt) = (
+            a.table::<IPropertyValue_Vtbl>(),
+            b.table::<IPropertyValue_Vtbl>(),
+        );
+        let mut ak = PropertyType::Empty;
+        let mut bk = PropertyType::Empty;
+        check((at.Type)(a.raw(), &mut ak), "PropertyValue.Type")?;
+        check((bt.Type)(b.raw(), &mut bk), "PropertyValue.Type")?;
+        if ak.0 != bk.0 {
+            return Ok(false);
+        }
+        if ak.0 == PropertyType::String.0 {
+            return Ok(a.string(at.GetString, 8192)? == b.string(bt.GetString, 8192)?);
+        }
+        if ak.0 == PropertyType::Double.0 {
+            let mut av = 0.;
+            let mut bv = 0.;
+            check((at.GetDouble)(a.raw(), &mut av), "PropertyValue.Double")?;
+            check((bt.GetDouble)(b.raw(), &mut bv), "PropertyValue.Double")?;
+            return Ok(av == bv || av.is_nan() && bv.is_nan());
+        }
+        Ok(false)
+    }
 }
 type Getter = unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> i32;
 fn property(factory: &Object, getter: Getter) -> Result<Object, String> {
@@ -154,7 +248,7 @@ fn property(factory: &Object, getter: Getter) -> Result<Object, String> {
         Object::owned(result)
     }
 }
-fn boxed_text(text: &str) -> Result<Object, String> {
+pub(crate) fn boxed_text(text: &str) -> Result<Object, String> {
     unsafe {
         let text = StringHandle::new(text)?;
         let factory = factory(
@@ -215,6 +309,8 @@ fn font_family(name: &str) -> Result<Object, String> {
 pub(crate) struct ClockLease {
     properties: Vec<Property>,
     live: bool,
+    identities: [usize; 3],
+    last_text: Option<(String, String)>,
 }
 impl ClockLease {
     pub fn capture(time: &Object, date: &Object, container: &Object) -> Result<Self, String> {
@@ -249,6 +345,12 @@ impl ClockLease {
             Ok(Self {
                 properties,
                 live: false,
+                identities: [
+                    time.query(&IID_IUnknown)?.raw() as usize,
+                    date.query(&IID_IUnknown)?.raw() as usize,
+                    container.query(&IID_IUnknown)?.raw() as usize,
+                ],
+                last_text: None,
             })
         }
     }
@@ -271,16 +373,26 @@ impl ClockLease {
         }
         // Construct every value before writing. Failure here leaves the active
         // clock untouched and keeps the original rollback snapshot.
-        let top = boxed_text(top)?;
-        let bottom = boxed_text(bottom)?;
+        let top_value = boxed_text(top)?;
+        let bottom_value = boxed_text(bottom)?;
         let size = boxed_number(size)?;
         let family = font_family(family)?;
         let width = boxed_number(width)?;
-        self.write(&[&top, &bottom, &size, &size, &family, &family, &width])?;
+        self.write(&[
+            &top_value,
+            &bottom_value,
+            &size,
+            &size,
+            &family,
+            &family,
+            &width,
+        ])?;
         self.live = true;
+        self.last_text = Some((top.to_owned(), bottom.to_owned()));
         Ok(())
     }
     fn write(&mut self, values: &[&Object]) -> Result<(), String> {
+        self.verify_ownership()?;
         for (i, value) in values.iter().enumerate() {
             if let Err(error) = self.properties[i].set(value) {
                 return match self.restore() {
@@ -298,8 +410,32 @@ impl ClockLease {
         if top.len() > 4096 || bottom.len() > 4096 {
             return Err("时钟文本过长".into());
         }
+        self.verify_ownership()?;
+        if self
+            .last_text
+            .as_ref()
+            .is_some_and(|old| old.0 == top && old.1 == bottom)
+        {
+            return Ok(());
+        }
         let values = [boxed_text(top)?, boxed_text(bottom)?];
-        self.write(&[&values[0], &values[1]])
+        for (i, (text, value)) in [(top, &values[0]), (bottom, &values[1])]
+            .into_iter()
+            .enumerate()
+        {
+            let same = self
+                .last_text
+                .as_ref()
+                .is_some_and(|old| if i == 0 { old.0 == text } else { old.1 == text });
+            if !same && let Err(error) = self.properties[i].set(value) {
+                return match self.restore() {
+                    Ok(()) => Err(error),
+                    Err(restore) => Err(format!("{error}；恢复未完成：{restore}")),
+                };
+            }
+        }
+        self.last_text = Some((top.to_owned(), bottom.to_owned()));
+        Ok(())
     }
     pub fn restore(&mut self) -> Result<(), String> {
         let mut errors = Vec::new();
@@ -309,11 +445,43 @@ impl ClockLease {
             }
         }
         self.live = false;
+        self.last_text = None;
         if errors.is_empty() {
             Ok(())
         } else {
             Err(errors.join("；"))
         }
+    }
+    pub fn overlaps(&self, other: &Self) -> bool {
+        self.identities
+            .iter()
+            .any(|id| other.identities.contains(id))
+    }
+    pub fn clean(&self) -> bool {
+        self.properties.iter().all(|p| !p.dirty)
+    }
+    fn verify_ownership(&mut self) -> Result<(), String> {
+        let mut failure = None;
+        for property in &self.properties {
+            match property.owns_current() {
+                Ok(true) => {}
+                Ok(false) => {
+                    failure = Some("时钟属性已被其他组件修改，停止接管".to_string());
+                    break;
+                }
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            }
+        }
+        if let Some(error) = failure {
+            return match self.restore() {
+                Ok(()) => Err(error),
+                Err(restore) => Err(format!("{error}；{restore}")),
+            };
+        }
+        Ok(())
     }
 }
 impl Drop for ClockLease {
@@ -471,12 +639,31 @@ pub(crate) fn self_test() -> Result<serde_json::Value, String> {
             !lease.live && lease.properties.iter().all(|p| !p.dirty),
             "rollback leaves no pending writes",
         )?;
+        drop(lease);
+        let mut checks = vec![
+            "binding_capture",
+            "local_value_capture",
+            "unset_capture",
+            "text_apply",
+            "style_apply",
+            "tick",
+            "invalid_settings",
+            "local_restore",
+            "unset_restore",
+            "binding_source_update",
+            "idempotent_restore",
+            "drop_restore",
+            "native_setter_failure",
+            "partial_failure_rollback",
+            "no_pending_writes",
+        ];
+        checks.extend(crate::lifecycle_checks::run()?);
         Ok(
-            serde_json::json!({"passed":true,"environment":"isolated_xaml_in_host_process","explorer_accessed":false,"checks":["binding_capture","local_value_capture","unset_capture","text_apply","style_apply","tick","invalid_settings","local_restore","unset_restore","binding_source_update","idempotent_restore","drop_restore","native_setter_failure","partial_failure_rollback","no_pending_writes"]}),
+            serde_json::json!({"passed":true,"environment":"isolated_xaml_in_host_process","explorer_accessed":false,"checks":checks}),
         )
     }
 }
-fn load(markup: &str) -> Result<Object, String> {
+pub(crate) fn load(markup: &str) -> Result<Object, String> {
     unsafe {
         let reader = factory("Windows.UI.Xaml.Markup.XamlReader", &IID_IXamlReaderStatics)?;
         let markup = StringHandle::new(markup)?;

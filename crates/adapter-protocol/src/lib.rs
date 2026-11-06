@@ -1,6 +1,7 @@
 //! Versioned, bounded data exchanged with the taskbar adapter. This crate has
 //! no Windows/process APIs and can validate a request before any native call.
 use serde::{Deserialize, Serialize};
+pub mod clock;
 pub const VERSION: u32 = 1;
 pub const REQUEST_TAG: usize = 0x4c544101;
 pub const RESPONSE_TAG: usize = 0x4c544102;
