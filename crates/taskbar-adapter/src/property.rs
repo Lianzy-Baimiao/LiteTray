@@ -296,6 +296,12 @@ fn equal_value(a: &Object, b: &Object) -> Result<bool, String> {
             check((bt.GetDouble)(b.raw(), &mut bv), "PropertyValue.Double")?;
             return Ok(av == bv || av.is_nan() && bv.is_nan());
         }
+        if ak.0 == PropertyType::Boolean.0 {
+            let (mut av, mut bv) = (false, false);
+            check((at.GetBoolean)(a.raw(), &mut av), "PropertyValue.Boolean")?;
+            check((bt.GetBoolean)(b.raw(), &mut bv), "PropertyValue.Boolean")?;
+            return Ok(av == bv);
+        }
         Ok(false)
     }
 }

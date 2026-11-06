@@ -12,7 +12,17 @@
 
 以上自检结论与生产验证分别记录。2026-11-06 后续已在真实 Explorer 验证主副屏原位时钟与副屏应用图标生成，见 [实机记录](../../docs/live-clock-acceptance.md)；完整多托盘菜单及系统图标仍未完成。下文保留普通属性、预览、模型事务的详细机制；普通属性的冲突语义不适用于上述专用原位 Text 观察器。
 
-Prepare 新增可缺省的 `source`、`clocks` 和 `mirror_icons`。来源只能是同一线程的主任务栏；只读来源不会因此成为时钟修改目标。应用图标复制目前限于 NotificationAreaIcons 与 NotifyIconStack，不共享输入法/控制中心的菜单模型。Reply 只返回实际启用的时钟输入目标；独立托盘可返回空目标集合，使用 `StartTray` 启动，随后仅发送心跳。副屏依赖属性、模型和来源引用仍受同一恢复事务保护。
+Prepare 新增可缺省的 `source`、`clocks` 和 `mirror_icons`。来源只能是同一线程的主任务栏；只读来源不会因此成为时钟修改目标。原生复制包含 NotificationAreaIcons、NotifyIconStack、MainStack、NonActivatableStack、ControlCenterButton、ShowDesktopStack。Reply 只返回实际启用的时钟输入目标；独立托盘可返回空目标集合，使用 `StartTray` 启动，随后仅发送心跳。副屏依赖属性、模型和来源引用仍受同一恢复事务保护。
+
+### 托盘输入及菜单边界
+
+SystemTray.dll 仅接受 SHA256 `c5f5260a2a56c4d7b0ee25978aa06c387b5ddffc57c5fe412be429d1289913ce`，PDB `2007F3890B9D4D16AF78BAFE771227281`；同时验证内存身份和每个入口的 16 字节前缀。Microsoft PDB 得到 GetInvocationPointRelativeToScreen RVA772912、GetIconBoundsRelativeToScreen RVA772612、GetScreenRectFromXamlElement RVA773136。离线反汇编另核对隐藏返回指针和参数寄存器；不把 C++ 按值 FrameworkElement 临时对象当借用参数释放两次。
+
+DispatchMessageW 作用域保存真实任务栏根，涵盖鼠标、pointer、键盘、WM_TIMER 延迟悬停及鼠标离开；嵌套消息恢复外层上下文。坐标使用 verified source HWND 的 client origin 和 XamlRoot scale。Shell_NotifyIconGetRect 通过 runtime class + DataContext IUnknown 身份寻找对应屏幕的图标。隐藏图标 popup 的 SetWindowPos 仅对明确点击入口后的已知窗口类调整位置，限制在目标屏工作区。
+
+MinHook 的 fallible C API 建立跳板；会话停止时恢复输入和 SystemTray 入口，但跳板不释放，避免已进入的回调执行释放后代码。IFlyoutBase.ShowAt（slot14）及 IFlyoutBase5.ShowAt(options)（slot12）从自建 MenuFlyout/Flyout 的公开 ABI 读取，常驻 guard 只处理共享系统图标子树。锁定其他 XamlRoot 的缓存菜单把原生 command items 借给目标 island 的代理，下次交互或停止时归还；失败时抑制已知会崩溃的跨根调用。为保护此前显示过的缓存菜单，guard 随固定加载的 DLL 保留。鼠标按住期间不重新附着 ItemsSource，以免吞掉按下或拖动。
+
+只读检查现在同时返回物理矩形、模型身份、HitTest/Enabled/Opacity 和最多 32 项最近坐标转换；不记录键盘字符或应用消息正文。这些诊断和独立窗口回归不等于真实 QQNT 悬停、系统左键弹层或拖放已经验收。
 
 宽度 0 表示 Auto，在原生端设置 Width=NaN；所有权比较已有 NaN 判等支持。固定 80–600 宽度保持兼容，Tick 不计算或重设宽度。watchdog 窗口类按所属线程与回调地址区分，防止 Explorer 中尚被固定加载的旧 DLL 与新 DLL 混用窗口过程；主机仍验证端点进程、线程和类型前缀。
 

@@ -54,6 +54,10 @@ fn main() {
         "Windows.UI.Xaml.Controls.IItemsControlStatics",
         "Windows.UI.Xaml.Controls.IContentControl",
         "Windows.UI.Xaml.Controls.IContentControlStatics",
+        "Windows.UI.Xaml.Controls.IMenuFlyout",
+        "Windows.UI.Xaml.Controls.Primitives.IFlyoutBase",
+        "Windows.UI.Xaml.Controls.Primitives.IFlyoutBase5",
+        "Windows.UI.Xaml.Controls.Primitives.IFlyoutBase6",
     ]);
     if std::env::args().any(|a| a == "--raw") {
         return;
@@ -73,7 +77,6 @@ fn main() {
         source = source.replace(&before, &format!("    pub {method}: unsafe extern \"system\" fn({signature}) -> windows_sys::core::HRESULT,"));
     }
     let patches=[
-        ("    XamlRoot: usize,".to_owned(),format!("    pub XamlRoot: {getter},")),
         ("    Parent: usize,".to_owned(),format!("    pub Parent: {getter},")),
         ("    TextProperty: usize,".to_owned(),format!("    pub TextProperty: {getter},")),
         ("    WidthProperty: usize,".to_owned(),format!("    pub WidthProperty: {getter},")),
@@ -87,13 +90,33 @@ fn main() {
         ("    ItemsSourceProperty: usize,".to_owned(),format!("    pub ItemsSourceProperty: {getter},")),
         ("    ContentProperty: usize,".to_owned(),format!("    pub ContentProperty: {getter},")),
         ("    VisibilityProperty: usize,".to_owned(),format!("    pub VisibilityProperty: {getter},")),
-        ("    Items: usize,".to_owned(),format!("    pub Items: {getter},")),
         ("    InitializeForCurrentThread: usize,".to_owned(),format!("    pub InitializeForCurrentThread: {getter},")),
         ("    CreateInstanceWithName: usize,".to_owned(),"    pub CreateInstanceWithName: unsafe extern \"system\" fn(*mut core::ffi::c_void, windows_sys::core::HSTRING, *mut core::ffi::c_void, *mut *mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> windows_sys::core::HRESULT,".into()),
         ("    GetChild: usize,".to_owned(),"    pub GetChild: unsafe extern \"system\" fn(*mut core::ffi::c_void, *mut core::ffi::c_void, i32, *mut *mut core::ffi::c_void) -> windows_sys::core::HRESULT,".into()),
         ("    GetChildrenCount: usize,".to_owned(),"    pub GetChildrenCount: unsafe extern \"system\" fn(*mut core::ffi::c_void, *mut core::ffi::c_void, *mut i32) -> windows_sys::core::HRESULT,".into()),
         ("    GetParent: usize,".to_owned(),"    pub GetParent: unsafe extern \"system\" fn(*mut core::ffi::c_void, *mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> windows_sys::core::HRESULT,".into()),
     ];
+    // These getters occur on UIElement/FlyoutBase and ItemsControl/MenuFlyout.
+    for method in ["XamlRoot", "Items"] {
+        source = source.replace(&format!("    {method}: usize,"), &format!("    pub {method}: {getter},"));
+    }
+    for (method, signature) in [
+        ("ShowAt", "*mut core::ffi::c_void, *mut core::ffi::c_void"),
+        ("ShowAtWithOptions", "*mut core::ffi::c_void, *mut core::ffi::c_void, *mut core::ffi::c_void"),
+        ("SetXamlRoot", "*mut core::ffi::c_void, *mut core::ffi::c_void"),
+    ] {
+        source = source.replace(&format!("    {method}: usize,"), &format!("    pub {method}: unsafe extern \"system\" fn({signature}) -> windows_sys::core::HRESULT,"));
+    }
+    for method in ["OpacityProperty", "IsHitTestVisibleProperty", "MinWidthProperty"] {
+        source = source.replace(&format!("    {method}: usize,"), &format!("    pub {method}: {getter},"));
+    }
+    let start = source.find("pub struct IFlyoutBase5_Vtbl").unwrap();
+    let end = start + source[start..].find("pub const IID_IFlyoutBase6").unwrap();
+    let section = source[start..end].replace(
+        "fn(*mut core::ffi::c_void, *mut core::ffi::c_void) -> windows_sys::core::HRESULT",
+        "fn(*mut core::ffi::c_void, *mut core::ffi::c_void, *mut core::ffi::c_void) -> windows_sys::core::HRESULT",
+    );
+    source.replace_range(start..end, &section);
     // Object-valued ContentControl.Content is generated directly; these two
     // opaque UIElement slots belong to XamlRoot and DesktopWindowXamlSource.
     assert_eq!(source.matches("    Content: usize,").count(), 2);

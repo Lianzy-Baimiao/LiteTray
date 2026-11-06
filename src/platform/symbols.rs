@@ -109,6 +109,9 @@ unsafe fn resolve(
             "*TaskBand*",
             "*StartTaskbar*",
             "*SecondaryTray*InitModelAndHost*",
+            "*GetInvocationPointRelativeToScreen*",
+            "*GetIconBoundsRelativeToScreen*",
+            "*GetScreenRectFromXamlElement*",
         ] {
             let mut symbols = Vec::<Symbol>::new();
             if SymEnumSymbolsW(

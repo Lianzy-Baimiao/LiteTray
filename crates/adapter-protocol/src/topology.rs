@@ -47,6 +47,7 @@ impl Role {
                 | Self::SystemIcons
                 | Self::PrivacyIndicators
                 | Self::ControlCenter
+                | Self::ShowDesktop
         )
     }
 }

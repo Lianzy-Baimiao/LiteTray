@@ -51,7 +51,12 @@ impl Client {
                 .as_reader()
                 .take(64 * 1024 * 1024 + 1)
                 .read_to_end(&mut bytes)
-                .map_err(|_| "读取符号文件失败")?;
+                .map_err(|error| {
+                    format!(
+                        "读取 Microsoft 符号文件失败（已读取 {} 字节）：{error}",
+                        bytes.len()
+                    )
+                })?;
             if bytes.len() > 64 * 1024 * 1024 || !bytes.starts_with(b"Microsoft C/C++ MSF 7.00") {
                 return Err("符号文件格式或大小无效".into());
             }

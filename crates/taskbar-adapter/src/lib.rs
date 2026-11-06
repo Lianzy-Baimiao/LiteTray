@@ -1,6 +1,6 @@
-//! Explorer-thread capability probe. It does not install persistent subclasses,
-//! modify XAML, or patch functions. The host removes the scoped message hook
-//! after the synchronous roundtrip completes.
+//! Explorer-thread probe and reversible clock/tray sessions. Inspection is
+//! read-only. Native tray sessions additionally install scoped input/geometry
+//! hooks and process-lifetime cached-menu guards; see ABI.md.
 #![cfg(windows)]
 mod clock;
 mod clock_style;
@@ -9,6 +9,7 @@ mod clock_text;
 mod clock_text_checks;
 mod discovery;
 mod discovery_checks;
+mod hooks;
 mod input;
 mod input_checks;
 mod inspect;
@@ -24,6 +25,9 @@ mod taskbar;
 mod taskbar_source;
 mod tray;
 mod tray_checks;
+mod tray_interaction;
+mod tray_menu;
+mod tray_symbols;
 mod visibility;
 mod watchdog;
 mod window_guard;

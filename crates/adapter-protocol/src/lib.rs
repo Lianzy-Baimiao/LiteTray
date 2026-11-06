@@ -199,6 +199,24 @@ pub struct TaskbarInspection {
     pub error: Option<String>,
     #[serde(default)]
     pub topology: Option<topology::Report>,
+    #[serde(default)]
+    pub geometry: Vec<ElementGeometry>,
+    #[serde(default)]
+    pub geometry_error: Option<String>,
+}
+/// Physical screen bounds from the element's verified XAML source window.
+/// Model identities are process-local and only comparable within one report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ElementGeometry {
+    pub index: usize,
+    pub bounds: activation::Rect,
+    pub model_identity: Option<u64>,
+    #[serde(default)]
+    pub hit_test: Option<bool>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub opacity: Option<f64>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InspectResponse {
@@ -209,6 +227,8 @@ pub struct InspectResponse {
     pub changes_applied: bool,
     pub taskbars: Vec<TaskbarInspection>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub tray_input: Option<serde_json::Value>,
 }
 impl InspectResponse {
     pub fn decode(bytes: &[u8], nonce: u64, pid: u32, tid: u32) -> Result<Self, String> {
@@ -319,6 +339,7 @@ mod tests {
     #[test]
     fn stale_and_mutating_responses_are_rejected() {
         let mut r = InspectResponse {
+            tray_input: None,
             version: VERSION,
             nonce: 1,
             process_id: 2,

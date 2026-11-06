@@ -41,6 +41,7 @@ pub struct Session {
     bindings: Vec<Rc<crate::island::Binding>>,
     guards_prepared: bool,
     native_sources: Vec<crate::taskbar_source::Source>,
+    interaction: Option<Rc<crate::tray_interaction::Runtime>>,
 }
 impl Session {
     /// Captured targets must be disjoint; otherwise rollback order would
@@ -72,10 +73,21 @@ impl Session {
             bindings: Vec::new(),
             guards_prepared: false,
             native_sources: vec![],
+            interaction: None,
         })
     }
     pub fn state(&self) -> State {
         self.state
+    }
+    pub(crate) fn prepare_interaction(
+        &mut self,
+        runtime: Rc<crate::tray_interaction::Runtime>,
+    ) -> Result<(), String> {
+        if self.state != State::Prepared || self.interaction.is_some() {
+            return Err("托盘交互只能准备一次".into());
+        }
+        self.interaction = Some(runtime);
+        Ok(())
     }
     pub fn owner(&self) -> &Owner {
         self.lease.owner()
@@ -263,6 +275,9 @@ impl Session {
         if let Some(frame) = frame {
             self.apply(frame)?;
         }
+        if let Some(interaction) = &self.interaction {
+            interaction.start()?;
+        }
         if let Some(tray) = &mut self.tray
             && let Err(error) = tray.start()
         {
@@ -432,6 +447,11 @@ impl Session {
             && let Err(error) = tray.stop()
         {
             errors.push(format!("托盘模型恢复：{error}"));
+        }
+        if let Some(interaction) = &self.interaction
+            && let Err(error) = interaction.stop()
+        {
+            errors.push(format!("托盘交互恢复：{error}"));
         }
         for target in self.targets.iter_mut().rev() {
             if let Err(error) = target.clock.restore() {

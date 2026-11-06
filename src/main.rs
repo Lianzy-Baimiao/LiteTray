@@ -13,6 +13,7 @@ fn main() {
                     | "--weather-check"
                     | "--check-updates"
                     | "--prepare-symbols"
+                    | "--prepare-tray-symbols"
                     | "--probe-taskbar"
                     | "--inspect-taskbar"
                     | "--self-test-clock"
@@ -131,6 +132,17 @@ fn run() -> Result<(), String> {
                 "{}",
                 serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?
             );
+            Ok(())
+        }
+        Some("--prepare-tray-symbols") => {
+            let module =
+                std::path::PathBuf::from(std::env::var("SystemRoot").map_err(|e| e.to_string())?)
+                    .join("SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy/SystemTray.dll");
+            let map = platform::symbols::prepare(&module, None)?;
+            let text = serde_json::to_string_pretty(&map).map_err(|e| e.to_string())?;
+            if let Some(path) = arguments.get(1) {
+                std::fs::write(path, text).map_err(|e| e.to_string())?;
+            }
             Ok(())
         }
         Some("--probe-taskbar") => {

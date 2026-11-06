@@ -200,6 +200,7 @@ pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
             changes_applied: false,
             taskbars: vec![],
             error: None,
+            tray_input: Some(crate::tray_interaction::diagnostics()),
         };
         let module = match validate_loaded(layout) {
             Ok(module) => module,
@@ -225,6 +226,8 @@ pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
                 truncated: false,
                 error: None,
                 topology: None,
+                geometry: vec![],
+                geometry_error: None,
             };
             match content(hwnd, secondary, module, layout).and_then(|root| {
                 report.topology = Some(match crate::discovery::View::discover(&root) {
@@ -235,7 +238,75 @@ pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
                         error: Some(error),
                     },
                 });
-                xaml::inspect(root)
+                let binding = crate::taskbar_source::resolve(hwnd, layout).and_then(|source| {
+                    crate::island::Binding::capture(hwnd, &source.source, &root)
+                });
+                if let Err(error) = &binding {
+                    report.geometry_error = Some(error.clone());
+                }
+                let model_property = crate::tray::Field::DataContext.property()?;
+                let mut index = 0;
+                let mut tray_depth = None;
+                xaml::walk(root, |node, info| {
+                    if tray_depth.is_some_and(|depth| info.depth <= depth) {
+                        tray_depth = None;
+                    }
+                    if info.class_name == "SystemTray.SystemTrayFrame" {
+                        tray_depth = Some(info.depth);
+                    }
+                    if let Ok(binding) = &binding
+                        && tray_depth.is_some()
+                        && let Ok(bounds) = crate::input::bounds(node, binding.window())
+                    {
+                        let model_identity = crate::tray::read(node, &model_property)?
+                            .map(|model| {
+                                model
+                                    .query(&windows_sys::core::IID_IUnknown)
+                                    .map(|value| value.raw() as u64)
+                            })
+                            .transpose()?;
+                        report
+                            .geometry
+                            .push(litetray_adapter_protocol::ElementGeometry {
+                                index,
+                                bounds,
+                                model_identity,
+                                hit_test: node
+                                    .try_query(&crate::xaml_abi::IID_IUIElement)?
+                                    .and_then(|ui| {
+                                        let mut value = false;
+                                        ((ui.table::<crate::xaml_abi::IUIElement_Vtbl>()
+                                            .IsHitTestVisible)(
+                                            ui.raw(), &mut value
+                                        ) >= 0)
+                                            .then_some(value)
+                                    }),
+                                enabled: node.try_query(&crate::xaml_abi::IID_IControl)?.and_then(
+                                    |control| {
+                                        let mut value = false;
+                                        ((control
+                                            .table::<crate::xaml_abi::IControl_Vtbl>()
+                                            .IsEnabled)(
+                                            control.raw(), &mut value
+                                        ) >= 0)
+                                            .then_some(value)
+                                    },
+                                ),
+                                opacity: node
+                                    .try_query(&crate::xaml_abi::IID_IUIElement)?
+                                    .and_then(|ui| {
+                                        let mut value = 0.;
+                                        ((ui.table::<crate::xaml_abi::IUIElement_Vtbl>().Opacity)(
+                                            ui.raw(),
+                                            &mut value,
+                                        ) >= 0)
+                                            .then_some(value)
+                                    }),
+                            });
+                    }
+                    index += 1;
+                    Ok(())
+                })
             }) {
                 Ok(tree) => {
                     report.truncated = tree.truncated;

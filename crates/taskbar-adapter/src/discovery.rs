@@ -38,6 +38,17 @@ struct GuardNode {
     class_name: String,
 }
 impl View {
+    pub(crate) fn native(&self) -> bool {
+        self.native_clock
+    }
+    pub(crate) fn tray_surface(&self, role: Role) -> Result<(Object, Option<Object>), String> {
+        let fresh = self.revalidate()?;
+        let selected = surface(fresh.selection()?, role)?;
+        Ok((
+            fresh.objects[selected.node].clone(),
+            selected.items.map(|i| fresh.objects[i].clone()),
+        ))
+    }
     pub(crate) fn root_content(&self) -> Result<Object, String> {
         xaml::root_content(&self.panel)
     }
@@ -260,7 +271,7 @@ impl View {
         roles: &[Role],
     ) -> Result<Vec<Pair>, String> {
         if roles.is_empty()
-            || roles.len() > 5
+            || roles.len() > 6
             || roles
                 .iter()
                 .enumerate()
@@ -281,12 +292,30 @@ impl View {
             let a = surface(source.selection()?, role)?;
             let b = surface(target.selection()?, role)?;
             let start = pairs.len();
-            if let Some(pair) = model_pair(&source.objects[a.node], &target.objects[b.node])? {
+            if let Some(mut pair) = model_pair(&source.objects[a.node], &target.objects[b.node])? {
+                if self.native_clock {
+                    pair.fields.extend([
+                        Field::Width,
+                        Field::MinWidth,
+                        Field::Opacity,
+                        Field::HitTest,
+                        Field::Visibility,
+                    ]);
+                }
                 pairs.push(pair);
             }
             match (a.items, b.items) {
                 (Some(a), Some(b)) => {
-                    if let Some(pair) = model_pair(&source.objects[a], &target.objects[b])? {
+                    if let Some(mut pair) = model_pair(&source.objects[a], &target.objects[b])? {
+                        if self.native_clock {
+                            pair.fields.extend([
+                                Field::Width,
+                                Field::MinWidth,
+                                Field::Opacity,
+                                Field::HitTest,
+                                Field::Visibility,
+                            ]);
+                        }
                         pairs.push(pair);
                     }
                 }

@@ -154,6 +154,12 @@ pub(crate) fn run(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, Strin
         BoundView::capture(routes[1].clone(), &b, target.source()?)?,
         BoundView::capture(routes[2].clone(), &c, untouched.source()?)?,
     ];
+    let hover_check = crate::tray_interaction::check_hover_routes(
+        views
+            .iter()
+            .map(BoundView::interaction_host)
+            .collect::<Result<Vec<_>, _>>()?,
+    )?;
     let plan = Plan::build(&routes, &["B".into()], options())?;
     let now = unsafe { GetTickCount64() };
     let mut session = routing::prepare(&plan, &views, owner.clone(), now)?;
@@ -185,8 +191,10 @@ pub(crate) fn run(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, Strin
             )?,
         "stop restores selected screen",
     )?;
-    let mut checks =
-        vec!["routing_selected_replica_native_apply_restore_and_unselected_preservation"];
+    let mut checks = vec![
+        "routing_selected_replica_native_apply_restore_and_unselected_preservation",
+        hover_check,
+    ];
     require(
         routing::prepare(&plan, &views[..1], owner.clone(), now).is_err(),
         "missing target binding rejected",

@@ -19,12 +19,17 @@ pub(crate) enum Field {
     DataContext,
     ItemsSource,
     Content,
+    Visibility,
+    Width,
+    MinWidth,
+    Opacity,
+    HitTest,
 }
 impl Field {
     pub(crate) fn property(self) -> Result<Object, String> {
         unsafe {
             let (name, iid) = match self {
-                Self::DataContext => (
+                Self::DataContext | Self::Width | Self::MinWidth => (
                     "Windows.UI.Xaml.FrameworkElement",
                     &IID_IFrameworkElementStatics,
                 ),
@@ -36,6 +41,9 @@ impl Field {
                     "Windows.UI.Xaml.Controls.ContentControl",
                     &IID_IContentControlStatics,
                 ),
+                Self::Visibility | Self::Opacity | Self::HitTest => {
+                    ("Windows.UI.Xaml.UIElement", &IID_IUIElementStatics)
+                }
             };
             let statics = factory(name, iid)?;
             let getter = match self {
@@ -54,6 +62,23 @@ impl Field {
                         .table::<IContentControlStatics_Vtbl>()
                         .ContentProperty
                 }
+                Self::Visibility => statics.table::<IUIElementStatics_Vtbl>().VisibilityProperty,
+                Self::Opacity => statics.table::<IUIElementStatics_Vtbl>().OpacityProperty,
+                Self::HitTest => {
+                    statics
+                        .table::<IUIElementStatics_Vtbl>()
+                        .IsHitTestVisibleProperty
+                }
+                Self::Width => {
+                    statics
+                        .table::<IFrameworkElementStatics_Vtbl>()
+                        .WidthProperty
+                }
+                Self::MinWidth => {
+                    statics
+                        .table::<IFrameworkElementStatics_Vtbl>()
+                        .MinWidthProperty
+                }
             };
             property(&statics, getter)
         }
@@ -63,6 +88,8 @@ impl Field {
             Self::DataContext => &IID_IFrameworkElement,
             Self::ItemsSource => &IID_IItemsControl,
             Self::Content => &IID_IContentControl,
+            Self::Width | Self::MinWidth => &IID_IFrameworkElement,
+            Self::Visibility | Self::Opacity | Self::HitTest => &IID_IUIElement,
         })?;
         Ok(())
     }
@@ -108,7 +135,7 @@ impl ModelLease {
             let source = pair.source.query(&IID_IUnknown)?.raw() as usize;
             let target = pair.target.query(&IID_IUnknown)?.raw() as usize;
             if pair.fields.is_empty()
-                || pair.fields.len() > 3
+                || pair.fields.len() > 8
                 || pair
                     .fields
                     .iter()
@@ -133,7 +160,16 @@ impl ModelLease {
         };
         for (pair, (identity, _)) in pairs.into_iter().zip(identities) {
             // Set inherited data before properties which may bind to it.
-            for field in [Field::DataContext, Field::ItemsSource, Field::Content] {
+            for field in [
+                Field::DataContext,
+                Field::ItemsSource,
+                Field::Content,
+                Field::Width,
+                Field::MinWidth,
+                Field::Opacity,
+                Field::HitTest,
+                Field::Visibility,
+            ] {
                 if !pair.fields.contains(&field) {
                     continue;
                 }
@@ -296,4 +332,69 @@ fn validate(field: Field, value: &Object) -> Result<(), String> {
         enumerate().map_err(|e| format!("托盘集合检查失败：{e}"))?;
     }
     Ok(())
+}
+pub(crate) fn check_surface_sync() -> Result<Vec<&'static str>, String> {
+    let source = crate::clock::load(
+        r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Width="Auto" MinWidth="0" Opacity="1" IsHitTestVisible="True" Visibility="Visible"/>"#,
+    )?;
+    let target = crate::clock::load(
+        r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Width="0" MinWidth="5" Opacity="0" IsHitTestVisible="False" Visibility="Collapsed"/>"#,
+    )?;
+    let fields = vec![
+        Field::Width,
+        Field::MinWidth,
+        Field::Opacity,
+        Field::HitTest,
+        Field::Visibility,
+    ];
+    let originals = fields
+        .iter()
+        .map(|field| read(&target, &field.property()?))
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut lease = ModelLease::capture(vec![Pair {
+        source: source.clone(),
+        target: target.clone(),
+        fields: fields.clone(),
+    }])?;
+    lease.start()?;
+    let matches_source = || -> Result<bool, String> {
+        for field in &fields {
+            let property = field.property()?;
+            if !equal_optional(
+                read(&source, &property)?.as_ref(),
+                read(&target, &property)?.as_ref(),
+            )? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    };
+    if !matches_source()? {
+        return Err("副屏托盘尺寸、透明度或命中测试不同步".into());
+    }
+    let ui = source.query(&IID_IUIElement)?;
+    unsafe {
+        check(
+            (ui.table::<IUIElement_Vtbl>().SetVisibility)(ui.raw(), Visibility::Collapsed),
+            "Source indicator hides",
+        )?;
+    }
+    lease.refresh()?;
+    if !matches_source()? {
+        return Err("副屏未跟随原生指示器隐藏".into());
+    }
+    lease.stop()?;
+    for (field, original) in fields.iter().zip(&originals) {
+        if !equal_optional(
+            original.as_ref(),
+            read(&target, &field.property()?)?.as_ref(),
+        )? {
+            return Err("副屏托盘原生布局未恢复".into());
+        }
+    }
+    Ok(vec![
+        "tray_surface_auto_width_opacity_hit_test_and_visibility_sync",
+        "tray_source_visibility_refresh",
+        "tray_surface_originals_restored",
+    ])
 }

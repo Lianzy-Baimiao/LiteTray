@@ -729,7 +729,7 @@ impl App {
                         340,
                     );
                     self.check(
-                        "复制应用托盘图标和隐藏图标入口",
+                        "复制主屏托盘图标和隐藏图标入口",
                         c.tray.enabled && c.tray.show_icons,
                         308,
                         224,
@@ -737,8 +737,8 @@ impl App {
                         400,
                     );
                     self.check(
-                        "网络 / 音量 / 电池（尚未支持复制）",
-                        c.tray.show_control_center,
+                        "包含网络 / 音量 / 输入法等系统图标",
+                        c.tray.enabled && c.tray.show_icons,
                         303,
                         224,
                         200,
@@ -793,7 +793,7 @@ impl App {
                         64,
                     );
                     self.label(
-                        "保存后生效。复制原生应用图标；输入法、控制中心与跨屏菜单仍在完善。",
+                        "保存后生效。图标顺序、显隐与宽度跟随主屏，按实际内容排列。",
                         224,
                         527,
                         width - 260,
@@ -905,7 +905,7 @@ impl App {
                     self.label("兼容策略：先检测系统能力，再启用对应任务栏适配。\r\nWindows 10 经典任务栏和 Windows 11 XAML 任务栏分别实现。\r\n未知系统版本不使用未验证的内存偏移。",224,389,width-260,100);
                 }
                 5 => {
-                    self.label(&format!("LiteTray 轻托盘  {} · {UI_REVISION}\r\n自动宽度时钟、日历天气、应用托盘图标复制\r\n系统图标及跨屏菜单仍在完善",env!("CARGO_PKG_VERSION")),224,86,width-260,80);
+                    self.label(&format!("LiteTray 轻托盘  {} · {UI_REVISION}\r\n自动宽度时钟、日历天气、主屏托盘图标复制",env!("CARGO_PKG_VERSION")),224,86,width-260,80);
                     self.edit(
                         "GitHub 更新仓库（owner/repository）",
                         &c.updates.repository,

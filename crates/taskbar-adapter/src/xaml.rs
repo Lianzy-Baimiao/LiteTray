@@ -243,9 +243,6 @@ pub(crate) fn visibility(node: &Object) -> Result<Option<bool>, String> {
         })
     }
 }
-pub fn inspect(root: Object) -> Result<Tree, String> {
-    walk(root, |_, _| Ok(()))
-}
 /// The visitor borrows each object on its owning UI thread. It must acquire
 /// its own COM reference if retaining a target beyond this call.
 pub(crate) fn walk(
@@ -360,6 +357,9 @@ mod tests {
             11 * slot
         );
         assert_eq!(offset_of!(ITextBlock_Vtbl, Text), 26 * slot);
+        assert_eq!(offset_of!(IFlyoutBase_Vtbl, ShowAt), 14 * slot);
+        assert_eq!(offset_of!(IFlyoutBase5_Vtbl, ShowAt), 12 * slot);
+        assert_eq!(offset_of!(IFlyoutBase6_Vtbl, XamlRoot), 9 * slot);
         assert_eq!(offset_of!(ITextBlockStatics_Vtbl, TextProperty), 16 * slot);
         assert_eq!(
             offset_of!(IFrameworkElementStatics_Vtbl, DataContextProperty),

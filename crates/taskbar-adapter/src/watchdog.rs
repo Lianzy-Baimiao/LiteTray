@@ -104,6 +104,13 @@ pub struct Watchdog {
 thread_local! {static WINDOWS:Cell<u32>=const{Cell::new(0)};}
 
 impl Watchdog {
+    pub(crate) fn prepare_interaction(
+        &self,
+        runtime: Rc<crate::tray_interaction::Runtime>,
+    ) -> Result<(), String> {
+        self.context
+            .with_session(|session| session.prepare_interaction(runtime))
+    }
     pub(crate) fn retain_sources(
         &self,
         sources: Vec<crate::taskbar_source::Source>,

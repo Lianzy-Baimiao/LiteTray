@@ -20,6 +20,36 @@ pub(crate) struct BoundView<'a> {
     binding: Rc<Binding>,
 }
 impl<'a> BoundView<'a> {
+    pub(crate) fn interaction_host(&self) -> Result<crate::tray_interaction::Host, String> {
+        let mut surfaces = Vec::new();
+        for role in [
+            litetray_adapter_protocol::topology::Role::HiddenIcons,
+            litetray_adapter_protocol::topology::Role::NotificationIcons,
+            litetray_adapter_protocol::topology::Role::SystemIcons,
+            litetray_adapter_protocol::topology::Role::PrivacyIndicators,
+            litetray_adapter_protocol::topology::Role::ControlCenter,
+        ] {
+            let (element, items) = self.view.tray_surface(role)?;
+            let items = items.or_else(|| {
+                element
+                    .try_query(&crate::xaml_abi::IID_IItemsControl)
+                    .ok()
+                    .flatten()
+            });
+            surfaces.push(crate::tray_interaction::Surface {
+                role,
+                element,
+                items,
+            });
+        }
+        Ok(crate::tray_interaction::Host {
+            taskbar: self.route.window as HWND,
+            secondary: self.route.secondary,
+            binding: self.binding.clone(),
+            root: self.view.root_content()?,
+            surfaces,
+        })
+    }
     pub(crate) fn input_window(&self) -> u64 {
         self.binding.window() as u64
     }
@@ -119,7 +149,9 @@ pub(crate) fn prepare(
             );
         }
         for change in &target.visibility {
-            visibility.push(view.visibility_target(change.role, change.visible)?);
+            if !view.native() || !target.models.contains(&change.role) {
+                visibility.push(view.visibility_target(change.role, change.visible)?);
+            }
         }
     }
     // Everything is captured before Session starts any native property write.

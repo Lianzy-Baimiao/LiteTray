@@ -104,6 +104,17 @@ unsafe fn prepare(request: &Prepare) -> Result<Reply, String> {
             return Err("无法保持适配模块生命周期".into());
         }
         let receiver = request.owner.receiver as HWND;
+        let interaction = if request.mirror_icons {
+            crate::tray_interaction::install()?;
+            Some(crate::tray_interaction::Runtime::new(
+                bound
+                    .iter()
+                    .map(BoundView::interaction_host)
+                    .collect::<Result<Vec<_>, _>>()?,
+            ))
+        } else {
+            None
+        };
         let watchdog = if request.custom_calendar {
             routing::attach_interactive(
                 &plan,
@@ -161,6 +172,9 @@ unsafe fn prepare(request: &Prepare) -> Result<Reply, String> {
         // Session releases private hosts only after callbacks/properties have
         // restored successfully, including watchdog expiry after host loss.
         watchdog.retain_sources(sources)?;
+        if let Some(interaction) = interaction {
+            watchdog.prepare_interaction(interaction)?;
+        }
         ACTIVE.with(|v| *v.borrow_mut() = Some(Rc::new(Active { watchdog })));
         Ok(reply)
     }

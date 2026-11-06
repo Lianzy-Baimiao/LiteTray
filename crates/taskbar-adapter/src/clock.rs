@@ -571,6 +571,8 @@ pub(crate) fn self_test() -> Result<serde_json::Value, String> {
         checks.extend(crate::lifecycle_checks::run()?);
         checks.extend(crate::clock_style_checks::run()?);
         checks.extend(crate::clock_text_checks::run()?);
+        checks.extend(crate::tray_menu::self_test()?);
+        checks.extend(crate::tray::check_surface_sync()?);
         Ok(
             serde_json::json!({"passed":true,"environment":"isolated_xaml_in_host_process","explorer_accessed":false,"checks":checks}),
         )

@@ -62,22 +62,14 @@ impl Prepare {
                 clocks: self.clocks,
                 tray: self.mirror_icons,
                 icons: true,
-                control_center: false,
+                control_center: self.mirror_icons,
                 copied_taskbars_only: true,
             },
         )?;
-        // Application notification icons and the overflow chevron use the
-        // native notification model. System glyph menus require separate
-        // cross-island menu ownership and are not enabled by this capability.
         for target in &mut plan.targets {
-            let supported = |role: &crate::topology::Role| {
-                matches!(
-                    role,
-                    crate::topology::Role::HiddenIcons | crate::topology::Role::NotificationIcons
-                )
-            };
-            target.models.retain(supported);
-            target.visibility.retain(|v| supported(&v.role));
+            if !target.models.is_empty() {
+                target.models.push(crate::topology::Role::ShowDesktop);
+            }
         }
         if plan.targets.is_empty() {
             return Err("所选范围没有可启用的组件".into());
@@ -177,7 +169,11 @@ mod tests {
             plan.targets[0].models,
             [
                 crate::topology::Role::HiddenIcons,
-                crate::topology::Role::NotificationIcons
+                crate::topology::Role::NotificationIcons,
+                crate::topology::Role::SystemIcons,
+                crate::topology::Role::PrivacyIndicators,
+                crate::topology::Role::ControlCenter,
+                crate::topology::Role::ShowDesktop,
             ]
         );
         let reply = Reply {

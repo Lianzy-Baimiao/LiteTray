@@ -248,6 +248,69 @@ pub struct IDesktopWindowXamlSource_Vtbl {
         unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
     NavigateFocus: usize,
 }
+pub const IID_IFlyoutBase: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0x723eea0b_d12e_430d_a9f0_9bb32bbf9913);
+#[repr(C)]
+pub struct IFlyoutBase_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    Placement: usize,
+    SetPlacement: usize,
+    Opened: usize,
+    pub RemoveOpened:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    Closed: usize,
+    pub RemoveClosed:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    Opening: usize,
+    pub RemoveOpening:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    pub ShowAt: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    pub Hide: unsafe extern "system" fn(*mut core::ffi::c_void) -> windows_sys::core::HRESULT,
+}
+pub const IID_IFlyoutBase5: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0xad3ec0c7_12bb_5a73_b78e_105192ca73d6);
+#[repr(C)]
+pub struct IFlyoutBase5_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    ShowMode: usize,
+    SetShowMode: usize,
+    pub InputDevicePrefersPrimaryCommands:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub AreOpenCloseAnimationsEnabled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub SetAreOpenCloseAnimationsEnabled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_sys::core::HRESULT,
+    pub IsOpen:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub ShowAt: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+}
+pub const IID_IFlyoutBase6: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0x5399de8c_06cc_5b52_b65a_ff9322d1c940);
+#[repr(C)]
+pub struct IFlyoutBase6_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    pub ShouldConstrainToRootBounds:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub SetShouldConstrainToRootBounds:
+        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_sys::core::HRESULT,
+    pub IsConstrainedToRootBounds:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub XamlRoot: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    pub SetXamlRoot: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+}
 pub const IID_IFontFamily: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0x92467e64_d66a_4cf4_9322_3d23b3c0c361);
 #[repr(C)]
@@ -407,7 +470,10 @@ pub struct IFrameworkElementStatics_Vtbl {
         *mut *mut core::ffi::c_void,
     ) -> windows_sys::core::HRESULT,
     HeightProperty: usize,
-    MinWidthProperty: usize,
+    pub MinWidthProperty: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
     MaxWidthProperty: usize,
     MinHeightProperty: usize,
     MaxHeightProperty: usize,
@@ -527,6 +593,18 @@ pub struct IKeyRoutedEventArgs_Vtbl {
         unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
     pub SetHandled:
         unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_sys::core::HRESULT,
+}
+pub const IID_IMenuFlyout: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0xad3210f1_985b_4171_bbba_67bcc729649b);
+#[repr(C)]
+pub struct IMenuFlyout_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    pub Items: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    MenuFlyoutPresenterStyle: usize,
+    SetMenuFlyoutPresenterStyle: usize,
 }
 pub const IID_IPropertyValue: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0x4bd682dd_7554_40e9_9a9b_82654ede7e62);
@@ -1203,7 +1281,10 @@ pub struct IUIElement10_Vtbl {
         *mut core::ffi::c_void,
         *mut *mut core::ffi::c_void,
     ) -> windows_sys::core::HRESULT,
-    SetXamlRoot: usize,
+    pub SetXamlRoot: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
     UIContext: usize,
     Shadow: usize,
     SetShadow: usize,
@@ -1237,12 +1318,18 @@ pub struct IUIElementStatics_Vtbl {
     DragOverEvent: usize,
     DropEvent: usize,
     AllowDropProperty: usize,
-    OpacityProperty: usize,
+    pub OpacityProperty: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
     ClipProperty: usize,
     RenderTransformProperty: usize,
     ProjectionProperty: usize,
     RenderTransformOriginProperty: usize,
-    IsHitTestVisibleProperty: usize,
+    pub IsHitTestVisibleProperty: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
     pub VisibilityProperty: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *mut *mut core::ffi::c_void,
