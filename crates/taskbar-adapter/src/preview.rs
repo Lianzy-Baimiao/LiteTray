@@ -2,20 +2,20 @@
 //! routed input as the adapter. Never discovers or attaches to Explorer.
 use crate::{
     clock::{ClockLease, load},
-    input::Subscription,
+    session::{InputTarget, Session, Target},
+    watchdog::Watchdog,
     wide,
     xaml::{Object, StringHandle, check, factory},
     xaml_abi::*,
 };
 use litetray_adapter_protocol::{
     activation::{EVENT_TAG, MAX_EVENT},
-    clock::{Frame, Owner},
+    clock::{Change, Command, Frame, Owner},
 };
 use std::{
     cell::Cell,
     ffi::c_void,
     ptr::{null, null_mut},
-    rc::Rc,
 };
 use windows_sys::{
     Win32::{
@@ -73,9 +73,9 @@ pub struct Preview {
     source: Option<Object>,
     native: Option<Object>,
     focus: Option<Object>,
-    input: Option<Subscription>,
-    clock: Option<ClockLease>,
-    frame: Option<Frame>,
+    watchdog: Option<Watchdog>,
+    owner: Owner,
+    sequence: Cell<u64>,
     thread: u32,
     class: Vec<u16>,
 }
@@ -98,9 +98,9 @@ impl Preview {
                 source: None,
                 native: None,
                 focus: None,
-                input: None,
-                clock: None,
-                frame: None,
+                watchdog: None,
+                owner: owner.clone(),
+                sequence: Cell::new(0),
                 thread: GetCurrentThreadId(),
                 class: wide(&format!("LiteTray.ClockPreview.{}", GetCurrentThreadId())),
             };
@@ -182,8 +182,10 @@ impl Preview {
             std::mem::forget(focus);
             let time = find("Time")?;
             let date = find("Date")?;
-            preview.clock = Some(ClockLease::capture(&time, &date, &clock)?);
-            preview.update(frame)?;
+            let target = Target {
+                id: 1,
+                clock: ClockLease::capture(&time, &date, &clock)?,
+            };
             let source = preview.source.as_ref().unwrap();
             let root_ui = root.query(&IID_IUIElement)?;
             check(
@@ -195,12 +197,18 @@ impl Preview {
             )?;
             let receiver = owner.receiver as HWND;
             let island = preview.island;
-            preview.input = Some(Subscription::attach(
-                &clock,
-                island,
+            preview.watchdog = Some(Watchdog::attach(Session::new(
                 owner,
-                1,
-                Rc::new(Cell::new(0)),
+                vec![target],
+                windows_sys::Win32::System::SystemInformation::GetTickCount64(),
+            )?)?);
+            let watchdog = preview.watchdog.as_ref().unwrap();
+            watchdog.prepare_inputs(
+                vec![InputTarget {
+                    id: 1,
+                    element: clock,
+                    island,
+                }],
                 move |event| {
                     let Ok(bytes) = serde_json::to_vec(&event) else {
                         return false;
@@ -225,7 +233,8 @@ impl Preview {
                     ) != 0
                         && accepted == 1
                 },
-            )?);
+            )?;
+            watchdog.start(frame)?;
             let dpi = windows_sys::Win32::UI::HiDpi::GetDpiForWindow(preview.window).max(96) as i32;
             let mut rect = RECT {
                 left: 0,
@@ -255,29 +264,32 @@ impl Preview {
             Ok(preview)
         }
     }
-    pub fn update(&mut self, frame: Frame) -> Result<(), String> {
+    pub fn update(&self, frame: Frame) -> Result<(), String> {
+        frame.validate()?;
+        self.command(Change::Update { frame })
+    }
+    pub fn heartbeat(&self) -> Result<(), String> {
+        self.command(Change::Heartbeat)
+    }
+    fn command(&self, change: Change) -> Result<(), String> {
         if unsafe { GetCurrentThreadId() } != self.thread {
             return Err("原生预览线程不匹配".into());
         }
-        frame.validate()?;
-        let clock = self.clock.as_mut().ok_or("原生预览时钟尚未创建")?;
-        if self
-            .frame
-            .as_ref()
-            .is_none_or(|old| old.style != frame.style)
-        {
-            clock.apply(
-                &frame.text.top,
-                &frame.text.bottom,
-                frame.style.font_size as f64,
-                &frame.style.font_family,
-                frame.style.width as f64,
-            )?;
-        } else {
-            clock.tick(&frame.text.top, &frame.text.bottom)?;
-        }
-        self.frame = Some(frame);
-        Ok(())
+        let watchdog = self.watchdog.as_ref().ok_or("原生预览会话尚未创建")?;
+        let sequence = self
+            .sequence
+            .get()
+            .checked_add(1)
+            .ok_or("预览命令序号已用尽")?;
+        self.sequence.set(sequence);
+        let bytes = serde_json::to_vec(&Command {
+            version: litetray_adapter_protocol::VERSION,
+            owner: self.owner.clone(),
+            sequence,
+            change,
+        })
+        .map_err(|e| e.to_string())?;
+        watchdog.receive(&bytes)
     }
     pub fn visible(&self) -> bool {
         unsafe { IsWindowVisible(self.window) != 0 }
@@ -324,8 +336,7 @@ impl Preview {
 }
 impl Drop for Preview {
     fn drop(&mut self) {
-        self.input.take();
-        self.clock.take();
+        self.watchdog.take();
         unsafe {
             let focus = RemovePropW(self.window, wide(FOCUS_PROPERTY).as_ptr());
             if !focus.is_null() {
@@ -345,6 +356,119 @@ impl Drop for Preview {
         }
         if let Some(manager) = self.manager.take() {
             close(&manager);
+        }
+    }
+}
+/// Fresh controls for lifecycle verification, detached from the preview's
+/// own session before another session captures their original properties.
+pub(crate) struct InputFixture {
+    time: Object,
+    date: Object,
+    control: Object,
+    preview: Preview,
+}
+impl InputFixture {
+    pub(crate) fn new(owner: Owner, frame: Frame) -> Result<Self, String> {
+        let mut preview = Preview::create(owner, frame, false)?;
+        if let Some(watchdog) = preview.watchdog.take() {
+            watchdog.stop()?;
+        }
+        let control = preview
+            .focus
+            .as_ref()
+            .ok_or("预览控件缺失")?
+            .query(&IID_IUIElement)?;
+        let root = crate::xaml::root_content(&control)?.query(&IID_IFrameworkElement)?;
+        let find = |name: &str| -> Result<Object, String> {
+            unsafe {
+                let name = StringHandle::new(name)?;
+                let mut object = null_mut();
+                check(
+                    (root.table::<IFrameworkElement_Vtbl>().FindName)(
+                        root.raw(),
+                        name.0,
+                        &mut object,
+                    ),
+                    "Find isolated input fixture",
+                )?;
+                Object::owned(object)
+            }
+        };
+        let time = find("Time")?;
+        let date = find("Date")?;
+        let root = root.query(&IID_IUIElement)?;
+        unsafe {
+            check(
+                (root.table::<IUIElement_Vtbl>().Measure)(
+                    root.raw(),
+                    Size {
+                        Width: 520.,
+                        Height: 130.,
+                    },
+                ),
+                "Measure input fixture",
+            )?;
+            check(
+                (root.table::<IUIElement_Vtbl>().Arrange)(
+                    root.raw(),
+                    Rect {
+                        X: 0.,
+                        Y: 0.,
+                        Width: 520.,
+                        Height: 130.,
+                    },
+                ),
+                "Arrange input fixture",
+            )?;
+            check(
+                (root.table::<IUIElement_Vtbl>().UpdateLayout)(root.raw()),
+                "Layout input fixture",
+            )?;
+        }
+        Ok(Self {
+            preview,
+            time,
+            date,
+            control,
+        })
+    }
+    pub(crate) fn capture(&self, id: u64) -> Result<Target, String> {
+        Ok(Target {
+            id,
+            clock: ClockLease::capture(&self.time, &self.date, &self.control)?,
+        })
+    }
+    pub(crate) fn input(&self, id: u64) -> Result<InputTarget, String> {
+        Ok(InputTarget {
+            id,
+            element: self.control.query(&IID_IUIElement)?,
+            island: self.preview.island,
+        })
+    }
+    pub(crate) fn restored(&self) -> Result<bool, String> {
+        unsafe {
+            let time = self.time.query(&IID_ITextBlock)?;
+            let date = self.date.query(&IID_ITextBlock)?;
+            Ok(
+                time.string(time.table::<ITextBlock_Vtbl>().Text, 4096)? == "Original time"
+                    && date.string(date.table::<ITextBlock_Vtbl>().Text, 4096)? == "Original date",
+            )
+        }
+    }
+    pub(crate) fn set_date(&self, text: &str) -> Result<(), String> {
+        unsafe {
+            let date = self.date.query(&IID_ITextBlock)?;
+            let text = StringHandle::new(text)?;
+            check(
+                (date.table::<ITextBlock_Vtbl>().SetText)(date.raw(), text.0),
+                "External fixture date",
+            )
+        }
+    }
+    pub(crate) fn date(&self) -> Result<String, String> {
+        unsafe {
+            let date = self.date.query(&IID_ITextBlock)?;
+            date.string(date.table::<ITextBlock_Vtbl>().Text, 4096)
         }
     }
 }
@@ -509,8 +633,19 @@ pub unsafe extern "system" fn LiteTrayPreviewUpdate(
         }
         let result = serde_json::from_slice(std::slice::from_raw_parts(bytes, length))
             .map_err(|e| e.to_string())
-            .and_then(|f| (&mut *handle.cast::<Preview>()).update(f));
+            .and_then(|f| (&*handle.cast::<Preview>()).update(f));
         result.is_ok() as i32
+    }
+}
+/// # Safety
+/// `handle` is the live Create handle, used on its owning STA.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn LiteTrayPreviewHeartbeat(handle: *mut c_void) -> i32 {
+    unsafe {
+        if handle.is_null() {
+            return 0;
+        }
+        (&*handle.cast::<Preview>()).heartbeat().is_ok() as i32
     }
 }
 /// # Safety

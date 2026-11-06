@@ -42,11 +42,29 @@ struct Handler {
 struct Context {
     thread: u32,
     active: Cell<bool>,
-    sequence: Rc<Cell<u64>>,
+    sequence: Rc<Sequence>,
     clock_id: u64,
     owner: Owner,
     island: HWND,
     publish: Box<dyn Fn(Activation) -> bool>,
+}
+/// Shared by every clock in one session. The busy flag prevents nested native
+/// events from publishing the same sequence while a callback pumps messages.
+#[derive(Default)]
+pub struct Sequence {
+    value: Cell<u64>,
+    busy: Cell<bool>,
+}
+impl Sequence {
+    pub fn new() -> Rc<Self> {
+        Rc::new(Self::default())
+    }
+}
+struct DispatchGuard(Rc<Sequence>);
+impl Drop for DispatchGuard {
+    fn drop(&mut self) {
+        self.0.busy.set(false);
+    }
 }
 unsafe extern "system" fn query(this: *mut c_void, iid: *const GUID, out: *mut *mut c_void) -> i32 {
     unsafe {
@@ -101,6 +119,10 @@ unsafe extern "system" fn invoke(this: *mut c_void, sender: *mut c_void, args: *
         if !context.active.get() || sender.is_null() || args.is_null() {
             return S_OK;
         }
+        if context.sequence.busy.replace(true) {
+            return S_OK;
+        }
+        let _dispatch = DispatchGuard(context.sequence.clone());
         // Errors leave the original system input behavior available. Never
         // propagate a failed geometry query through the shell's event route.
         let _ = dispatch(&context, kind, sender, args);
@@ -170,6 +192,7 @@ unsafe fn dispatch(
         let anchor = bounds(&sender, context.island)?;
         let sequence = context
             .sequence
+            .value
             .get()
             .checked_add(1)
             .ok_or("点击序号已用尽")?;
@@ -183,8 +206,8 @@ unsafe fn dispatch(
             input: kind,
         };
         event.validate()?;
-        if (context.publish)(event) {
-            context.sequence.set(sequence);
+        if (context.publish)(event) && context.active.get() {
+            context.sequence.value.set(sequence);
             check(set_handled(args.raw(), true), "SetHandled")?;
         }
         Ok(())
@@ -300,12 +323,12 @@ pub struct Subscription {
     key: Option<i64>,
 }
 impl Subscription {
-    pub fn attach(
+    pub fn prepare(
         element: &Object,
         island: HWND,
         owner: Owner,
         clock_id: u64,
-        sequence: Rc<Cell<u64>>,
+        sequence: Rc<Sequence>,
         publish: impl Fn(Activation) -> bool + 'static,
     ) -> Result<Self, String> {
         owner.validate()?;
@@ -317,7 +340,7 @@ impl Subscription {
         }
         let context = Rc::new(Context {
             thread: unsafe { GetCurrentThreadId() },
-            active: Cell::new(true),
+            active: Cell::new(false),
             sequence,
             clock_id,
             owner,
@@ -348,8 +371,18 @@ impl Subscription {
         }
         Ok(subscription)
     }
-    pub fn detach(&mut self) -> Result<(), String> {
+    pub fn activate(&self) -> Result<(), String> {
+        if self.tap.is_none() || self.key.is_none() {
+            return Err("点击订阅已解除或不完整".into());
+        }
+        self.context.active.set(true);
+        Ok(())
+    }
+    pub fn suspend(&self) {
         self.context.active.set(false);
+    }
+    pub fn detach(&mut self) -> Result<(), String> {
+        self.suspend();
         let mut errors = Vec::new();
         unsafe {
             let table = self.element.table::<IUIElement_Vtbl>();
@@ -370,6 +403,48 @@ impl Subscription {
         } else {
             Err(errors.join("; "))
         }
+    }
+}
+
+/// Retains the event delegate across teardown for isolated lifecycle checks.
+pub(crate) struct Probe {
+    handler: Object,
+    element: Object,
+    args: Object,
+}
+impl Probe {
+    pub fn invoke(&self) -> Result<bool, String> {
+        unsafe {
+            let table = self.args.table::<ITappedRoutedEventArgs_Vtbl>();
+            check(
+                (table.SetHandled)(self.args.raw(), false),
+                "Reset probe event",
+            )?;
+            check(
+                (self.handler.table::<HandlerTable>().invoke)(
+                    self.handler.raw(),
+                    self.element.raw(),
+                    self.args.raw(),
+                ),
+                "Invoke retained input delegate",
+            )?;
+            let mut handled = false;
+            check(
+                (table.Handled)(self.args.raw(), &mut handled),
+                "Read probe event",
+            )?;
+            Ok(handled)
+        }
+    }
+}
+impl Subscription {
+    pub(crate) fn probe(&self) -> Result<Probe, String> {
+        Ok(Probe {
+            handler: handler(self.context.clone(), Input::Pointer)?,
+            element: self.element.query(&IID_IUIElement)?,
+            args: crate::preview::activate("Windows.UI.Xaml.Input.TappedRoutedEventArgs")?
+                .query(&IID_ITappedRoutedEventArgs)?,
+        })
     }
 }
 impl Drop for Subscription {
@@ -402,17 +477,18 @@ pub(crate) fn self_test(
     let baseline = LIVE_HANDLERS.load(Ordering::Relaxed);
     let events = Rc::new(RefCell::new(Vec::new()));
     let collected = events.clone();
-    let mut subscription = Subscription::attach(
+    let mut subscription = Subscription::prepare(
         element,
         island,
         owner.clone(),
         1,
-        Rc::new(Cell::new(0)),
+        Sequence::new(),
         move |event| {
             collected.borrow_mut().push(event);
             true
         },
     )?;
+    subscription.activate()?;
     let tap = handler(subscription.context.clone(), Input::Pointer)?;
     let args = crate::preview::activate("Windows.UI.Xaml.Input.TappedRoutedEventArgs")?
         .query(&IID_ITappedRoutedEventArgs)?;
@@ -448,14 +524,11 @@ pub(crate) fn self_test(
     }
     drop(tap);
     drop(subscription);
-    let mut rejected = Subscription::attach(
-        element,
-        island,
-        owner.clone(),
-        1,
-        Rc::new(Cell::new(0)),
-        |_| false,
-    )?;
+    let mut rejected =
+        Subscription::prepare(element, island, owner.clone(), 1, Sequence::new(), |_| {
+            false
+        })?;
+    rejected.activate()?;
     let tap = handler(rejected.context.clone(), Input::Pointer)?;
     unsafe {
         check(
@@ -471,7 +544,7 @@ pub(crate) fn self_test(
             (args.table::<ITappedRoutedEventArgs_Vtbl>().Handled)(args.raw(), &mut handled),
             "Rejected Handled",
         )?;
-        if handled || rejected.context.sequence.get() != 0 {
+        if handled || rejected.context.sequence.value.get() != 0 {
             return Err("发布失败不应吞掉输入或递增序号".into());
         }
     }
@@ -479,14 +552,11 @@ pub(crate) fn self_test(
     drop(tap);
     drop(rejected);
     for _ in 0..12 {
-        let mut sub = Subscription::attach(
-            element,
-            island,
-            owner.clone(),
-            1,
-            Rc::new(Cell::new(0)),
-            |_| false,
-        )?;
+        let mut sub =
+            Subscription::prepare(element, island, owner.clone(), 1, Sequence::new(), |_| {
+                false
+            })?;
+        sub.activate()?;
         sub.detach()?;
     }
     if LIVE_HANDLERS.load(Ordering::Relaxed) != baseline {

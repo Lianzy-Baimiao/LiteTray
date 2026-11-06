@@ -1,7 +1,14 @@
 //! UI-thread lifetime for a set of native clocks. The host cannot keep an old
 //! session alive with replayed messages or mutate a partly restored session.
 use crate::clock::ClockLease;
+use crate::{
+    input::{Probe, Sequence, Subscription},
+    xaml::Object,
+};
+use litetray_adapter_protocol::activation::Activation;
 use litetray_adapter_protocol::clock::{Change, Command, Frame, Lease, MAX_CLOCKS, Owner};
+use std::rc::Rc;
+use windows_sys::Win32::Foundation::HWND;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -14,11 +21,19 @@ pub struct Target {
     pub id: u64,
     pub clock: ClockLease,
 }
+/// Caller has verified that this island HWND and element share one XAML root.
+pub struct InputTarget {
+    pub id: u64,
+    pub element: Object,
+    pub island: HWND,
+}
 pub struct Session {
     lease: Lease,
     targets: Vec<Target>,
     state: State,
     frame: Option<Frame>,
+    inputs: Vec<(u64, Subscription)>,
+    inputs_prepared: bool,
 }
 impl Session {
     /// Captured targets must be disjoint; otherwise rollback order would
@@ -42,6 +57,8 @@ impl Session {
             targets,
             state: State::Prepared,
             frame: None,
+            inputs: vec![],
+            inputs_prepared: false,
         })
     }
     pub fn state(&self) -> State {
@@ -49,6 +66,71 @@ impl Session {
     }
     pub fn owner(&self) -> &Owner {
         self.lease.owner()
+    }
+    pub fn accepts_input(&self, now: u64) -> bool {
+        self.state == State::Active && !self.lease.expired(now)
+    }
+    /// Build every subscription while inactive. Partial preparation is rolled
+    /// back before any text/style is changed, retaining failed detaches.
+    pub fn prepare_inputs(
+        &mut self,
+        targets: Vec<InputTarget>,
+        publish: impl Fn(Activation) -> bool + 'static,
+    ) -> Result<(), String> {
+        if self.state != State::Prepared || self.inputs_prepared {
+            return Err("点击订阅只能在会话准备阶段配置一次".into());
+        }
+        if targets.len() > MAX_CLOCKS
+            || targets.iter().enumerate().any(|(i, t)| {
+                !self.targets.iter().any(|clock| clock.id == t.id)
+                    || targets[..i].iter().any(|old| old.id == t.id)
+            })
+        {
+            return Err("点击目标不属于当前时钟会话或存在重复".into());
+        }
+        // Two target IDs must not subscribe to the same native input element.
+        let mut identities = Vec::new();
+        for target in &targets {
+            let id = target.element.query(&windows_sys::core::IID_IUnknown)?;
+            if identities
+                .iter()
+                .any(|other: &Object| other.raw() == id.raw())
+            {
+                return Err("点击控件被多个时钟重复引用".into());
+            }
+            identities.push(id);
+        }
+        self.inputs_prepared = true;
+        let sequence = Sequence::new();
+        let publish = Rc::new(publish);
+        for target in targets {
+            let publisher = publish.clone();
+            match Subscription::prepare(
+                &target.element,
+                target.island,
+                self.owner().clone(),
+                target.id,
+                sequence.clone(),
+                move |event| publisher(event),
+            ) {
+                Ok(input) => self.inputs.push((target.id, input)),
+                Err(error) => {
+                    return match self.stop() {
+                        Ok(()) => Err(error),
+                        Err(restore) => Err(format!("{error}；{restore}")),
+                    };
+                }
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn input_probe(&self, id: u64) -> Result<Probe, String> {
+        self.inputs
+            .iter()
+            .find(|(target, _)| *target == id)
+            .ok_or("点击测试目标不存在")?
+            .1
+            .probe()
     }
     /// On failure the caller retains this session to retry unfinished restores.
     pub fn start(&mut self, frame: Frame, now: u64) -> Result<(), String> {
@@ -61,6 +143,14 @@ impl Session {
             return Err("时钟初始化已超时".into());
         }
         self.apply(frame)?;
+        for (_, input) in &self.inputs {
+            if let Err(error) = input.activate() {
+                return match self.stop() {
+                    Ok(()) => Err(error),
+                    Err(restore) => Err(format!("{error}；{restore}")),
+                };
+            }
+        }
         self.state = State::Active;
         Ok(())
     }
@@ -129,7 +219,17 @@ impl Session {
             return Ok(());
         }
         self.state = State::Restoring;
+        // Stop every delegate before the first COM detach/restore may pump
+        // messages and reenter another clock's callback.
+        for (_, input) in &self.inputs {
+            input.suspend();
+        }
         let mut errors = Vec::new();
+        for (id, input) in self.inputs.iter_mut().rev() {
+            if let Err(error) = input.detach() {
+                errors.push(format!("时钟 {id} 点击恢复：{error}"));
+            }
+        }
         for target in self.targets.iter_mut().rev() {
             if let Err(error) = target.clock.restore() {
                 errors.push(format!("时钟 {}：{error}", target.id));
@@ -137,6 +237,7 @@ impl Session {
         }
         self.frame = None;
         if errors.is_empty() {
+            self.inputs.clear();
             self.targets.clear();
             self.state = State::Closed;
             Ok(())

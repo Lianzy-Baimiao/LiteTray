@@ -1,7 +1,7 @@
 //! Native UI-thread watchdog. It never calls a XAML object from a worker thread.
 //! The owner of this object must keep the adapter module loaded until Drop.
 use crate::{
-    session::{Session, State},
+    session::{InputTarget, Session, State},
     wide,
 };
 use std::{
@@ -166,6 +166,41 @@ impl Watchdog {
                 Err("时钟宿主已失联".into())
             }
         })
+    }
+    pub fn prepare_inputs(
+        &self,
+        targets: Vec<InputTarget>,
+        publish: impl Fn(litetray_adapter_protocol::activation::Activation) -> bool + 'static,
+    ) -> Result<(), String> {
+        let context = Rc::downgrade(&self.context);
+        self.context.with_session(|session| {
+            session.prepare_inputs(targets, move |event| {
+                let Some(context) = context.upgrade() else {
+                    return false;
+                };
+                if !unsafe { context.alive() } {
+                    return false;
+                }
+                let allowed = context.session.try_borrow().ok().is_some_and(|session| {
+                    session
+                        .as_ref()
+                        .is_some_and(|s| s.accepts_input(unsafe { GetTickCount64() }))
+                });
+                // Drop the session borrow before publishing can reenter shutdown.
+                allowed && publish(event)
+            })
+        })
+    }
+    pub fn receive(&self, bytes: &[u8]) -> Result<(), String> {
+        self.context.receive(bytes)
+    }
+    pub(crate) fn input_probe(&self, id: u64) -> Result<crate::input::Probe, String> {
+        self.context
+            .session
+            .borrow()
+            .as_ref()
+            .ok_or("会话正忙")?
+            .input_probe(id)
     }
     /// Advertised only by an established session, never a taskbar HWND.
     pub fn endpoint(&self) -> Option<HWND> {

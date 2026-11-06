@@ -286,7 +286,7 @@ fn native_transport_checks(
         "native_endpoint_destruction_restore",
     ])
 }
-fn pump_until_closed(watchdog: &Watchdog, milliseconds: u64) -> Result<(), String> {
+pub(crate) fn pump_until_closed(watchdog: &Watchdog, milliseconds: u64) -> Result<(), String> {
     let limit = unsafe { GetTickCount64() } + milliseconds;
     while watchdog.state() != State::Closed && unsafe { GetTickCount64() } < limit {
         unsafe {
@@ -444,9 +444,9 @@ fn child_process_checks(
         "native_watchdog_process_exit",
     ])
 }
-struct Receiver(HWND);
+pub(crate) struct Receiver(pub HWND);
 impl Receiver {
-    fn new() -> Result<Self, String> {
+    pub(crate) fn new() -> Result<Self, String> {
         unsafe {
             let window = CreateWindowExW(
                 0,
@@ -705,6 +705,7 @@ pub fn run() -> Result<Vec<&'static str>, String> {
     )?;
     checks.push("native_watchdog_resource_cleanup");
     checks.extend(crate::preview::self_test(owner.clone(), frame())?);
+    checks.extend(crate::input_checks::run(owner.clone(), frame())?);
     // A competing writer changes the second clock after LiteTray starts. The
     // first clock is updated before the second reports a conflict; both must
     // leave the session while the competing writer's value survives.

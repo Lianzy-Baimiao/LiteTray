@@ -4,6 +4,7 @@
 #![cfg(windows)]
 mod clock;
 mod input;
+mod input_checks;
 mod inspect;
 mod lifecycle_checks;
 mod preview;

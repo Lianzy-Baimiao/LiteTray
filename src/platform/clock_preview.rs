@@ -5,6 +5,7 @@ use litetray_adapter_protocol::{
     clock::{Frame, Owner, Style, Text},
 };
 use std::{
+    cell::RefCell,
     ffi::c_void,
     marker::PhantomData,
     ptr::{null, null_mut},
@@ -19,6 +20,7 @@ type Create = unsafe extern "system" fn(*const u8, usize, *mut u64, *mut u8, usi
 type Update = unsafe extern "system" fn(*mut c_void, *const u8, usize) -> i32;
 type Message = unsafe extern "system" fn(*mut c_void, *const MSG) -> i32;
 type Action = unsafe extern "system" fn(*mut c_void);
+type Heartbeat = unsafe extern "system" fn(*mut c_void) -> i32;
 pub struct Preview {
     module: HMODULE,
     handle: *mut c_void,
@@ -26,7 +28,8 @@ pub struct Preview {
     message: Message,
     show: Action,
     destroy: Action,
-    gate: Gate,
+    heartbeat: Heartbeat,
+    gate: RefCell<Gate>,
     island: HWND,
     _thread: PhantomData<Rc<()>>,
 }
@@ -87,6 +90,10 @@ impl Preview {
                 GetProcAddress(module, c"LiteTrayPreviewDestroy".as_ptr().cast())
                     .ok_or("缺少原生预览关闭入口")?,
             );
+            let heartbeat: Heartbeat = std::mem::transmute(
+                GetProcAddress(module, c"LiteTrayPreviewHeartbeat".as_ptr().cast())
+                    .ok_or("缺少原生预览心跳入口")?,
+            );
             let owner = Owner {
                 nonce: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -125,7 +132,8 @@ impl Preview {
                 message,
                 show,
                 destroy,
-                gate,
+                heartbeat,
+                gate: RefCell::new(gate),
                 island: island as HWND,
                 _thread: PhantomData,
             })
@@ -135,14 +143,17 @@ impl Preview {
         clippy::not_unsafe_ptr_arg_deref,
         reason = "HWND is an opaque Windows handle, validated by GetWindowThreadProcessId"
     )]
-    pub fn accept(&mut self, sender: HWND, bytes: &[u8]) -> Result<Activation, String> {
+    pub fn accept(&self, sender: HWND, bytes: &[u8]) -> Result<Activation, String> {
         unsafe {
             let mut pid = 0;
             GetWindowThreadProcessId(sender, &mut pid);
             if sender != self.island || pid != GetCurrentProcessId() {
                 return Err("原生预览点击窗口不匹配".into());
             }
-            self.gate.accept(bytes)
+            self.gate
+                .try_borrow_mut()
+                .map_err(|_| "点击接收正忙")?
+                .accept(bytes)
         }
     }
     pub fn update(&self, frame: &Frame) -> Result<(), String> {
@@ -161,10 +172,15 @@ impl Preview {
             (self.show)(self.handle);
         }
     }
-    /// Copy the call target before dispatch, so reentrant input can borrow App.
-    /// The caller must retain this Preview throughout the native call.
-    pub fn pretranslator(&self) -> (Message, *mut c_void) {
-        (self.message, self.handle)
+    pub fn heartbeat(&self) -> Result<(), String> {
+        if unsafe { (self.heartbeat)(self.handle) } != 0 {
+            Ok(())
+        } else {
+            Err("原生预览心跳失败".into())
+        }
+    }
+    pub fn pretranslate(&self, message: &MSG) -> bool {
+        unsafe { (self.message)(self.handle, message) != 0 }
     }
 }
 impl Drop for Preview {

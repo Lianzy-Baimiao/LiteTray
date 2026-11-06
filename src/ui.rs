@@ -13,6 +13,7 @@ use std::{
     collections::HashMap,
     mem::size_of,
     ptr::{null, null_mut},
+    rc::Rc,
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -56,6 +57,9 @@ const PAGES: [&str; 7] = [
     "配置迁移",
 ];
 thread_local! {static STATE:RefCell<Option<App>>=const{RefCell::new(None)};}
+// Independent of App's modal-dialog borrow. Each native call retains its own
+// Rc, so reentrant window teardown cannot unload a module still on the stack.
+thread_local! {static PREVIEW:RefCell<Option<Rc<clock_preview::Preview>>>=const{RefCell::new(None)};}
 #[derive(Clone, Copy)]
 struct Palette {
     background: HBRUSH,
@@ -76,7 +80,7 @@ struct App {
     hwnd: HWND,
     panel: HWND,
     panel_font: HFONT,
-    preview: Option<clock_preview::Preview>,
+    preview: Option<Rc<clock_preview::Preview>>,
     pending_activation: Option<litetray_adapter_protocol::activation::Activation>,
     children: Vec<HWND>,
     fields: HashMap<u16, HWND>,
@@ -255,17 +259,8 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
         SetTimer(hwnd, 1, 1000, None);
         let mut message: MSG = std::mem::zeroed();
         while GetMessageW(&mut message, null_mut(), 0, 0) > 0 {
-            // App and Preview remain alive until after this message loop. Do
-            // not hold a RefCell borrow while XAML can deliver routed input.
-            let translate = STATE.with(|s| {
-                s.borrow()
-                    .as_ref()
-                    .and_then(|a| a.preview.as_ref())
-                    .map(|p| p.pretranslator())
-            });
-            if let Some((translate, handle)) = translate
-                && translate(handle, &message) != 0
-            {
+            let preview = PREVIEW.with(|p| p.borrow().clone());
+            if preview.as_ref().is_some_and(|p| p.pretranslate(&message)) {
                 continue;
             }
             let panel = STATE.with(|s| s.borrow().as_ref().map(|a| a.panel).unwrap_or(null_mut()));
@@ -280,6 +275,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }
+        PREVIEW.with(|p| p.borrow_mut().take());
         STATE.with(|s| {
             if let Some(mut app) = s.borrow_mut().take() {
                 app.preview.take();
@@ -1049,9 +1045,7 @@ impl App {
                 );
                 set_text(self.field(WEATHER_VIEW), &self.weather_text());
             }
-            if let Some(preview) = &self.preview
-                && preview.visible()
-            {
+            if let Some(preview) = &self.preview {
                 let _ = preview.update(&clock_preview::frame(&self.draft.clock, &summary));
             }
             if !self.panel.is_null() {
@@ -1222,6 +1216,13 @@ impl App {
                 1000
             } else {
                 60000
+            };
+            // An existing native preview owns a leased clock session even
+            // while hidden; keep updates within its heartbeat budget.
+            let interval = if self.preview.is_some() {
+                interval.min(5000)
+            } else {
+                interval
             };
             SetTimer(self.hwnd, 1, interval, None);
         }
@@ -1526,7 +1527,11 @@ impl App {
                             self.hwnd,
                             clock_preview::frame(&self.draft.clock, &summary),
                         ) {
-                            Ok(preview) => self.preview = Some(preview),
+                            Ok(preview) => {
+                                let preview = Rc::new(preview);
+                                PREVIEW.with(|p| *p.borrow_mut() = Some(preview.clone()));
+                                self.preview = Some(preview);
+                            }
                             Err(e) => self.set_status(e),
                         }
                     }
@@ -1761,6 +1766,12 @@ unsafe fn choose_migration_file(owner: HWND) -> Result<Option<std::path::PathBuf
 
 unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     unsafe {
+        if msg == WM_TIMER && w == 1 {
+            let preview = PREVIEW.with(|p| p.borrow().clone());
+            if let Some(preview) = preview {
+                let _ = preview.heartbeat();
+            }
+        }
         if let Some(result) = paint_message(hwnd, msg, w, l) {
             return result;
         }
@@ -1841,7 +1852,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 WM_TIMER => {
                     if IsWindowVisible(hwnd) != 0
                         || (!app.panel.is_null() && IsWindowVisible(app.panel) != 0)
-                        || app.preview.as_ref().is_some_and(|p| p.visible())
+                        || app.preview.is_some()
                     {
                         app.update_views();
                     }
@@ -1929,6 +1940,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             }
         });
         if quit {
+            PREVIEW.with(|p| p.borrow_mut().take());
             STATE.with(|s| {
                 if let Some(app) = s.borrow_mut().as_mut() {
                     app.preview.take();

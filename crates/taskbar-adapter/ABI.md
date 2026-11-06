@@ -31,6 +31,8 @@ https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/host-standard-c
 
 `session.rs` 在同一 UI 线程统一持有各个时钟的属性快照，拒绝重复 ID 和重叠 COM 对象。状态为 Prepared → Active → Restoring → Closed。先保存全部原值再启动；配置更新区分文本和样式，文本未变化时跳过 setter。任一目标更新失败时停止整组接管，恢复仍由 LiteTray 管理的属性；恢复失败保留 Restoring 状态并由后续 poll 重试。生产调用者必须在显式 stop 成功后才移除接入和卸载模块，Drop 只作为最后一次恢复尝试。
 
+输入目标通过 `Watchdog::prepare_inputs` 在 Prepared 阶段配置；时钟 ID 必须属于该会话，原生输入控件不能重复。每个 Subscription 先注册但保持停用，所有属性写入成功后再统一启用。停止首先停用整组输入，随后解除 native token、恢复属性；部分失败保持 Restoring 并保留待重试对象。接收窗口、端点或宿主失联、超时和属性冲突都经过相同停止路径。
+
 `watchdog.rs` 先建立原生消息窗口和 1 秒检查定时器，再允许启用时钟；持有宿主进程同步句柄，避免仅依赖可能重用的 PID。接收窗口消失、宿主退出或心跳超时会在 XAML 所属线程恢复。COM 调用前暂时取出会话，避免重入定时器重复借用；计时器执行期间保留 Context 引用。关闭时撤销计时器、窗口类与进程句柄。
 
 已建立会话通过 watchdog 的独立消息窗口接收 `WM_COPYDATA`，tag 为 `clock::COMMAND_TAG`。先检查发送窗口、保留的进程句柄和数据大小，再复制消息并验证 owner/nonce/sequence。接收窗口不会转发任意消息或执行任意命令。返回 1 表示命令成功，0 表示拒绝；发送超时是结果未知，不能自动重发或假定没有生效。HWND 本身不是针对同用户恶意进程的身份认证，生产启动握手与模块加载边界仍待实现。
@@ -39,7 +41,7 @@ https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/host-standard-c
 
 每个已写属性保存实际 local value，后续更新和恢复先核对属性归属；其他组件新写的值、尺寸或绑定会被保留。检测到冲突会停止会话。相同可见文本上的新绑定也视为外部写入。无法区分外部组件再次写入完全相同的普通值，这不构成通用跨插件锁。
 
-隔离检查目前覆盖 41 个场景，包含两组真实 XAML 控件、配置更新、乱序/其他会话消息、超时、退出、窗口消失、外部写入冲突，以及实际 WM_COPYDATA 的包边界、跨线程样式更新、跨进程文字更新和宿主进程退出。新增隐藏 XAML Island 的输入事件订阅/解除、事件发布失败保留默认行为、坐标和委托释放检查。实等 15 秒验证原生计时器自动恢复；12 次完整启停通过原生消息停止，再比较进程句柄数与 USER 对象数，确认该检查场景没有累积原生资源。此结果不代表长期运行或 Explorer 的内存增量测量。
+隔离检查目前覆盖 51 个场景，包含两组真实 XAML 控件、配置更新、乱序/其他会话消息、超时、退出、窗口消失、外部写入冲突，以及实际 WM_COPYDATA 的包边界、跨线程样式更新、跨进程文字更新和宿主进程退出。隐藏 XAML Island 检查输入事件订阅/解除、事件发布失败保留默认行为、坐标和委托释放；两个独立 island 再验证输入与会话统一停止、回滚、外部冲突、回调重入和失联路径。实等 15 秒验证原生计时器自动恢复；12 次完整启停通过原生消息停止，再比较进程句柄数与 USER 对象数，确认该检查场景没有累积原生资源。此结果不代表长期运行或 Explorer 的内存增量测量。
 
 跨进程场景启动同一 LiteTray.exe 的内部测试子进程，创建独立 HWND 并发送一次更新。子进程核对目标为同路径 LiteTray 的 watchdog 窗口，父进程验证实际 XAML 文本后只结束自己创建的测试子进程，再等待原生计时器恢复。测试有有界输入、响应和进程存活时限，不读取用户配置、不发现任务栏、不安装 hook。
 
@@ -49,11 +51,15 @@ https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/host-standard-c
 
 `input.rs` 在 XAML 所属 STA 上订阅 Tapped/KeyDown。委托只暴露 IUnknown 和对应 delegate IID，不声明 Agile；上下文使用线程绑定引用，输入回调只计算控件矩形和投递有界事件。键盘分支限制为 Enter/Space，并过滤 WasKeyDown 重复；已经 handled 的输入保持原处理。发送成功才标记事件 handled，发送失败保持默认行为。解除订阅先停用上下文再移除两个 token；若原生移除失败，模块保持映射至进程退出，避免残留委托调用已卸载代码。
 
+同一会话的控件共用 `Sequence`，同步重入时不再次消费输入。watchdog 发布闭包只持有 Context 的 Weak，检查持有的进程句柄、接收窗口、租期与 Active 状态后释放 Session 借用再调用发送方。若发送方同步停止会话，原生委托返回前重新检查停用标志，保留默认输入。会话被取出进行 COM 更新时，重入点击不发布事件。
+
 几何计算使用 TransformToVisual(XamlRoot.Content)、TransformBounds 和 RasterizationScale，再加已验证的 island HWND 客户区原点。调用者必须证明 HWND 对应同一个 XAML root，不能把任务栏外层 HWND 直接代入。协议保留有符号物理坐标，宿主校验已建立会话、时钟 ID、源窗口和递增序号，后续异步处理弹窗，避免在输入调用栈里创建 UI。
 
-`preview.rs` 通过 DesktopWindowXamlSource 在本进程的独立窗口承载真实两行时钟，使用同一 ClockLease 和 Subscription。原生 IDesktopWindowXamlSourceNative/Native2 的 IID 与三个方法槽来自 Microsoft SDK 头文件：
+`preview.rs` 通过 DesktopWindowXamlSource 在本进程的独立窗口承载真实两行时钟，使用同一 Session、watchdog 和输入生命周期。宿主通过有序命令更新和续租，原生回调不再与更新中的 Preview 存在可变引用别名。原生 IDesktopWindowXamlSourceNative/Native2 的 IID 与三个方法槽来自 Microsoft SDK 头文件：
 https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/windows.ui.xaml.hosting.desktopwindowxamlsource.h
 
 预览模块必须留在创建线程，按“解除输入、恢复属性、关闭 XAML source、销毁窗口、关闭 manager”的顺序退出。焦点使用原生 Control.Focus，且在首次布局与切回窗口后投递焦点请求。宿主只对消息所属窗口使用 IsDialogMessage，防止设置页抢走预览的 Tab/Enter；面板处理 IDCANCEL，避免 Esc 被原生对话框预处理吞掉。
 
-自检直接调用新建 WinRT TappedRoutedEventArgs 的委托，验证几何、handled 和引用释放，不能称为模拟了操作系统输入。当前实机鼠标点击、回车打开面板和 Esc 关闭另经界面测试通过；空格和跨屏拖动仍需可靠实测。预览路径没有任务栏发现或 hook 安装，真实时钟订阅归属与 watchdog 生命周期尚需生产会话整合。
+宿主对每次 native 调用持有独立 Rc，直到调用返回才允许销毁预览和卸载模块。续租入口在设置对象借用之外，由主窗口计时器驱动，最长 5 秒一次；文件对话框的嵌套消息循环不会因 App 正在借用而漏掉心跳。真实对话框保持超过 58 秒后仍可显示当前时间和点击展开面板已验证。暂停消息泵或睡眠恢复属于另一个场景，仍需验收。
+
+自检直接调用新建 WinRT TappedRoutedEventArgs 的委托，验证几何、handled 和引用释放，不能称为模拟了操作系统输入。当前实机鼠标点击、回车打开面板和 Esc 关闭另经界面测试通过；空格和跨屏拖动仍需可靠实测。预览路径没有任务栏发现或 hook 安装；真实时钟节点、XamlRoot 与 HWND 的对应验证，以及生产会话加载和退出仍待完成。
