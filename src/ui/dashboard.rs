@@ -28,6 +28,7 @@ struct View {
     lunar: bool,
     seconds: bool,
     flyout: bool,
+    detached: bool,
     dark: bool,
     factor: f64,
     fonts: [HFONT; 5],
@@ -90,6 +91,7 @@ pub(super) unsafe fn create(parent: HWND, bounds: RECT, dark: bool, flyout: bool
             lunar: true,
             seconds: true,
             flyout,
+            detached: false,
             dark,
             factor: 1.,
             fonts: [null_mut(); 5],
@@ -117,6 +119,31 @@ pub(super) unsafe fn bind_store(hwnd: HWND, store: Rc<RefCell<organizer::Store>>
             v.store = Some(store);
         }
         layout(hwnd);
+    }
+}
+pub(super) unsafe fn set_detached(hwnd: HWND, detached: bool) {
+    unsafe {
+        if let Some(cell) =
+            (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RefCell<View>).as_ref()
+            && let Ok(mut v) = cell.try_borrow_mut()
+        {
+            v.detached = detached;
+        }
+        layout(hwnd);
+        InvalidateRect(hwnd, null(), 0);
+    }
+}
+pub(super) unsafe fn refresh_theme(hwnd: HWND, dark: bool) {
+    unsafe {
+        if let Some(cell) =
+            (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RefCell<View>).as_ref()
+            && let Ok(mut v) = cell.try_borrow_mut()
+        {
+            v.dark = dark;
+            v.factor = 0.;
+        }
+        layout(hwnd);
+        RedrawWindow(hwnd, null(), null_mut(), RDW_INVALIDATE | RDW_ALLCHILDREN);
     }
 }
 fn refresh_agenda(v: &mut View) {
@@ -264,11 +291,19 @@ fn button_specs(v: &View) -> Vec<ButtonSpec> {
         spec("上个月".into(), PREV, 244, 84, 30, 32, true),
         spec("今天".into(), TODAY, 275, 84, 48, 32, true),
         spec("下个月".into(), NEXT, 325, 84, 30, 32, true),
-        spec("刷新天气".into(), REFRESH, 550, 18, 86, 34, true),
+        spec(
+            "刷新天气".into(),
+            REFRESH,
+            if v.flyout { 438 } else { 550 },
+            18,
+            86,
+            34,
+            true,
+        ),
         spec(
             if v.flyout { "设置" } else { "展开" }.into(),
             if v.flyout { 40 } else { CALENDAR },
-            646,
+            if v.flyout { 532 } else { 646 },
             18,
             54,
             34,
@@ -277,6 +312,14 @@ fn button_specs(v: &View) -> Vec<ButtonSpec> {
         spec("添加日程".into(), ADD_EVENT, 520, 496, 88, 30, true),
         spec("专注计时".into(), FOCUS, 614, 496, 86, 30, true),
     ];
+    if v.flyout {
+        let mut detach = spec("分离".into(), panel::DETACH, 594, 18, 62, 34, true);
+        detach.visible = !v.detached;
+        let mut close = spec("关闭".into(), panel::CLOSE, 646, 18, 54, 34, true);
+        close.visible = v.detached;
+        buttons.push(detach);
+        buttons.push(close);
+    }
     for (i, date) in v.days.iter().enumerate() {
         buttons.push(spec(
             format!(
@@ -536,6 +579,25 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             return DefWindowProcW(hwnd, msg, w, l);
         }
         match msg {
+            WM_NCHITTEST => {
+                if let Ok(v) = (*raw).try_borrow()
+                    && v.flyout
+                    && v.detached
+                {
+                    let mut point = POINT {
+                        x: l as u16 as i16 as i32,
+                        y: (l >> 16) as u16 as i16 as i32,
+                    };
+                    ScreenToClient(hwnd, &mut point);
+                    if point.y >= 0
+                        && point.y < (72. * v.factor) as i32
+                        && point.x < (425. * v.factor) as i32
+                    {
+                        return HTTRANSPARENT as isize;
+                    }
+                }
+                DefWindowProcW(hwnd, msg, w, l)
+            }
             WM_SETFOCUS => {
                 let Ok(v) = (*raw).try_borrow() else {
                     return 0;
@@ -881,9 +943,14 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
         );
         tx(
             &format!(
-                "{} · {}",
+                "{} · {}{}",
                 now.format("%Y年"),
-                now.format(if v.seconds { "%H:%M:%S" } else { "%H:%M" })
+                now.format(if v.seconds { "%H:%M:%S" } else { "%H:%M" }),
+                if v.detached {
+                    " · 已分离，可拖动顶部"
+                } else {
+                    ""
+                }
             ),
             20,
             44,
@@ -1390,6 +1457,7 @@ mod visual_checks {
                     lunar: true,
                     seconds: true,
                     flyout: true,
+                    detached: false,
                     dark,
                     factor,
                     store: None,

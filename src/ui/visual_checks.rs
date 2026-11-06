@@ -237,6 +237,24 @@ fn render_settings_artifacts() {
                     }
                 }
             }
+            app.prewarm_panels();
+            let popup = app.panel;
+            write_window(
+                popup,
+                &output.join(format!(
+                    "settings-{}-flyout.bmp",
+                    if dark { "dark" } else { "light" }
+                )),
+            );
+            panel::set_detached(popup, true);
+            write_window(
+                popup,
+                &output.join(format!(
+                    "settings-{}-detached.bmp",
+                    if dark { "dark" } else { "light" }
+                )),
+            );
+            app.close_panel();
             DestroyWindow(app.hwnd);
             app.release_resources();
         }
@@ -491,6 +509,131 @@ fn hidden_calendar_cache_reuses_controls_and_tracks_new_anchor() {
         assert_eq!(GetForegroundWindow(), foreground);
         app.close_panel();
         assert_eq!(IsWindow(panel), 0);
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+    }
+}
+
+#[test]
+fn opening_focus_bounce_does_not_hide_calendar_and_popup_is_topmost() {
+    unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-panel-focus-unused.json"),
+        );
+        app.prewarm_panels();
+        let panel = app.panel;
+        // Visible-style lifecycle test stays outside every desktop and never
+        // asks for foreground, focus or physical input.
+        SetWindowPos(
+            panel,
+            null_mut(),
+            -30000,
+            -30000,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+        let foreground = GetForegroundWindow();
+        SendMessageW(panel, WM_ACTIVATE, WA_INACTIVE as usize, 0);
+        let visible = IsWindowVisible(panel) != 0;
+        let topmost = GetWindowLongW(panel, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST != 0;
+        assert_eq!(GetForegroundWindow(), foreground);
+        app.close_panel();
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+        assert!(
+            visible,
+            "a delayed opening deactivation immediately hid the new calendar"
+        );
+        assert!(topmost, "the taskbar popup must be topmost");
+    }
+}
+
+#[test]
+fn detached_calendar_keeps_its_position_and_lifetime_until_close() {
+    unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-panel-detach-unused.json"),
+        );
+        app.prewarm_panels();
+        let popup = app.panel;
+        let view = GetDlgItem(popup, dashboard::ID as i32);
+        let foreground = GetForegroundWindow();
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = size_of::<MONITORINFO>() as u32;
+        GetMonitorInfoW(
+            MonitorFromWindow(popup, MONITOR_DEFAULTTONEAREST),
+            &mut info,
+        );
+        let anchor = popup::Rect {
+            left: info.rcWork.right - 100,
+            top: info.rcWork.bottom,
+            right: info.rcWork.right,
+            bottom: info.rcWork.bottom + 1,
+        };
+        SetWindowPos(
+            popup,
+            HWND_TOPMOST,
+            -30000,
+            -30000,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+        SendMessageW(popup, WM_COMMAND, panel::DETACH as usize, 0);
+        assert!(panel::detached(popup));
+        assert_eq!(
+            GetWindowLongW(GetDlgItem(view, panel::DETACH as i32), GWL_STYLE) as u32 & WS_VISIBLE,
+            0
+        );
+        assert_ne!(
+            GetWindowLongW(GetDlgItem(view, panel::CLOSE as i32), GWL_STYLE) as u32 & WS_VISIBLE,
+            0
+        );
+        for _ in 0..100 {
+            SendMessageW(popup, WM_ACTIVATE, WA_INACTIVE as usize, 0);
+            SendMessageW(popup, WM_KEYDOWN, VK_ESCAPE as usize, 0);
+        }
+        assert_ne!(IsWindowVisible(popup), 0);
+        let point = ((-29970i32 as u16 as usize) << 16) | (-29970i32 as u16 as usize);
+        assert_eq!(
+            SendMessageW(popup, WM_NCHITTEST, 0, point as isize),
+            HTCAPTION as isize
+        );
+        assert_eq!(
+            SendMessageW(view, WM_NCHITTEST, 0, point as isize),
+            HTTRANSPARENT as isize
+        );
+        let attached = app.prepare_panel_at(anchor).unwrap();
+        assert_ne!(attached, popup);
+        app.hide_panel();
+        app.recreate_resources();
+        assert_ne!(IsWindow(popup), 0);
+        assert_ne!(IsWindowVisible(popup), 0);
+        assert!(panel::detached(popup));
+        let mut r: RECT = std::mem::zeroed();
+        GetWindowRect(popup, &mut r);
+        assert_eq!((r.left, r.top), (-30000, -30000));
+        SetWindowPos(
+            popup,
+            HWND_TOPMOST,
+            -29950,
+            -29950,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+        GetWindowRect(popup, &mut r);
+        assert_eq!((r.left, r.top), (-29950, -29950));
+        SendMessageW(popup, WM_COMMAND, panel::CLOSE as usize, 0);
+        assert_eq!(IsWindowVisible(popup), 0);
+        assert!(!panel::detached(popup));
+        assert_eq!(GetForegroundWindow(), foreground);
+        app.close_panel();
         DestroyWindow(app.hwnd);
         app.release_resources();
     }

@@ -185,7 +185,7 @@ unsafe fn dispatch(
         };
         let mut already = false;
         check(handled(args.raw(), &mut already), "Handled")?;
-        if already {
+        if already && kind != Input::Pointer {
             return Ok(());
         }
         let sender = Object::query_borrowed(sender, &IID_IUIElement)?;
@@ -322,7 +322,7 @@ fn physical_bounds(rect: crate::xaml_abi::Rect, scale: f64, origin: POINT) -> Re
 pub struct Subscription {
     element: Object,
     context: Rc<Context>,
-    tap: Option<i64>,
+    tap: Option<(Object, Object)>,
     key: Option<i64>,
 }
 impl Subscription {
@@ -358,13 +358,22 @@ impl Subscription {
         };
         unsafe {
             let table = subscription.element.table::<IUIElement_Vtbl>();
-            let tap = handler(subscription.context.clone(), Input::Pointer)?;
+            let tap =
+                crate::input_box::boxed(handler(subscription.context.clone(), Input::Pointer)?)?;
+            let statics =
+                crate::xaml::factory("Windows.UI.Xaml.UIElement", &IID_IUIElementStatics)?;
+            let mut event = null_mut();
+            check(
+                (statics.table::<IUIElementStatics_Vtbl>().TappedEvent)(statics.raw(), &mut event),
+                "TappedEvent",
+            )?;
+            let event = Object::owned(event)?;
             let mut token = 0;
             check(
-                (table.Tapped)(subscription.element.raw(), tap.raw(), &mut token),
+                (table.AddHandler)(subscription.element.raw(), event.raw(), tap.raw(), true),
                 "Tapped subscription",
             )?;
-            subscription.tap = Some(token);
+            subscription.tap = Some((event, tap));
             let key = handler(subscription.context.clone(), Input::Keyboard)?;
             check(
                 (table.KeyDown)(subscription.element.raw(), key.raw(), &mut token),
@@ -389,15 +398,22 @@ impl Subscription {
         let mut errors = Vec::new();
         unsafe {
             let table = self.element.table::<IUIElement_Vtbl>();
-            for (token, remove) in [
-                (&mut self.tap, table.RemoveTapped),
-                (&mut self.key, table.RemoveKeyDown),
-            ] {
-                if let Some(value) = *token {
-                    match check(remove(self.element.raw(), value), "Remove input handler") {
-                        Ok(()) => *token = None,
-                        Err(e) => errors.push(e),
-                    }
+            if let Some((event, handler)) = &self.tap {
+                match check(
+                    (table.RemoveHandler)(self.element.raw(), event.raw(), handler.raw()),
+                    "Remove tapped handler",
+                ) {
+                    Ok(()) => self.tap = None,
+                    Err(e) => errors.push(e),
+                }
+            }
+            if let Some(value) = self.key {
+                match check(
+                    (table.RemoveKeyDown)(self.element.raw(), value),
+                    "Remove key handler",
+                ) {
+                    Ok(()) => self.key = None,
+                    Err(e) => errors.push(e),
                 }
             }
         }
@@ -417,10 +433,13 @@ pub(crate) struct Probe {
 }
 impl Probe {
     pub fn invoke(&self) -> Result<bool, String> {
+        self.invoke_with_handled(false)
+    }
+    pub fn invoke_with_handled(&self, handled: bool) -> Result<bool, String> {
         unsafe {
             let table = self.args.table::<ITappedRoutedEventArgs_Vtbl>();
             check(
-                (table.SetHandled)(self.args.raw(), false),
+                (table.SetHandled)(self.args.raw(), handled),
                 "Reset probe event",
             )?;
             check(

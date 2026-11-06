@@ -69,6 +69,9 @@ fn main() {
     let mut source = std::fs::read_to_string(&output).unwrap();
     let getter = "unsafe extern \"system\" fn(*mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> windows_sys::core::HRESULT";
     for (method, signature) in [
+        ("AddHandler", "*mut core::ffi::c_void, *mut core::ffi::c_void, *mut core::ffi::c_void, bool"),
+        ("RemoveHandler", "*mut core::ffi::c_void, *mut core::ffi::c_void, *mut core::ffi::c_void"),
+        ("TappedEvent", "*mut core::ffi::c_void, *mut *mut core::ffi::c_void"),
         ("RegisterPropertyChangedCallback", "*mut core::ffi::c_void, *mut core::ffi::c_void, *mut core::ffi::c_void, *mut i64"),
         ("UnregisterPropertyChangedCallback", "*mut core::ffi::c_void, *mut core::ffi::c_void, i64"),
     ] {

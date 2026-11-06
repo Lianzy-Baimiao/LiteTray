@@ -88,13 +88,12 @@ impl View {
             }
         }
         let clock_tree = if clock {
-            clock_nodes(
-                &fresh.objects[selection
-                    .clock
-                    .as_ref()
-                    .ok_or("时钟检查目标缺失")?
-                    .container],
-            )?
+            let clock = selection.clock.as_ref().ok_or("时钟检查目标缺失")?;
+            let input = litetray_adapter_protocol::topology::clock_input_node(
+                &fresh.report.elements,
+                clock,
+            )?;
+            clock_nodes(&fresh.objects[input])?
         } else {
             vec![]
         };
@@ -244,7 +243,9 @@ impl View {
             .clock
             .as_ref()
             .ok_or("独立时钟点击区域不可用")?;
-        fresh.objects[clock.container].query(&IID_IUIElement)
+        let input =
+            litetray_adapter_protocol::topology::clock_input_node(&fresh.report.elements, clock)?;
+        fresh.objects[input].query(&IID_IUIElement)
     }
     pub(crate) fn visibility_target(
         &self,

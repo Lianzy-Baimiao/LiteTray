@@ -278,6 +278,44 @@ pub fn analyze_panel(nodes: &[ElementInfo], truncated: bool) -> Result<Topology,
         clock_error,
     })
 }
+/// The input boundary is separate from the text/formatting boundary.
+pub fn clock_input_node(nodes: &[ElementInfo], clock: &Clock) -> Result<usize, String> {
+    let tree = Tree::new(nodes, false)?;
+    if [clock.container, clock.time, clock.date]
+        .iter()
+        .any(|&i| i >= nodes.len())
+    {
+        return Err("时钟输入索引无效".into());
+    }
+    let mut cursor = tree.parents[clock.container];
+    let mut datetime = false;
+    while let Some(index) = cursor {
+        let class = nodes[index].class_name.as_str();
+        datetime |= class == "SystemTray.DateTimeIconContent";
+        if class == "SystemTray.IconView" {
+            if datetime
+                && tree.visible(index)?
+                && (index..tree.ends[index]).all(|i| {
+                    i == clock.time
+                        || i == clock.date
+                        || layout(&nodes[i].class_name)
+                        || matches!(
+                            nodes[i].class_name.as_str(),
+                            "SystemTray.IconView" | "SystemTray.DateTimeIconContent"
+                        )
+                })
+            {
+                return Ok(index);
+            }
+            break;
+        }
+        if !layout(class) && class != "SystemTray.DateTimeIconContent" {
+            break;
+        }
+        cursor = tree.parents[index];
+    }
+    Ok(clock.container)
+}
 
 #[cfg(test)]
 mod tests {
@@ -292,6 +330,44 @@ mod tests {
             text: None,
             visible: Some(true),
         }
+    }
+    #[test]
+    fn captured_clock_padding_belongs_to_input_but_notification_bell_does_not() {
+        let mut nodes = vec![
+            node("SystemTrayFrameGrid", "StackPanel", 0),
+            node("NotificationCenterButton", "ContentControl", 1),
+            node("SystemTrayIcon", "Grid", 2),
+            node("ContainerGrid", "Grid", 3),
+            node("ContentGrid", "Grid", 4),
+            node("", "Grid", 5),
+            node("ContainerGrid", "Grid", 6),
+            node("DateTimeStackPanel", "StackPanel", 7),
+            node("TimeInnerTextBlock", "TextBlock", 8),
+            node("DateInnerTextBlock", "TextBlock", 8),
+            node("Bell", "Button", 2),
+        ];
+        nodes[2].class_name = "SystemTray.IconView".into();
+        nodes[5].class_name = "SystemTray.DateTimeIconContent".into();
+        for n in &mut nodes[2..7] {
+            n.width = Some(120.);
+            n.height = Some(48.);
+        }
+        nodes[7].width = Some(112.8);
+        nodes[7].height = Some(32.);
+        let clock = analyze_panel(&nodes, false).unwrap().clock.unwrap();
+        assert_eq!(clock.container, 7);
+        assert_eq!(
+            clock_input_node(&nodes, &clock).unwrap(),
+            2,
+            "top/bottom padding must activate the calendar"
+        );
+        nodes.insert(10, node("OtherAction", "Button", 3));
+        let clock = analyze_panel(&nodes, false).unwrap().clock.unwrap();
+        assert_eq!(
+            clock_input_node(&nodes, &clock).unwrap(),
+            7,
+            "unknown actions prevent expansion"
+        );
     }
     fn fixture() -> Vec<ElementInfo> {
         vec![

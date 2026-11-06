@@ -1256,8 +1256,17 @@ pub struct IUIElement_Vtbl {
     ReleasePointerCapture: usize,
     pub ReleasePointerCaptures:
         unsafe extern "system" fn(*mut core::ffi::c_void) -> windows_sys::core::HRESULT,
-    AddHandler: usize,
-    RemoveHandler: usize,
+    pub AddHandler: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        bool,
+    ) -> windows_sys::core::HRESULT,
+    pub RemoveHandler: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
     pub TransformToVisual: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *mut core::ffi::c_void,
@@ -1304,7 +1313,10 @@ pub struct IUIElementStatics_Vtbl {
     PointerCaptureLostEvent: usize,
     PointerCanceledEvent: usize,
     PointerWheelChangedEvent: usize,
-    TappedEvent: usize,
+    pub TappedEvent: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
     DoubleTappedEvent: usize,
     HoldingEvent: usize,
     RightTappedEvent: usize,

@@ -82,3 +82,13 @@
 - 铃声支持 Windows Alarm01–10、本地 WAV、静音、5–120 秒响铃、5 秒试听和停止。原生页面保存/重载验证通过；本轮没有出声试听，避免影响主屏游戏。
 - 96 项自动检查、Clippy -D warnings、149 项隔离原生 XAML 检查通过。新版实机检查确认主副屏时间/天气一致，托盘宽度、右侧和垂直对齐、应用图标顺序通过。
 - 本地证据：local/ui5-deployment.json、local/ui5-live.json、local/ui5-window-state.json、local/ui5-xaml-check.txt、local/ui5-popup-observations.jsonl；界面检查图在 local/ui5-final-renders。
+
+## 2026-11-07 开发版 5.1：点击留白、置顶与分离
+
+用户已确认 QQNT 指向弹层问题修复；保留该逻辑。继续处理偶发时钟点击不显示：真实任务栏树中的 DateTimeStackPanel 只有 112.8×32 DIP，而专属 SystemTray.IconView 为 120×48 DIP，旧订阅遗漏上下留白。结构回归先得到错误节点 7（预期 2），修复后通过；只有包含 DateTimeIconContent 和两行文字、无其他交互控件的专属 IconView 可扩展，通知铃铛等兄弟区域不拦截，整个输入子树纳入会话守卫。Tapped 改为接收已 handled 事件，使用标准 WinRT IReference<TappedEventHandler> 盒子注册/解除。
+
+原生窗口复现打开后 WA_INACTIVE 立即隐藏。现在开窗时先置顶，延后确认稳定前台状态；初始任务栏焦点回跳不关闭，普通弹层在后续应用切换、点击外部或 Esc 时关闭。分离后停止自动关闭观察，顶部日期/空白区返回 HTCAPTION，可移动；右上角出现关闭按钮。分离窗口不会被新弹层、设置页切换、主题刷新挪动或销毁，跨 DPI 调整自身尺寸，显示器断开后限制在可见工作区。
+
+99 项自动测试、Clippy -D warnings、150 项隔离 XAML 检查通过。离屏分离测试覆盖 100 次失焦、Esc、第二弹层、主题刷新、原生标题栏命中和关闭。01:42:55 重启任务栏 Explorer 至 PID 37996；新版宿主 PID 9260，路径 dist/LiteTray-ui5-detachable/LiteTray.exe。实际主副屏时间一致、托盘顺序及对齐通过，两个预建日历均 WS_EX_TOPMOST。对已运行新版的隐藏窗口执行分离、100 次失焦和关闭，按钮状态正确、焦点未变。QQ 钩子 ready=true，QQ 未重启。部署后未发现相关应用崩溃事件。
+
+这些验证没有移动主屏鼠标或模拟实际 taskbar 点击；偶发点击问题仍需用户在新版下连续操作复测，不把源代码/隐藏测试当作随机问题已完全消除的实机证明。本地证据：local/detachable-tests.txt、local/detachable-xaml-final.txt、local/detachable-deployment.json、local/detachable-live.json、local/detachable-window-state.json、local/detachable-live-controls.json。

@@ -11,6 +11,7 @@ mod discovery;
 mod discovery_checks;
 mod hooks;
 mod input;
+mod input_box;
 mod input_checks;
 mod inspect;
 mod island;

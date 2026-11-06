@@ -3,6 +3,7 @@ mod calendar;
 mod dashboard;
 mod design;
 mod page;
+mod panel;
 #[cfg(test)]
 mod visual_checks;
 use chrono::{Local, TimeZone, Utc};
@@ -37,7 +38,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5";
+const UI_REVISION: &str = "开发版 5.1";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -355,8 +356,13 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             if preview.as_ref().is_some_and(|p| p.pretranslate(&message)) {
                 continue;
             }
-            let panel = STATE.with(|s| s.borrow().as_ref().map(|a| a.panel).unwrap_or(null_mut()));
-            if (!panel.is_null()
+            let panel = GetAncestor(message.hwnd, GA_ROOT);
+            let is_panel = STATE.with(|s| {
+                s.borrow()
+                    .as_ref()
+                    .is_some_and(|a| a.panel_cache.contains(&panel))
+            });
+            if (is_panel
                 && (message.hwnd == panel || IsChild(panel, message.hwnd) != 0)
                 && IsDialogMessageW(panel, &message) != 0)
                 || ((message.hwnd == hwnd || IsChild(hwnd, message.hwnd) != 0)
@@ -374,6 +380,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
                 app.preview.take();
                 app.taskbar.take();
                 app.remove_tray();
+                app.close_panel();
                 app.release_resources();
             }
         });
@@ -406,6 +413,7 @@ impl App {
     }
     unsafe fn recreate_resources(&mut self) {
         unsafe {
+            self.clear_attached_panels();
             self.release_resources();
             let face = design::font_face();
             self.font = make_font(self.scale(14), 400, &face);
@@ -422,6 +430,9 @@ impl App {
                     &dark as *const _ as _,
                     size_of::<i32>() as u32,
                 );
+            }
+            for &panel in &self.panel_cache {
+                dashboard::refresh_theme(GetDlgItem(panel, dashboard::ID as i32), self.dark());
             }
         }
     }
@@ -441,7 +452,6 @@ impl App {
     }
     unsafe fn release_resources(&mut self) {
         unsafe {
-            self.close_panel();
             PALETTE.with(|p| p.set(None));
             for object in [
                 self.font,
@@ -471,9 +481,22 @@ impl App {
     }
     unsafe fn hide_panel(&self) {
         unsafe {
-            if !self.panel.is_null() {
-                ShowWindow(self.panel, SW_HIDE);
+            if !self.panel.is_null() && !panel::detached(self.panel) {
+                panel::hide(self.panel);
             }
+        }
+    }
+    unsafe fn clear_attached_panels(&mut self) {
+        unsafe {
+            self.panel_cache.retain(|&hwnd| {
+                if panel::detached(hwnd) {
+                    true
+                } else {
+                    DestroyWindow(hwnd);
+                    false
+                }
+            });
+            self.panel = null_mut();
         }
     }
     unsafe fn prewarm_panels(&mut self) {
@@ -1499,9 +1522,9 @@ impl App {
                     EnableWindow(self.field(213), i32::from(self.saved.tray.clock_enabled));
                 }
             }
-            if !self.panel.is_null() {
+            for &panel in &self.panel_cache {
                 dashboard::update(
-                    GetDlgItem(self.panel, dashboard::ID as i32),
+                    GetDlgItem(panel, dashboard::ID as i32),
                     &self.saved,
                     &self.weather,
                     self.weather_busy,
@@ -1603,7 +1626,7 @@ impl App {
     unsafe fn schedule_tick(&self) {
         unsafe {
             let visible = IsWindowVisible(self.hwnd) != 0
-                || (!self.panel.is_null() && IsWindowVisible(self.panel) != 0)
+                || self.panel_cache.iter().any(|&p| IsWindowVisible(p) != 0)
                 || self.preview.as_ref().is_some_and(|p| p.visible());
             let interval = if visible
                 && (clock::needs_second_ticks(&self.draft.clock)
@@ -1795,14 +1818,12 @@ impl App {
                 return;
             };
             if IsWindowVisible(hwnd) != 0 {
-                ShowWindow(hwnd, SW_HIDE);
+                panel::hide(hwnd);
                 return;
             }
             let view = GetDlgItem(hwnd, dashboard::ID as i32);
             dashboard::update(view, &self.saved, &self.weather, self.weather_busy);
-            ShowWindow(hwnd, SW_SHOW);
-            SetForegroundWindow(hwnd);
-            SetFocus(GetDlgItem(view, 1102));
+            panel::open(hwnd, anchor, true);
             self.schedule_tick();
             // Integer window property is inspectable without disk I/O on the click path.
             SetPropW(
@@ -1830,10 +1851,12 @@ impl App {
                 return None;
             }
             if let Some(&panel) = self.panel_cache.iter().find(|&&p| {
-                IsWindow(p) != 0 && MonitorFromWindow(p, MONITOR_DEFAULTTONEAREST) == monitor
+                IsWindow(p) != 0
+                    && !panel::detached(p)
+                    && MonitorFromWindow(p, MONITOR_DEFAULTTONEAREST) == monitor
             }) {
-                if self.panel != panel && !self.panel.is_null() {
-                    ShowWindow(self.panel, SW_HIDE);
+                if self.panel != panel {
+                    self.hide_panel();
                 }
                 let work = popup::Rect {
                     left: info.rcWork.left,
@@ -1855,11 +1878,9 @@ impl App {
                 self.panel = panel;
                 return Some(panel);
             }
-            if !self.panel.is_null() {
-                ShowWindow(self.panel, SW_HIDE);
-            }
+            self.hide_panel();
             let hwnd = CreateWindowExW(
-                WS_EX_TOOLWINDOW | WS_EX_CONTROLPARENT,
+                WS_EX_TOOLWINDOW | WS_EX_CONTROLPARENT | WS_EX_TOPMOST,
                 wide(PANEL_CLASS).as_ptr(),
                 wide("LiteTray 日历与天气").as_ptr(),
                 WS_POPUP | WS_BORDER | WS_CLIPCHILDREN,
@@ -1878,6 +1899,7 @@ impl App {
             }
             self.panel = hwnd;
             self.panel_cache.push(hwnd);
+            panel::init(hwnd, anchor);
             // Derive scale from the popup's actual monitor. Settings can be on
             // a completely different display with a different effective DPI.
             let dpi = GetDpiForWindow(hwnd).max(96) as i32;
@@ -1890,7 +1912,7 @@ impl App {
             let placement = match popup::place(anchor, work, dpi as u32) {
                 Ok(p) => p,
                 Err(e) => {
-                    self.close_panel();
+                    self.clear_attached_panels();
                     self.set_status(e);
                     return None;
                 }
@@ -2512,14 +2534,17 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                         app.add_tray();
                     }
                     app.refresh_displays();
-                    app.close_panel();
+                    app.clear_attached_panels();
+                    for &panel in &app.panel_cache {
+                        panel::clamp_to_workarea(panel);
+                    }
                     PostMessageW(hwnd, WM_PREPARE_PANELS, 0, 0);
                     Some(0)
                 }
                 WM_TIMER => {
                     app.organizer_tick();
                     if IsWindowVisible(hwnd) != 0
-                        || (!app.panel.is_null() && IsWindowVisible(app.panel) != 0)
+                        || app.panel_cache.iter().any(|&p| IsWindowVisible(p) != 0)
                         || app.preview.is_some()
                     {
                         app.update_views();
@@ -2667,6 +2692,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
 }
 unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     unsafe {
+        if let Some(result) = panel::message(hwnd, msg, w, l) {
+            return result;
+        }
         // A display scale change invalidates the popup's control layout. The
         // next invocation recreates it on the current monitor with fresh fonts.
         if msg == WM_DPICHANGED || msg == WM_DISPLAYCHANGE {
@@ -2677,22 +2705,10 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM)
         if let Some(result) = paint_message(hwnd, msg, w, l) {
             return result;
         }
-        if msg == WM_ACTIVATE && (w & 0xffff) == WA_INACTIVE as usize {
-            ShowWindow(hwnd, SW_HIDE);
-            return 0;
-        }
-        if msg == WM_CLOSE || msg == WM_KEYDOWN && w == VK_ESCAPE as usize {
-            ShowWindow(hwnd, SW_HIDE);
-            return 0;
-        }
         if msg == WM_COMMAND {
             let id = (w & 0xffff) as u16;
-            if id == 41 || id == IDCANCEL as u16 {
-                ShowWindow(hwnd, SW_HIDE);
-                return 0;
-            }
-            if id == 40 {
-                ShowWindow(hwnd, SW_HIDE);
+            if id == 40 && !panel::detached(hwnd) {
+                panel::hide(hwnd);
             }
             let main = GetWindow(hwnd, GW_OWNER);
             PostMessageW(main, WM_COMMAND, w, l);

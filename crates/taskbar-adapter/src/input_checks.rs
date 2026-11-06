@@ -77,6 +77,10 @@ pub fn run(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, String> {
             == vec![(1, 1), (2, 2)],
         "one monotonic sequence across both clocks",
     )?;
+    require(
+        a.invoke_with_handled(true)? && events.borrow().len() == 3,
+        "clock still publishes a tap already handled by its native IconView",
+    )?;
     watchdog.receive(&stop(&owner))?;
     require(
         watchdog.state() == State::Closed
@@ -234,6 +238,7 @@ pub fn run(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, String> {
     Ok(vec![
         "input_session_prepared_is_inactive",
         "input_session_shared_sequence_and_reentrancy",
+        "input_session_native_handled_tap",
         "input_session_stop_restores_and_detaches",
         "input_session_partial_prepare_rollback",
         "input_session_expiry_detaches",
