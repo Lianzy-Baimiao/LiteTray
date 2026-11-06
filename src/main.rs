@@ -16,6 +16,7 @@ fn main() {
                     | "--probe-taskbar"
                     | "--inspect-taskbar"
                     | "--self-test-clock"
+                    | "--test-secondary-clock"
                     | "--self-test-shell-source"
                     | "--self-test-preview-recovery"
                     | "--self-test-clock-owner"
@@ -61,6 +62,18 @@ fn run() -> Result<(), String> {
     }
     let config = config::load(&config::data_dir().join("config.json"))?;
     match arguments.first().map(String::as_str) {
+        Some("--test-secondary-clock") => {
+            let report = arguments.get(1).ok_or("请提供副屏实机测试报告路径")?;
+            let result = platform::taskbar_clock::check_secondary(&config);
+            let text = serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?;
+            config::atomic_write(std::path::Path::new(report), text.as_bytes())?;
+            println!("{text}");
+            if result["passed"] == true {
+                Ok(())
+            } else {
+                Err(format!("副屏时钟测试失败，详情见 {report}"))
+            }
+        }
         Some("--preview-windhawk") => {
             use std::io::Write;
             let source = arguments.get(1).ok_or("请提供 Windhawk 导出文件路径")?;
@@ -163,7 +176,7 @@ fn run() -> Result<(), String> {
         }
         Some("--help") => {
             println!(
-                "LiteTray [--settings | --calendar | --clock-preview | --background | --diagnose [file] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-clock | --self-test-shell-source | --self-test-preview-recovery | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
+                "LiteTray [--settings | --calendar | --clock-preview | --background | --diagnose [file] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-clock | --self-test-shell-source | --self-test-preview-recovery | --test-secondary-clock <report.json> | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
             );
             Ok(())
         }

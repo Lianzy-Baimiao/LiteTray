@@ -27,6 +27,33 @@ pub fn needs_second_ticks(config: &ClockConfig) -> bool {
             .any(|line| line.contains("%second%"))
 }
 
+/// Formatting belongs to the host timer, independent of settings visibility.
+pub fn frame(
+    config: &ClockConfig,
+    weather: &str,
+    now: DateTime<Local>,
+) -> litetray_adapter_protocol::clock::Frame {
+    use litetray_adapter_protocol::clock::{Frame, Style, Text};
+    Frame {
+        text: Text {
+            top: format(&config.top_line, config, now, weather),
+            bottom: format(&config.bottom_line, config, now, weather),
+            tooltip: (!config.tooltip_line.is_empty())
+                .then(|| format(&config.tooltip_line, config, now, weather)),
+        },
+        style: Style {
+            font_family: config.font_family.clone(),
+            font_size: config.font_size,
+            width: config.width,
+            top_color: (!config.top_color.is_empty()).then(|| config.top_color.clone()),
+            bottom_color: (!config.bottom_color.is_empty()).then(|| config.bottom_color.clone()),
+            alignment: config.alignment,
+            top_style: config.top_style.clone(),
+            bottom_style: config.bottom_style.clone(),
+        },
+    }
+}
+
 pub fn validate_template(template: &str) -> Result<(), String> {
     if template.contains('\0') {
         return Err("模板不能包含空字符".into());

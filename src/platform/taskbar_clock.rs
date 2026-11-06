@@ -1,10 +1,11 @@
 //! Experimental real-taskbar transport. No activation occurs during preflight;
-//! open is an explicit UI action. Native preparation must return authenticated
+//! activation follows the saved enable setting. Preparation returns authenticated
 //! source windows before a Start command is sent to the clock endpoint.
 use crate::{
     config::{ClickAction, Config},
     pe,
     platform::{diagnostics, symbols, wide},
+    taskbar_service::{self, ConnectFailure},
 };
 use litetray_adapter_protocol::{
     HostLayout, MAX_REQUEST, VERSION,
@@ -24,6 +25,57 @@ use windows_sys::Win32::{
     UI::WindowsAndMessaging::*,
 };
 pub const WM_ACTIVATED: u32 = WM_APP + 12;
+#[path = "taskbar_live_checks.rs"]
+mod live_checks;
+pub use live_checks::check_secondary;
+pub struct Native {
+    main: HWND,
+}
+pub type Service = taskbar_service::Service<Native>;
+pub fn service(main: HWND, config: Config, now: u64) -> Result<Service, String> {
+    Service::new(Native { main }, config, now)
+}
+impl taskbar_service::Backend for Native {
+    type Prepared = Preflight;
+    type Session = Connection;
+    fn prepare(&self, config: &Config) -> std::sync::mpsc::Receiver<Result<Preflight, String>> {
+        let config = config.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(preflight(&config));
+        });
+        rx
+    }
+    fn connect(
+        &self,
+        prepared: Preflight,
+        frame: &Frame,
+    ) -> Result<Connection, ConnectFailure<Connection>> {
+        let connection =
+            Connection::prepare(self.main, prepared).map_err(|error| ConnectFailure {
+                error,
+                pending: None,
+            })?;
+        if let Err(error) = connection.start(frame.clone()) {
+            return Err(ConnectFailure {
+                error,
+                pending: Some(connection),
+            });
+        }
+        Ok(connection)
+    }
+}
+impl taskbar_service::Session for Connection {
+    fn update(&self, frame: &Frame) -> Result<(), String> {
+        self.update(frame.clone())
+    }
+    fn stop(&self) -> Result<(), String> {
+        self.stop()
+    }
+    fn take_activation(&self) -> Option<Activation> {
+        self.take_activation()
+    }
+}
 pub struct Preflight {
     layout: HostLayout,
     routes: Vec<Route>,
@@ -118,9 +170,8 @@ impl Drop for Hook {
     }
 }
 impl Connection {
-    pub fn open(main: HWND, preflight: Preflight, frame: Frame) -> Result<Self, String> {
+    fn prepare(main: HWND, preflight: Preflight) -> Result<Self, String> {
         unsafe {
-            frame.validate()?;
             let route = preflight.routes.first().ok_or("没有时钟目标")?;
             let (pid, tid, taskbar) = (route.process_id, route.thread_id, route.window as HWND);
             let nonce = std::time::SystemTime::now()
@@ -273,16 +324,21 @@ impl Connection {
             connection.verify_endpoint()?;
             *connection.context.gate.borrow_mut() =
                 Some(Gate::new(request.owner.clone(), reply.targets)?);
-            connection.command(Change::Start {
-                frame: frame.clone(),
-            })?;
-            if connection.status()? != SessionStatus::Active {
-                return Err("任务栏未确认时钟接管成功".into());
-            }
-            connection.context.active.set(true);
-            *connection.last.borrow_mut() = Some(frame);
             Ok(connection)
         }
+    }
+    fn start(&self, frame: Frame) -> Result<(), String> {
+        frame.validate()?;
+        let _call = self.enter()?;
+        self.command(Change::Start {
+            frame: frame.clone(),
+        })?;
+        if self.status()? != SessionStatus::Active {
+            return Err("任务栏未确认时钟接管成功".into());
+        }
+        self.context.active.set(true);
+        *self.last.borrow_mut() = Some(frame);
+        Ok(())
     }
     fn verify_endpoint(&self) -> Result<(), String> {
         unsafe {
@@ -352,21 +408,6 @@ impl Connection {
         } else {
             Ok(Call(&self.busy))
         }
-    }
-    pub fn heartbeat(&self) -> Result<(), String> {
-        if let Some(error) = self.failure.borrow().as_ref() {
-            return Err(error.clone());
-        }
-        if self.busy.get() {
-            return Ok(());
-        }
-        let _call = self.enter()?;
-        if let Err(error) = self.command(Change::Heartbeat) {
-            self.context.active.set(false);
-            *self.failure.borrow_mut() = Some(error.clone());
-            return Err(error);
-        }
-        Ok(())
     }
     pub fn update(&self, frame: Frame) -> Result<(), String> {
         if let Some(error) = self.failure.borrow().as_ref() {

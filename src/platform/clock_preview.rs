@@ -2,7 +2,7 @@
 use crate::{clock, config::ClockConfig};
 use litetray_adapter_protocol::{
     activation::{Activation, Gate},
-    clock::{Frame, Owner, SessionStatus, Style, Text},
+    clock::{Frame, Owner, SessionStatus},
 };
 use std::{
     cell::{Cell, RefCell},
@@ -103,25 +103,7 @@ impl Drop for Environment {
     }
 }
 pub fn frame(config: &ClockConfig, weather: &str) -> Frame {
-    let now = chrono::Local::now();
-    Frame {
-        text: Text {
-            top: clock::format(&config.top_line, config, now, weather),
-            bottom: clock::format(&config.bottom_line, config, now, weather),
-            tooltip: (!config.tooltip_line.is_empty())
-                .then(|| clock::format(&config.tooltip_line, config, now, weather)),
-        },
-        style: Style {
-            font_family: config.font_family.clone(),
-            font_size: config.font_size,
-            width: config.width,
-            top_color: (!config.top_color.is_empty()).then(|| config.top_color.clone()),
-            bottom_color: (!config.bottom_color.is_empty()).then(|| config.bottom_color.clone()),
-            alignment: config.alignment,
-            top_style: config.top_style.clone(),
-            bottom_style: config.bottom_style.clone(),
-        },
-    }
+    clock::frame(config, weather, chrono::Local::now())
 }
 #[cfg(test)]
 mod frame_tests {

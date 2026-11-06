@@ -12,11 +12,19 @@ $adapter=Join-Path (Split-Path $BinaryPath -Parent) 'litetray_taskbar_adapter.dl
 if(-not(Test-Path -LiteralPath $adapter)){throw 'Build the complete release workspace; the adapter DLL is required.'}
 $output=if($OutputDirectory){$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)}else{Join-Path $projectRoot 'dist\LiteTray-dev-windows-x64'}
 [IO.Directory]::CreateDirectory($output)|Out-Null
-Copy-Item -LiteralPath $BinaryPath -Destination (Join-Path $output 'LiteTray.exe')
-Copy-Item -LiteralPath $adapter -Destination (Join-Path $output 'litetray_taskbar_adapter.dll')
+function Copy-BinaryIfChanged([string]$Source, [string]$Destination) {
+    # Explorer may retain an identical adapter DLL after a test. Do not try to
+    # overwrite a loaded file when its content already matches this build.
+    if ((Test-Path -LiteralPath $Destination) -and
+        (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash -eq
+        (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash) { return }
+    Copy-Item -LiteralPath $Source -Destination $Destination
+}
+Copy-BinaryIfChanged $BinaryPath (Join-Path $output 'LiteTray.exe')
+Copy-BinaryIfChanged $adapter (Join-Path $output 'litetray_taskbar_adapter.dll')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination (Join-Path $output 'README.md')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD-PARTY-NOTICES.md') -Destination (Join-Path $output 'THIRD-PARTY-NOTICES.md')
-$documents=@('docs/implementation-plan.md','docs/progress.md','docs/taskbar-source-binding.md','docs/images/panel-light.png','docs/images/panel-dark.png','crates/taskbar-adapter/ABI.md')
+$documents=@('docs/implementation-plan.md','docs/progress.md','docs/taskbar-source-binding.md','docs/live-clock-acceptance.md','docs/images/panel-light.png','docs/images/panel-dark.png','crates/taskbar-adapter/ABI.md')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null

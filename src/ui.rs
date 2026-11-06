@@ -63,7 +63,9 @@ thread_local! {static STATE:RefCell<Option<App>>=const{RefCell::new(None)};}
 // Independent of App's modal-dialog borrow. Each native call retains its own
 // Rc, so reentrant window teardown cannot unload a module still on the stack.
 thread_local! {static PREVIEW:RefCell<Option<Rc<clock_preview::Preview>>>=const{RefCell::new(None)};}
-thread_local! {static TASKBAR:RefCell<Option<Rc<taskbar_clock::Connection>>>=const{RefCell::new(None)};}
+thread_local! {static TASKBAR:RefCell<Option<Rc<taskbar_clock::Service>>>=const{RefCell::new(None)};}
+thread_local! {static TASKBAR_CREATED:Cell<u32>=const{Cell::new(0)};}
+thread_local! {static TRAY_READD:Cell<bool>=const{Cell::new(false)};}
 #[derive(Clone, Copy)]
 struct Palette {
     background: HBRUSH,
@@ -78,7 +80,6 @@ struct Palette {
 thread_local! {static PALETTE:Cell<Option<Palette>>=const{Cell::new(None)};}
 
 enum Event {
-    Taskbar(Box<(Config, Result<taskbar_clock::Preflight, String>)>),
     Weather(Box<(config::WeatherConfig, weather::WeatherResult)>),
     Update(Result<UpdateStatus, String>),
 }
@@ -86,9 +87,7 @@ struct App {
     hwnd: HWND,
     panel: HWND,
     preview: Option<Rc<clock_preview::Preview>>,
-    taskbar: Option<Rc<taskbar_clock::Connection>>,
-    taskbar_busy: bool,
-    taskbar_status: String,
+    taskbar: Option<Rc<taskbar_clock::Service>>,
     pending_activation: Option<litetray_adapter_protocol::activation::Activation>,
     children: Vec<HWND>,
     fields: HashMap<u16, HWND>,
@@ -226,9 +225,11 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             hwnd,
             panel: null_mut(),
             preview: None,
-            taskbar: None,
-            taskbar_busy: false,
-            taskbar_status: "任务栏时钟：未连接（实验接入尚未实机验收）".into(),
+            taskbar: Some(Rc::new(taskbar_clock::service(
+                hwnd,
+                config.clone(),
+                taskbar_now(),
+            )?)),
             pending_activation: None,
             children: vec![],
             fields: HashMap::new(),
@@ -242,7 +243,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             calendar: None,
             saved: config.clone(),
             draft: config,
-            status: "开发版 · 原位时钟连接待实机验收".into(),
+            status: "开发版 · 在“时钟显示”中启用任务栏时钟".into(),
             weather: None,
             update: None,
             migration_source: None,
@@ -258,6 +259,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             taskbar_created: RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
             build: diagnostics::windows_build(),
         };
+        TASKBAR.with(|v| *v.borrow_mut() = app.taskbar.clone());
         app.recreate_resources();
         SetWindowPos(
             hwnd,
@@ -705,8 +707,8 @@ impl App {
                         width - 260,
                         58,
                     );
-                    self.button("连接任务栏时钟（实验）", 212, 224, 532, 250);
-                    self.button("停止并恢复", 213, 492, 532, 170);
+                    self.button("启用并保存（实验）", 212, 224, 532, 250);
+                    self.button("停用并恢复", 213, 492, 532, 170);
                 }
                 2 => {
                     self.label("显示范围", 224, 85, 300, 25);
@@ -785,7 +787,7 @@ impl App {
                         64,
                     );
                     self.label(
-                        "任务栏适配：尚未接管。配置不会禁用现有 Windhawk 模块。",
+                        "显示范围用于原位时钟。多屏托盘图标接管仍在开发。",
                         224,
                         527,
                         width - 260,
@@ -1233,9 +1235,7 @@ impl App {
         unsafe {
             self.collect_page()?;
             self.draft.validate()?;
-            if self.taskbar.is_some() {
-                self.stop_taskbar()?;
-            }
+
             let old = self.saved.clone();
             if old.start_with_windows != self.draft.start_with_windows {
                 startup::set_enabled(self.draft.start_with_windows)?;
@@ -1247,7 +1247,15 @@ impl App {
                 return Err(error);
             }
             self.saved = self.draft.clone();
-            self.status = "设置已保存".into();
+            self.status = match self
+                .taskbar
+                .as_ref()
+                .map(|s| s.configure(self.saved.clone(), taskbar_now()))
+                .transpose()
+            {
+                Ok(_) => "设置已保存".into(),
+                Err(error) => format!("设置已保存；任务栏恢复尚未完成：{error}"),
+            };
             self.engine = Default::default();
             self.recreate_resources();
             self.render();
@@ -1276,30 +1284,40 @@ impl App {
                 let _ = preview.update(&clock_preview::frame(&self.draft.clock, &summary));
             }
             if let Some(taskbar) = &self.taskbar {
-                match taskbar.update(clock_preview::frame(&self.draft.clock, &summary)) {
-                    Ok(()) => self.taskbar_status = "任务栏时钟：已连接，正在运行".into(),
-                    Err(error) => {
-                        self.taskbar_status = format!("任务栏时钟：{error}；请停止并恢复后重连")
-                    }
+                taskbar.set_weather(&summary);
+                if self.page == 1 {
+                    let state = taskbar.snapshot();
+                    set_text(
+                        self.field(210),
+                        &format!(
+                            "{}\r\n{}",
+                            state.text(),
+                            self.preview
+                                .as_ref()
+                                .map_or_else(|| "独立预览：尚未打开".into(), |p| p.status_text())
+                        ),
+                    );
+                    set_text(
+                        self.field(212),
+                        if state.enabled {
+                            "重试连接"
+                        } else {
+                            "启用并保存（实验）"
+                        },
+                    );
+                    EnableWindow(
+                        self.field(212),
+                        i32::from(!matches!(
+                            state.status,
+                            litetray::taskbar_service::Status::Preparing
+                                | litetray::taskbar_service::Status::Busy
+                        )),
+                    );
+                    EnableWindow(
+                        self.field(213),
+                        i32::from(state.status != litetray::taskbar_service::Status::Disabled),
+                    );
                 }
-            }
-            if self.page == 1 {
-                set_text(
-                    self.field(210),
-                    &format!(
-                        "{}\r\n{}",
-                        self.taskbar_status,
-                        self.preview
-                            .as_ref()
-                            .map_or_else(|| "独立预览：尚未打开".into(), |p| p.status_text())
-                    ),
-                );
-                EnableWindow(self.field(211), i32::from(self.preview.is_some()));
-                EnableWindow(
-                    self.field(212),
-                    i32::from(!self.taskbar_busy && self.taskbar.is_none()),
-                );
-                EnableWindow(self.field(213), i32::from(self.taskbar.is_some()));
             }
             if !self.panel.is_null() {
                 dashboard::update(
@@ -1373,40 +1391,6 @@ impl App {
         unsafe {
             while let Ok(event) = self.rx.try_recv() {
                 match event {
-                    Event::Taskbar(result) => {
-                        self.taskbar_busy = false;
-                        let (config, prepared) = *result;
-                        let result = prepared.and_then(|prepared| {
-                            if serde_json::to_value(&config).ok()
-                                != serde_json::to_value(&self.draft).ok()
-                            {
-                                return Err("准备期间设置已改变，请重新连接".into());
-                            }
-                            let summary = self
-                                .weather
-                                .as_ref()
-                                .and_then(|r| r.weather.as_ref())
-                                .map(|w| w.summary())
-                                .unwrap_or_else(|| "天气暂无数据".into());
-                            taskbar_clock::Connection::open(
-                                self.hwnd,
-                                prepared,
-                                clock_preview::frame(&config.clock, &summary),
-                            )
-                        });
-                        match result {
-                            Ok(connection) => {
-                                let connection = Rc::new(connection);
-                                TASKBAR.with(|v| *v.borrow_mut() = Some(connection.clone()));
-                                self.taskbar = Some(connection);
-                                self.taskbar_status = "任务栏时钟：已连接，正在运行".into();
-                            }
-                            Err(error) => self.taskbar_status = format!("连接失败：{error}"),
-                        }
-                        self.set_status(self.taskbar_status.clone());
-                        self.update_views();
-                        self.schedule_tick();
-                    }
                     Event::Weather(response) => {
                         let (request_config, result) = *response;
                         self.weather_busy = false;
@@ -1454,8 +1438,8 @@ impl App {
             } else {
                 interval
             };
-            let interval = if self.taskbar.is_some() {
-                interval.min(1000)
+            let interval = if let Some(service) = &self.taskbar {
+                interval.min(service.tick_millis(Local::now()))
             } else {
                 interval
             };
@@ -1655,31 +1639,38 @@ impl App {
             }
             match id {
                 212 => {
-                    if self.taskbar_busy || self.taskbar.is_some() {
-                        return false;
+                    self.draft.tray.clock_enabled = true;
+                    match self.save() {
+                        Ok(()) => {
+                            if let Some(service) = &self.taskbar {
+                                let _ = service.retry(taskbar_now());
+                            }
+                        }
+                        Err(error) => self.set_status(error),
                     }
-                    if let Err(error) = self.collect_page().and_then(|_| self.draft.validate()) {
-                        self.set_status(error);
-                        return false;
-                    }
-                    self.taskbar_busy = true;
-                    self.taskbar_status = "正在准备当前系统兼容性资料…".into();
-                    let config = self.draft.clone();
-                    let sender = self.tx.clone();
-                    let window = self.hwnd as usize;
-                    thread::spawn(move || {
-                        let result = taskbar_clock::preflight(&config);
-                        let _ = sender.send(Event::Taskbar(Box::new((config, result))));
-                        PostMessageW(window as HWND, WM_RESULT, 0, 0);
-                    });
                     self.update_views();
+                    self.schedule_tick();
                 }
                 213 => {
-                    if let Err(error) = self.stop_taskbar() {
-                        self.taskbar_status = format!("恢复未确认：{error}");
+                    // Disable first, even when another unsaved field is invalid.
+                    let restored = self.stop_taskbar();
+                    let mut saved = self.saved.clone();
+                    saved.tray.clock_enabled = false;
+                    match config::save(&config::data_dir().join("config.json"), &saved) {
+                        Ok(()) => {
+                            self.saved = saved;
+                            self.draft.tray.clock_enabled = false;
+                            self.set_status(match restored {
+                                Ok(()) => "已停用并恢复系统时钟".into(),
+                                Err(error) => format!("已保存停用；当前恢复待确认：{error}"),
+                            });
+                        }
+                        Err(error) => {
+                            self.set_status(format!("本次运行已请求停用；停用偏好未保存：{error}"))
+                        }
                     }
-                    self.set_status(self.taskbar_status.clone());
                     self.update_views();
+                    self.schedule_tick();
                 }
                 42 => {
                     self.page = 1;
@@ -1749,10 +1740,6 @@ impl App {
                     SetForegroundWindow(self.hwnd);
                 }
                 EXIT => {
-                    if let Err(error) = self.stop_taskbar() {
-                        self.set_status(format!("退出前恢复未完成：{error}"));
-                        return false;
-                    }
                     if let Err(e) = self.collect_page() {
                         self.set_status(e);
                         return false;
@@ -1775,6 +1762,10 @@ impl App {
                             self.set_status(e);
                             return false;
                         }
+                    }
+                    if let Err(error) = self.stop_taskbar() {
+                        self.set_status(format!("退出前恢复未完成：{error}"));
+                        return false;
                     }
                     return true;
                 }
@@ -1926,16 +1917,15 @@ impl App {
 }
 impl App {
     fn stop_taskbar(&mut self) -> Result<(), String> {
-        if let Some(connection) = &self.taskbar {
-            connection.stop()?;
+        if let Some(service) = &self.taskbar {
+            service.stop(taskbar_now())?;
         }
-        TASKBAR.with(|v| v.borrow_mut().take());
-        self.taskbar.take();
-        self.taskbar_status = "任务栏时钟：已停止并确认恢复".into();
         Ok(())
     }
 }
-
+fn taskbar_now() -> u64 {
+    unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount64() }
+}
 /// Inspect only the owner of our profile-specific settings window. This uses
 /// limited process metadata access, never shell injection or process memory.
 unsafe fn running_executable(window: HWND) -> Result<String, String> {
@@ -2011,6 +2001,33 @@ unsafe fn choose_migration_file(owner: HWND) -> Result<Option<std::path::PathBuf
 
 unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     unsafe {
+        let created = TASKBAR_CREATED.with(|id| {
+            if id.get() == 0 {
+                id.set(RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()));
+            }
+            id.get() != 0 && msg == id.get()
+        });
+        if created {
+            TRAY_READD.with(|pending| pending.set(true));
+            if let Some(service) = TASKBAR.with(|p| p.borrow().clone()) {
+                service.invalidate();
+            }
+            SetTimer(hwnd, 2, 500, None);
+        }
+        if msg == WM_POWERBROADCAST
+            && matches!(
+                w as u32,
+                PBT_APMSUSPEND
+                    | PBT_APMRESUMEAUTOMATIC
+                    | PBT_APMRESUMESUSPEND
+                    | PBT_APMRESUMECRITICAL
+            )
+        {
+            if let Some(service) = TASKBAR.with(|p| p.borrow().clone()) {
+                service.invalidate();
+            }
+            SetTimer(hwnd, 2, 500, None);
+        }
         if msg == WM_DISPLAYCHANGE
             || msg == WM_DEVICECHANGE
                 && matches!(
@@ -2018,6 +2035,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     DBT_DEVNODES_CHANGED | DBT_DEVICEARRIVAL | DBT_DEVICEREMOVECOMPLETE
                 )
         {
+            if let Some(service) = TASKBAR.with(|p| p.borrow().clone()) {
+                service.invalidate();
+            }
             // Debounce bursts; a modal settings borrow leaves this timer alive
             // so the next dispatch can refresh without dropping draft choices.
             SetTimer(hwnd, 2, 500, None);
@@ -2026,7 +2046,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
         if msg == WM_TIMER && w == 1 {
             let taskbar = TASKBAR.with(|p| p.borrow().clone());
             if let Some(taskbar) = taskbar {
-                let _ = taskbar.heartbeat();
+                let _ = taskbar.tick(taskbar_now(), Local::now());
             }
             let preview = PREVIEW.with(|p| p.borrow().clone());
             if let Some(preview) = preview {
@@ -2057,6 +2077,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             let app = state.as_mut()?;
             if msg == app.taskbar_created {
                 app.add_tray();
+                TRAY_READD.with(|pending| pending.set(false));
                 return Some(0);
             }
             match msg {
@@ -2130,6 +2151,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 }
                 WM_TIMER if w == 2 => {
                     KillTimer(hwnd, 2);
+                    if TRAY_READD.with(|pending| pending.replace(false)) {
+                        app.add_tray();
+                    }
                     app.refresh_displays();
                     Some(0)
                 }

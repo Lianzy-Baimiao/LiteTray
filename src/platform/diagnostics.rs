@@ -48,7 +48,7 @@ pub fn collect() -> Diagnostics {
             target_plan: None,
             target_plan_error: None,
             taskbars,
-            adapter_status: "任务栏接管尚未实现：当前仅支持独立时钟预览、日历天气和设置".into(),
+            adapter_status: "实验原位时钟仅适配已核对的 Windows 11 26300.9711 x64 模块；多屏托盘图标接管仍在开发。此诊断不代表当前连接状态。".into(),
         }
     }
 }

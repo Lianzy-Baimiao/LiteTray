@@ -17,6 +17,16 @@ pub struct Recovery {
     reason: Option<String>,
 }
 impl Recovery {
+    /// An intentional topology/configuration change still requires restoration,
+    /// but is not a failed connection attempt.
+    pub fn restarting(reason: &str) -> Self {
+        Self {
+            phase: Phase::Restoring,
+            failures: 0,
+            restore_failures: 0,
+            reason: Some(reason.chars().take(1024).collect()),
+        }
+    }
     /// Initial creation has no previous session to restore.
     pub fn connecting(now: u64) -> Self {
         Self {
