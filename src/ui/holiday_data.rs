@@ -1,7 +1,6 @@
 //! One background download at a time shared by settings and every flyout.
 use super::*;
 pub(super) const REQUEST: u32 = WM_APP + 91;
-pub(super) const SOURCE: u32 = WM_APP + 92;
 impl App {
     pub(super) unsafe fn request_holidays(&mut self, month: chrono::NaiveDate) {
         unsafe {

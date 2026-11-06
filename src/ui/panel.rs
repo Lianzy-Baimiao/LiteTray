@@ -86,7 +86,7 @@ pub(super) unsafe fn open(hwnd: HWND, anchor: popup::Rect, activate: bool) {
             SetTimer(hwnd, OBSERVE, 50, None);
         }
         if activate && SetForegroundWindow(hwnd) != 0 {
-            SetFocus(GetDlgItem(GetDlgItem(hwnd, dashboard::ID as i32), 1102));
+            dashboard::focus_content(GetDlgItem(hwnd, dashboard::ID as i32));
         }
     }
 }
@@ -190,6 +190,9 @@ pub(super) unsafe fn message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Opti
                 Some(0)
             }
             WM_KEYDOWN if w == VK_ESCAPE as usize => {
+                if dashboard::dismiss_editor(GetDlgItem(hwnd, dashboard::ID as i32)) {
+                    return Some(0);
+                }
                 if !detached(hwnd) {
                     hide(hwnd);
                 }
@@ -206,6 +209,9 @@ pub(super) unsafe fn message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Opti
                 Some(0)
             }
             WM_COMMAND if w & 0xffff == IDCANCEL as usize || w & 0xffff == 41 => {
+                if dashboard::dismiss_editor(GetDlgItem(hwnd, dashboard::ID as i32)) {
+                    return Some(0);
+                }
                 if !detached(hwnd) {
                     hide(hwnd);
                 }

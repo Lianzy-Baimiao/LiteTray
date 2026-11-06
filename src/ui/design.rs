@@ -148,6 +148,8 @@ pub(super) unsafe fn style_combo(hwnd: HWND, dark: bool, dpi: u32) {
                 wide("LiteTray.ControlDark").as_ptr(),
                 1usize as HANDLE,
             );
+        } else {
+            RemovePropW(hwnd, wide("LiteTray.ControlDark").as_ptr());
         }
         // Keep the native combo's input, keyboard navigation, list and UIA;
         // paint its closed surface and rows with the same system palette.

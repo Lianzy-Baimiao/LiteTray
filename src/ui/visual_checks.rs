@@ -202,7 +202,7 @@ unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path) -> App {
         app
     }
 }
-unsafe fn write_window(hwnd: HWND, path: &std::path::Path) {
+pub(super) unsafe fn write_window(hwnd: HWND, path: &std::path::Path) {
     unsafe {
         let mut r: RECT = std::mem::zeroed();
         GetClientRect(hwnd, &mut r);
@@ -513,6 +513,67 @@ fn organizer_pages_fit_the_viewport_without_page_scrollbars() {
         }
         DestroyWindow(app.hwnd);
         app.release_resources();
+    }
+}
+
+#[test]
+fn inline_draft_survives_hidden_flyout_theme_refresh_and_failed_save() {
+    unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-inline-unused.json"),
+        );
+        app.prewarm_panels();
+        let popup = app.panel_cache[0];
+        let view = GetDlgItem(popup, dashboard::ID as i32);
+        SendMessageW(view, WM_COMMAND, 1103, 0);
+        let editor = GetDlgItem(view, quick_agenda::ID as i32);
+        let title = GetDlgItem(editor, 4610);
+        set_text(title, "未保存的弹层草稿");
+        panel::hide(popup);
+        app.draft.appearance = Appearance::Dark;
+        app.recreate_resources();
+        assert_ne!(
+            IsWindow(popup),
+            0,
+            "theme refresh must preserve an editing flyout"
+        );
+        assert_eq!(
+            GetDlgItem(
+                GetDlgItem(popup, dashboard::ID as i32),
+                quick_agenda::ID as i32
+            ),
+            editor
+        );
+        assert_eq!(window_text(title), "未保存的弹层草稿");
+        let count = app.organizer.borrow().data.entries.len();
+        app.organizer.borrow_mut().error = Some("日程文件读取失败，原文件已保留".into());
+        SendMessageW(editor, WM_COMMAND, 4620, 0);
+        assert_eq!(app.organizer.borrow().data.entries.len(), count);
+        assert_eq!(window_text(title), "未保存的弹层草稿");
+        assert!(dashboard::editing(view));
+        // Esc dismisses the editor first, including in a detached popup.
+        panel::set_detached(popup, true);
+        SendMessageW(popup, WM_COMMAND, IDCANCEL as usize, 0);
+        let mut message: MSG = std::mem::zeroed();
+        while PeekMessageW(
+            &mut message,
+            view,
+            quick_agenda::CLOSED,
+            quick_agenda::SAVED,
+            PM_REMOVE,
+        ) != 0
+        {
+            DispatchMessageW(&message);
+        }
+        assert!(!dashboard::editing(view));
+        assert!(panel::detached(popup));
+        assert_eq!(IsWindowVisible(popup), 0);
+        app.close_panel();
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+        assert_external_foreground();
     }
 }
 

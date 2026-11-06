@@ -8,6 +8,7 @@ Push-Location -LiteralPath $projectRoot
 try {
     $env:LITETRAY_RENDER_DIR=$output
     & (Join-Path $PSScriptRoot 'Invoke-Cargo.ps1') -CargoArguments @('test','--bin','LiteTray','render_panel_artifacts','--','--ignored','--nocapture')
+    & (Join-Path $PSScriptRoot 'Invoke-Cargo.ps1') -CargoArguments @('test','--bin','LiteTray','render_inline_editor_artifacts','--','--ignored','--nocapture')
     Add-Type -AssemblyName System.Drawing
     Get-ChildItem -LiteralPath $output -Filter 'panel-*.bmp' | ForEach-Object {
         $bitmap=[Drawing.Bitmap]::FromFile($_.FullName)

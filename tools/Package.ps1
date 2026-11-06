@@ -30,6 +30,7 @@ Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD-PARTY-NOTICES.md') -Destin
 $documents=@('docs/implementation-plan.md','docs/progress.md','docs/taskbar-source-binding.md','docs/live-clock-acceptance.md','docs/images/panel-light.png','docs/images/panel-dark.png','docs/images/agenda-dark.png','docs/images/sounds-dark.png','crates/taskbar-adapter/ABI.md','crates/popup-hook/README.md')
 $documents += @('docs/images/settings-light.png','docs/images/settings-style-dark.png')
 $documents += @('data/holidays/README.md','data/holidays/LICENSE')
+$documents += @('docs/images/panel-editor-dark.png')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null

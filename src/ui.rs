@@ -3,8 +3,10 @@ mod calendar;
 mod dashboard;
 mod design;
 mod holiday_data;
+mod icons;
 mod page;
 mod panel;
+mod quick_agenda;
 mod settings;
 #[cfg(test)]
 mod visual_checks;
@@ -41,7 +43,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.3";
+const UI_REVISION: &str = "开发版 5.4";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -502,7 +504,9 @@ impl App {
     unsafe fn clear_attached_panels(&mut self) {
         unsafe {
             self.panel_cache.retain(|&hwnd| {
-                if panel::detached(hwnd) {
+                if panel::detached(hwnd)
+                    || dashboard::editing(GetDlgItem(hwnd, dashboard::ID as i32))
+                {
                     true
                 } else {
                     DestroyWindow(hwnd);
@@ -1542,9 +1546,9 @@ impl App {
                         null_mut(),
                         position.rect.left,
                         position.rect.top,
-                        0,
-                        0,
-                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                        position.rect.right - position.rect.left,
+                        position.rect.bottom - position.rect.top,
+                        SWP_NOZORDER | SWP_NOACTIVATE,
                     );
                 }
                 self.panel = panel;
@@ -2145,13 +2149,6 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 holiday_data::REQUEST => {
                     if let Some(month) = chrono::NaiveDate::from_ymd_opt(w as i32, l as u32, 1) {
                         app.request_holidays(month);
-                    }
-                    Some(0)
-                }
-                holiday_data::SOURCE => {
-                    if let Some(date) = chrono::NaiveDate::from_num_days_from_ce_opt(w as i32) {
-                        let target = app.holidays.borrow().source(date);
-                        open_target(&target);
                     }
                     Some(0)
                 }

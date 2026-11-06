@@ -11,7 +11,9 @@ const NEXT: u16 = 1101;
 const TODAY: u16 = 1102;
 const ADD_EVENT: u16 = 1103;
 const FOCUS: u16 = 1104;
-const HOLIDAY_SOURCE: u16 = 1105;
+const MANAGE: u16 = 1106;
+const EARLIER: u16 = 1107;
+const LATER: u16 = 1108;
 const FIRST_ENTRY: u16 = 1150;
 const SELECT_DAY: u32 = WM_APP + 80;
 const WIDTH: i32 = popup::WIDTH;
@@ -38,6 +40,11 @@ struct View {
     lunar_labels: Vec<String>,
     markers: Vec<bool>,
     entries: Vec<(u64, String, String)>,
+    entry_count: usize,
+    entry_offset: usize,
+    editor: HWND,
+    editing: bool,
+    tips: Option<icons::Tips>,
     holidays: Option<Rc<RefCell<holidays::Catalog>>>,
     holiday_revision: u64,
     holiday_days: Vec<Option<holidays::Day>>,
@@ -105,6 +112,11 @@ pub(super) unsafe fn create(parent: HWND, bounds: RECT, dark: bool, flyout: bool
             lunar_labels: vec![],
             markers: vec![],
             entries: vec![],
+            entry_count: 0,
+            entry_offset: 0,
+            editor: null_mut(),
+            editing: false,
+            tips: None,
             holidays: None,
             holiday_revision: u64::MAX,
             holiday_days: vec![],
@@ -185,8 +197,11 @@ fn refresh_agenda(v: &mut View) {
         .filter(|e| e.occurs_on(v.calendar.selected))
         .collect::<Vec<_>>();
     entries.sort_by_key(|e| (e.time, e.id));
+    v.entry_count = entries.len();
+    v.entry_offset = v.entry_offset.min(entries.len().saturating_sub(1) / 3 * 3);
     v.entries = entries
         .iter()
+        .skip(v.entry_offset)
         .take(3)
         .map(|e| {
             (
@@ -202,6 +217,77 @@ fn refresh_agenda(v: &mut View) {
             )
         })
         .collect();
+}
+pub(super) unsafe fn editing(hwnd: HWND) -> bool {
+    unsafe {
+        (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RefCell<View>)
+            .as_ref()
+            .and_then(|v| v.try_borrow().ok())
+            .is_some_and(|v| v.editing)
+    }
+}
+pub(super) unsafe fn focus_content(hwnd: HWND) {
+    unsafe {
+        let editor = GetDlgItem(hwnd, quick_agenda::ID as i32);
+        SetFocus(if editing(hwnd) {
+            GetDlgItem(editor, 4610)
+        } else {
+            GetDlgItem(hwnd, TODAY as i32)
+        });
+    }
+}
+pub(super) unsafe fn dismiss_editor(hwnd: HWND) -> bool {
+    unsafe {
+        let Some(cell) = (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RefCell<View>).as_ref()
+        else {
+            return false;
+        };
+        let Ok(v) = cell.try_borrow() else {
+            return false;
+        };
+        v.editing && quick_agenda::dismiss(v.editor)
+    }
+}
+unsafe fn edit(hwnd: HWND, id: Option<u64>) {
+    unsafe {
+        let Some(cell) = (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RefCell<View>).as_ref()
+        else {
+            return;
+        };
+        let Ok(mut v) = cell.try_borrow_mut() else {
+            return;
+        };
+        let Some(store) = v.store.clone() else {
+            return;
+        };
+        let entry = if let Some(id) = id {
+            store
+                .borrow()
+                .data
+                .entries
+                .iter()
+                .find(|e| e.id == id)
+                .cloned()
+        } else {
+            Some(organizer::Entry::new(
+                organizer::Kind::Event,
+                v.calendar.selected,
+            ))
+        };
+        let Some(entry) = entry else {
+            return;
+        };
+        if v.editor.is_null() {
+            v.editor = quick_agenda::create(hwnd, store, v.dark);
+        }
+        if !quick_agenda::open(v.editor, entry) {
+            return;
+        }
+        v.editing = true;
+        drop(v);
+        layout(hwnd);
+        InvalidateRect(hwnd, null(), 0);
+    }
 }
 pub(super) unsafe fn selection(hwnd: HWND) -> Option<calendar::Calendar> {
     unsafe {
@@ -313,43 +399,69 @@ fn button_specs(v: &View) -> Vec<ButtonSpec> {
         visible: true,
     };
     let mut buttons = vec![
-        spec(
-            format!("放假安排来源，{}", v.holiday_status),
-            HOLIDAY_SOURCE,
-            180,
-            84,
-            56,
-            32,
-            true,
-        ),
         spec("上个月".into(), PREV, 244, 84, 30, 32, true),
         spec("今天".into(), TODAY, 275, 84, 48, 32, true),
         spec("下个月".into(), NEXT, 325, 84, 30, 32, true),
-        spec(
-            "刷新天气".into(),
-            REFRESH,
-            if v.flyout { 438 } else { 550 },
-            18,
-            86,
-            34,
-            true,
-        ),
+        spec("刷新天气".into(), REFRESH, 574, 18, 36, 34, true),
         spec(
             if v.flyout { "设置" } else { "展开" }.into(),
             if v.flyout { 40 } else { CALENDAR },
-            if v.flyout { 532 } else { 646 },
+            if v.flyout { 618 } else { 662 },
             18,
-            54,
+            36,
             34,
             true,
         ),
-        spec("添加日程".into(), ADD_EVENT, 520, 496, 88, 30, true),
-        spec("专注计时".into(), FOCUS, 614, 496, 86, 30, true),
+        spec(
+            "新建事项".into(),
+            ADD_EVENT,
+            if v.editing { 286 } else { 618 },
+            496,
+            32,
+            30,
+            true,
+        ),
+        spec(
+            "完整日程管理".into(),
+            MANAGE,
+            if v.editing { 326 } else { 662 },
+            496,
+            32,
+            30,
+            true,
+        ),
+        spec("闹钟与专注".into(), FOCUS, 530, 18, 36, 34, true),
     ];
+    for (id, x, label, visible) in [
+        (
+            EARLIER,
+            if v.editing { 214 } else { 546 },
+            "上一组日程",
+            v.entry_offset > 0,
+        ),
+        (
+            LATER,
+            if v.editing { 246 } else { 578 },
+            "下一组日程",
+            v.entry_offset + 3 < v.entry_count,
+        ),
+    ] {
+        let mut button = spec(label.into(), id, x, 496, 30, 30, true);
+        button.visible = visible;
+        buttons.push(button);
+    }
     if v.flyout {
-        let mut detach = spec("分离".into(), panel::DETACH, 594, 18, 62, 34, true);
+        let mut detach = spec(
+            "分离面板，可拖动并保持展开".into(),
+            panel::DETACH,
+            662,
+            18,
+            36,
+            34,
+            true,
+        );
         detach.visible = !v.detached;
-        let mut close = spec("关闭".into(), panel::CLOSE, 646, 18, 54, 34, true);
+        let mut close = spec("关闭分离面板".into(), panel::CLOSE, 662, 18, 36, 34, true);
         close.visible = v.detached;
         buttons.push(detach);
         buttons.push(close);
@@ -387,7 +499,7 @@ fn button_specs(v: &View) -> Vec<ButtonSpec> {
             FIRST_ENTRY + i as u16,
             20,
             535 + i as i32 * 29,
-            680,
+            if v.editing { 340 } else { 680 },
             28,
             true,
         );
@@ -419,7 +531,7 @@ unsafe fn layout(hwnd: HWND) {
             .max(0.01);
         let resized = v.fonts[0].is_null() || (factor - v.factor).abs() > f64::EPSILON;
         v.factor = factor;
-        let s = |n: i32| (n as f64 * v.factor).round() as i32;
+        let s = |n: i32| (n as f64 * factor).round() as i32;
         let old_fonts = v.fonts;
         if resized {
             let face = design::font_face();
@@ -455,6 +567,9 @@ unsafe fn layout(hwnd: HWND) {
         }
         let old_markers = v.markers.clone();
         let old_entries = v.entries.clone();
+        if selection_changed {
+            v.entry_offset = 0;
+        }
         if selection_changed
             || month_changed
             || v.store
@@ -491,7 +606,16 @@ unsafe fn layout(hwnd: HWND) {
                 SetWindowSubclass(child, Some(design::hover_proc), 2, 0);
                 v.buttons.push(child);
             } else {
-                if resized {
+                let mut actual: RECT = std::mem::zeroed();
+                GetWindowRect(child, &mut actual);
+                MapWindowPoints(null_mut(), hwnd, &mut actual as *mut RECT as *mut POINT, 2);
+                if resized
+                    || actual.left != b.rect.left
+                    || actual.top != b.rect.top
+                    || actual.right != b.rect.right
+                    || actual.bottom != b.rect.bottom
+                {
+                    changed = true;
                     SetWindowPos(
                         child,
                         null_mut(),
@@ -537,6 +661,18 @@ unsafe fn layout(hwnd: HWND) {
             }
         }
         v.displayed = Some(v.calendar);
+        if v.tips.is_none() {
+            let mut tips = icons::Tips::new(hwnd);
+            for b in button_specs(v) {
+                if button_icon(b.id).is_some() {
+                    tips.add(hwnd, GetDlgItem(hwnd, b.id as i32), &b.name);
+                }
+            }
+            v.tips = Some(tips);
+        }
+        let editor = v.editor;
+        let dark = v.dark;
+        let editor_bounds = rect(s(376), s(84), s(324), s(540));
         let holiday_status_changed =
             old_holiday_status != v.holiday_status || old_holidays != v.holiday_days;
         let month = v.calendar.month;
@@ -548,6 +684,7 @@ unsafe fn layout(hwnd: HWND) {
             }
         }
         drop(guard);
+        quick_agenda::resize(editor, editor_bounds, dark);
         // Keep every native button alive. Only dates whose state changed and
         // the selected day's summary are invalidated; weather stays intact.
         for child in dirty {
@@ -618,6 +755,9 @@ unsafe extern "system" fn button_proc(
             }
         }
         if msg == WM_KEYDOWN && w == VK_ESCAPE as usize {
+            if dismiss_editor(GetParent(hwnd)) {
+                return 0;
+            }
             PostMessageW(GetAncestor(hwnd, GA_ROOT), WM_CLOSE, 0, 0);
             return 0;
         }
@@ -642,6 +782,15 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             return DefWindowProcW(hwnd, msg, w, l);
         }
         match msg {
+            quick_agenda::CLOSED | quick_agenda::SAVED => {
+                if let Ok(mut v) = (*raw).try_borrow_mut() {
+                    v.editing = false;
+                    refresh_agenda(&mut v);
+                }
+                layout(hwnd);
+                InvalidateRect(hwnd, null(), 0);
+                0
+            }
             WM_NCHITTEST => {
                 if let Ok(v) = (*raw).try_borrow()
                     && v.flyout
@@ -719,21 +868,28 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 } else if id == TODAY {
                     v.calendar.select(Local::now().date_naive());
                     focus = Some(v.calendar.selected);
-                } else if id == HOLIDAY_SOURCE {
-                    PostMessageW(
-                        GetAncestor(hwnd, GA_ROOTOWNER),
-                        holiday_data::SOURCE,
-                        v.calendar.selected.num_days_from_ce() as usize,
-                        0,
-                    );
-                    return 0;
-                } else if id == ADD_EVENT {
+                } else if id == MANAGE {
                     PostMessageW(
                         GetAncestor(hwnd, GA_ROOTOWNER),
                         agenda::OPEN_DATE,
                         v.calendar.selected.num_days_from_ce() as usize,
                         0,
                     );
+                    return 0;
+                } else if id == ADD_EVENT {
+                    drop(guard);
+                    edit(hwnd, None);
+                    return 0;
+                } else if id == EARLIER || id == LATER {
+                    v.entry_offset = if id == EARLIER {
+                        v.entry_offset.saturating_sub(3)
+                    } else {
+                        v.entry_offset + 3
+                    };
+                    refresh_agenda(v);
+                    drop(guard);
+                    layout(hwnd);
+                    invalidate_part(hwnd, (*raw).borrow().factor, rect(20, 496, 680, 129));
                     return 0;
                 } else if id == FOCUS {
                     PostMessageW(
@@ -745,18 +901,18 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     PostMessageW(GetAncestor(hwnd, GA_ROOTOWNER), WM_SHOW_SETTINGS, 0, 0);
                     return 0;
                 } else if (FIRST_ENTRY..FIRST_ENTRY + 3).contains(&id) {
-                    if let Some((entry, _, _)) = v.entries.get((id - FIRST_ENTRY) as usize) {
-                        PostMessageW(
-                            GetAncestor(hwnd, GA_ROOTOWNER),
-                            agenda::OPEN_ENTRY,
-                            *entry as usize,
-                            0,
-                        );
+                    let entry = v.entries.get((id - FIRST_ENTRY) as usize).map(|e| e.0);
+                    drop(guard);
+                    if let Some(entry) = entry {
+                        edit(hwnd, Some(entry));
                     }
                     return 0;
                 } else {
                     PostMessageW(GetParent(hwnd), WM_COMMAND, w, l);
                     return 0;
+                }
+                if v.editing && focus.is_some() {
+                    quick_agenda::set_date(v.editor, v.calendar.selected);
                 }
                 drop(guard);
                 layout(hwnd);
@@ -774,6 +930,35 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             }
             _ => DefWindowProcW(hwnd, msg, w, l),
         }
+    }
+}
+fn button_icon(id: u16) -> Option<icons::Icon> {
+    use icons::Icon;
+    Some(match id {
+        PREV | EARLIER => Icon::Left,
+        NEXT | LATER => Icon::Right,
+        REFRESH => Icon::Refresh,
+        40 => Icon::Settings,
+        CALENDAR | panel::DETACH => Icon::Detach,
+        panel::CLOSE => Icon::Close,
+        ADD_EVENT => Icon::Plus,
+        FOCUS => Icon::Timer,
+        MANAGE => Icon::List,
+        _ => return None,
+    })
+}
+fn holiday_colors(t: Theme, off: bool) -> (u32, u32) {
+    if t.high_contrast {
+        (t.accent, t.on_accent)
+    } else {
+        (
+            if off {
+                rgb(196, 43, 60)
+            } else {
+                rgb(32, 93, 188)
+            },
+            rgb(255, 255, 255),
+        )
     }
 }
 unsafe fn draw_button_buffered(v: &View, item: &DRAWITEMSTRUCT) {
@@ -883,6 +1068,22 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
             color
         };
         rounded(item.hDC, item.rcItem, color, border, s(10));
+        if let Some(icon) = button_icon(id) {
+            let side = s(19);
+            icons::draw(
+                item.hDC,
+                icon,
+                rect(
+                    item.rcItem.left + (item.rcItem.right - item.rcItem.left - side) / 2,
+                    item.rcItem.top + (item.rcItem.bottom - item.rcItem.top - side) / 2,
+                    side,
+                    side,
+                ),
+                t.text,
+                color,
+            );
+            return;
+        }
         let label = if let Some(date) = date {
             date.day().to_string()
         } else {
@@ -890,7 +1091,6 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
                 PREV => "‹".into(),
                 NEXT => "›".into(),
                 TODAY => "今天".into(),
-                HOLIDAY_SOURCE => "放假表".into(),
                 REFRESH => "刷新天气".into(),
                 40 => "设置".into(),
                 CALENDAR => "展开".into(),
@@ -948,13 +1148,7 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
                         s(18),
                     ),
                     v.fonts[1],
-                    if selected {
-                        t.on_accent
-                    } else if holiday.is_some_and(|d| d.off) {
-                        t.accent
-                    } else {
-                        t.muted
-                    },
+                    if selected { t.on_accent } else { t.muted },
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
                 );
             }
@@ -965,27 +1159,14 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
                     s(14),
                     s(15),
                 );
-                if !selected {
-                    rounded(
-                        item.hDC,
-                        badge,
-                        if holiday.off { t.tint } else { t.field },
-                        t.border,
-                        s(3),
-                    );
-                }
+                let (background, foreground) = holiday_colors(t, holiday.off);
+                rounded(item.hDC, badge, background, background, s(3));
                 text(
                     item.hDC,
                     holiday.badge(),
                     badge,
                     v.fonts[1],
-                    if selected {
-                        t.on_accent
-                    } else if holiday.off {
-                        t.accent
-                    } else {
-                        t.text
-                    },
+                    foreground,
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE,
                 );
             }
@@ -1067,11 +1248,7 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
                 "{} · {}{}",
                 now.format("%Y年"),
                 now.format(if v.seconds { "%H:%M:%S" } else { "%H:%M" }),
-                if v.detached {
-                    " · 已分离，可拖动顶部"
-                } else {
-                    ""
-                }
+                if v.detached { " · 已分离" } else { "" }
             ),
             20,
             44,
@@ -1130,7 +1307,16 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
         tx(
             &selected_holiday
                 .map(|d| d.description())
-                .unwrap_or_else(|| v.holiday_status.clone()),
+                .unwrap_or_else(|| {
+                    if v.holiday_days.iter().any(Option::is_some) {
+                        "休 · 放假    班 · 调休补班".into()
+                    } else if v.holiday_status.contains("暂无") || v.holiday_status.contains("失败")
+                    {
+                        v.holiday_status.clone()
+                    } else {
+                        String::new()
+                    }
+                }),
             20,
             468,
             340,
@@ -1273,13 +1459,25 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
             .into();
         }
         fill(dc, r(20, 488, 680, 1), t.border);
-        tx("当日安排", 20, 496, 290, 30, 0, t.text);
+        tx(
+            &if v.entry_count > 0 {
+                format!("当日安排 · {}", v.entry_count)
+            } else {
+                "当日安排".into()
+            },
+            20,
+            496,
+            if v.editing { 192 } else { 490 },
+            30,
+            0,
+            t.text,
+        );
         if v.entries.is_empty() {
             tx(
                 "这一天还没有安排，留一点时间给自己。",
                 28,
                 550,
-                650,
+                if v.editing { 320 } else { 650 },
                 28,
                 1,
                 t.muted,
@@ -1354,8 +1552,247 @@ unsafe fn weather_icon(dc: HDC, r: RECT, color: u32, description: &str) {
 #[cfg(test)]
 mod visual_checks {
     use super::*;
+    unsafe fn flush_editor(hwnd: HWND) {
+        unsafe {
+            let mut message: MSG = std::mem::zeroed();
+            while PeekMessageW(
+                &mut message,
+                hwnd,
+                quick_agenda::CLOSED,
+                quick_agenda::SAVED,
+                PM_REMOVE,
+            ) != 0
+            {
+                DispatchMessageW(&message);
+            }
+        }
+    }
     #[test]
-    fn holiday_updates_keep_native_dates_and_route_selected_source() {
+    fn inline_editor_saves_six_kinds_without_opening_settings_and_preserves_drafts() {
+        unsafe {
+            let _ = RoInitialize(RO_INIT_SINGLETHREADED);
+            let path = std::env::temp_dir().join(format!(
+                "litetray-inline-{}-{}.json",
+                std::process::id(),
+                Utc::now().timestamp_nanos_opt().unwrap()
+            ));
+            let store = Rc::new(RefCell::new(organizer::Store::open(&path)));
+            let parent = CreateWindowExW(
+                0,
+                wide("STATIC").as_ptr(),
+                wide("Inline fixture").as_ptr(),
+                WS_POPUP,
+                0,
+                0,
+                WIDTH,
+                HEIGHT,
+                null_mut(),
+                null_mut(),
+                GetModuleHandleW(null()),
+                null(),
+            );
+            assert!(!parent.is_null());
+            let hwnd = create(parent, rect(0, 0, WIDTH, HEIGHT), false, true);
+            bind_store(hwnd, store.clone());
+            bind_holidays(hwnd, Rc::new(RefCell::new(holidays::Catalog::default())));
+            let date = NaiveDate::from_ymd_opt(2027, 2, 14).unwrap();
+            restore_selection(hwnd, calendar::Calendar::new(date));
+            for (index, kind) in organizer::Kind::ALL.iter().enumerate() {
+                SendMessageW(hwnd, WM_COMMAND, ADD_EVENT as usize, 0);
+                let editor = GetDlgItem(hwnd, quick_agenda::ID as i32);
+                assert!(!editor.is_null());
+                assert!(editing(hwnd));
+                set_text(GetDlgItem(editor, 4610), &format!("{}回归", kind.label()));
+                set_text(GetDlgItem(editor, 4615), "备注不得因类型或主题切换丢失");
+                SendMessageW(editor, WM_COMMAND, 4600 + index, 0);
+                let title = GetDlgItem(editor, 4610);
+                refresh_theme(hwnd, true);
+                refresh_theme(hwnd, false);
+                assert_eq!(GetDlgItem(editor, 4610), title);
+                assert_eq!(window_text(title), format!("{}回归", kind.label()));
+                // These windows never leave the hidden test surface.
+                assert_eq!(IsWindowVisible(parent), 0);
+                SendMessageW(editor, WM_COMMAND, 4620, 0);
+                flush_editor(hwnd);
+                assert!(!editing(hwnd));
+                assert_eq!(store.borrow().data.entries.len(), index + 1);
+                let saved = organizer::Store::open(&path);
+                let entry = &saved.data.entries[index];
+                assert_eq!(entry.kind, *kind);
+                assert_eq!(entry.date, date);
+                assert!(entry.notes.contains("不得"));
+                if matches!(
+                    kind,
+                    organizer::Kind::Birthday | organizer::Kind::Anniversary
+                ) {
+                    assert_eq!(entry.repeat, organizer::Repeat::Yearly);
+                }
+            }
+            let cell = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RefCell<View>);
+            assert_eq!(cell.borrow().entry_count, 6);
+            SendMessageW(hwnd, WM_COMMAND, LATER as usize, 0);
+            assert_eq!(cell.borrow().entry_offset, 3);
+            let edited_id = cell.borrow().entries[0].0;
+            SendMessageW(hwnd, WM_COMMAND, FIRST_ENTRY as usize, 0);
+            let editor = GetDlgItem(hwnd, quick_agenda::ID as i32);
+            set_text(GetDlgItem(editor, 4610), "弹层内修改");
+            let target = date.succ_opt().unwrap();
+            let index = cell
+                .borrow()
+                .days
+                .iter()
+                .position(|d| *d == target)
+                .unwrap();
+            SendMessageW(hwnd, WM_COMMAND, (FIRST + index as u16) as usize, 0);
+            assert_eq!(window_text(GetDlgItem(editor, 4611)), target.to_string());
+            set_text(GetDlgItem(editor, 4612), "25:90");
+            SendMessageW(editor, WM_COMMAND, 4620, 0);
+            flush_editor(hwnd);
+            assert!(
+                editing(hwnd),
+                "invalid input must keep the editor and draft"
+            );
+            assert!(
+                !store
+                    .borrow()
+                    .data
+                    .entries
+                    .iter()
+                    .any(|e| e.title == "弹层内修改")
+            );
+            set_text(GetDlgItem(editor, 4612), "10:30");
+            SendMessageW(editor, WM_COMMAND, 4620, 0);
+            flush_editor(hwnd);
+            let changed = store
+                .borrow()
+                .data
+                .entries
+                .iter()
+                .find(|e| e.id == edited_id)
+                .unwrap()
+                .clone();
+            assert_eq!(changed.title, "弹层内修改");
+            assert_eq!(changed.date, target);
+            edit(hwnd, Some(edited_id));
+            SendMessageW(editor, WM_COMMAND, 4621, 0);
+            assert!(
+                store
+                    .borrow()
+                    .data
+                    .entries
+                    .iter()
+                    .any(|e| e.id == edited_id),
+                "first delete click only arms confirmation"
+            );
+            SendMessageW(editor, WM_COMMAND, 4621, 0);
+            flush_editor(hwnd);
+            assert!(
+                !store
+                    .borrow()
+                    .data
+                    .entries
+                    .iter()
+                    .any(|e| e.id == edited_id)
+            );
+            let mut message: MSG = std::mem::zeroed();
+            assert_eq!(
+                PeekMessageW(
+                    &mut message,
+                    parent,
+                    agenda::OPEN_DATE,
+                    agenda::OPEN_ENTRY,
+                    PM_REMOVE
+                ),
+                0,
+                "quick editing must not launch the full organizer"
+            );
+            assert_eq!(IsWindowVisible(parent), 0);
+            DestroyWindow(parent);
+            super::super::visual_checks::assert_external_foreground();
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "Renders inline editor with hidden native controls"]
+    fn render_inline_editor_artifacts() {
+        let output = std::path::PathBuf::from(std::env::var_os("LITETRAY_RENDER_DIR").unwrap());
+        std::fs::create_dir_all(&output).unwrap();
+        unsafe {
+            let _ = RoInitialize(RO_INIT_SINGLETHREADED);
+            for (dark, factor) in [(false, 1.), (true, 1.), (false, 1.5), (true, 2.)] {
+                let s = |n: i32| (n as f64 * factor).round() as i32;
+                let parent = CreateWindowExW(
+                    0,
+                    wide("STATIC").as_ptr(),
+                    wide("Inline render").as_ptr(),
+                    WS_POPUP,
+                    0,
+                    0,
+                    s(WIDTH),
+                    s(HEIGHT),
+                    null_mut(),
+                    null_mut(),
+                    GetModuleHandleW(null()),
+                    null(),
+                );
+                let hwnd = create(parent, rect(0, 0, s(WIDTH), s(HEIGHT)), dark, true);
+                let date = NaiveDate::from_ymd_opt(2027, 2, 14).unwrap();
+                restore_selection(hwnd, calendar::Calendar::new(date));
+                let store = Rc::new(RefCell::new(organizer::Store::open(
+                    &output.join("unused-inline.json"),
+                )));
+                for (kind, title) in [
+                    (organizer::Kind::Todo, "整理本周计划"),
+                    (organizer::Kind::Event, "和家人一起吃晚饭"),
+                ] {
+                    let mut entry = organizer::Entry::new(kind, date);
+                    entry.title = title.into();
+                    store.borrow_mut().data.put(entry).unwrap();
+                }
+                bind_store(hwnd, store);
+                bind_holidays(hwnd, Rc::new(RefCell::new(holidays::Catalog::default())));
+                edit(hwnd, None);
+                let editor = GetDlgItem(hwnd, quick_agenda::ID as i32);
+                set_text(GetDlgItem(editor, 4610), "整理下周的工作计划");
+                set_text(GetDlgItem(editor, 4612), "09:30");
+                set_text(
+                    GetDlgItem(editor, 4615),
+                    "列出三个重要目标，留出专注的时间。",
+                );
+                let mut child = GetWindow(editor, GW_CHILD);
+                while !child.is_null() {
+                    let mut b: RECT = std::mem::zeroed();
+                    GetWindowRect(child, &mut b);
+                    MapWindowPoints(null_mut(), editor, &mut b as *mut RECT as *mut POINT, 2);
+                    let mut client: RECT = std::mem::zeroed();
+                    GetClientRect(editor, &mut client);
+                    assert!(
+                        b.left >= 0
+                            && b.top >= 0
+                            && b.right <= client.right + 1
+                            && b.bottom <= client.bottom + 1,
+                        "editor control outside bounds: {}",
+                        GetDlgCtrlID(child)
+                    );
+                    child = GetWindow(child, GW_HWNDNEXT);
+                }
+                super::super::visual_checks::write_window(
+                    hwnd,
+                    &output.join(format!(
+                        "panel-{}-{}-editor.bmp",
+                        if dark { "dark" } else { "light" },
+                        (factor * 100.) as u32
+                    )),
+                );
+                DestroyWindow(parent);
+            }
+            super::super::visual_checks::assert_external_foreground();
+        }
+    }
+
+    #[test]
+    fn holiday_updates_keep_native_dates_without_source_button() {
         unsafe {
             let parent = CreateWindowExW(
                 0,
@@ -1425,19 +1862,10 @@ mod visual_checks {
                 dirty <= 1,
                 "unrelated holiday dates were invalidated: {dirty}"
             );
-            SendMessageW(GetDlgItem(hwnd, HOLIDAY_SOURCE as i32), BM_CLICK, 0, 0);
-            let mut message: MSG = std::mem::zeroed();
-            assert_ne!(
-                PeekMessageW(
-                    &mut message,
-                    parent,
-                    holiday_data::SOURCE,
-                    holiday_data::SOURCE,
-                    PM_REMOVE
-                ),
-                0
+            assert!(
+                GetDlgItem(hwnd, 1105).is_null(),
+                "source links must not crowd the calendar toolbar"
             );
-            assert_eq!(message.wParam, date.num_days_from_ce() as usize);
             assert_eq!(IsWindowVisible(parent), 0);
             DestroyWindow(parent);
             super::super::visual_checks::assert_external_foreground();
@@ -1696,6 +2124,11 @@ mod visual_checks {
                     factor,
                     store: None,
                     revision: 0,
+                    entry_count: if empty { 0 } else { 2 },
+                    entry_offset: 0,
+                    editor: null_mut(),
+                    editing: false,
+                    tips: None,
                     holiday_days: calendar
                         .grid()
                         .iter()
