@@ -134,3 +134,15 @@ WindowGuard 仅接受当前进程、当前线程窗口，建立独立的原生�
 新增 5 项单元测试和 8 项宿主原生隔离场景，总计 65/109。后者覆盖首次创建失败后重试、真实 Active/Closed 状态、调用繁忙时保留连接、无效草稿、确认关闭后释放与退避、隐藏重建及旧点击拒绝、连续故障暂停、明确重试；重建实际使用同目录 DLL 和新窗口，仅退避时钟由测试控制。原来 101 项仍包含真实的 15 秒超时验证。没有故障注入到 Explorer，没有启用真实任务栏写入。
 
 独立配置实机检查了状态区域布局、“尚未打开”到“运行中”、重试按钮启用，以及鼠标点击时钟展开日历面板。界面工具随后反复报告 `call get_window_state before using this window` / 截图绑定错误，重试按钮的实际点击不计为 UI 通过；暂停和重试由上述真实 DLL 自动化检查覆盖。测试实例单独结束，原有运行实例未修改。实际睡眠/唤醒、Explorer 重启重连和焦点争用仍需实机验收。
+
+## XAML source 绑定与范围点击
+
+离线核对当前 taskbar.dll、twinui.pcshell.dll 及匹配 PDB，确认 TaskbarHost 使用 IXamlExplorerHostChildWindow，不能直接套用预览的 DesktopWindowXamlSource 类型。调查结果、模块身份和相关符号记录在 [source 关联证据](taskbar-source-binding.md)。没有执行 Explorer 对象读取或私有接口调用，也没有把调查到的字段偏移写入适配器。
+
+新增 island::Binding：从真实 IDesktopWindowXamlSource 的 SDK 原生接口取得子窗口，再核对当前线程/进程、直接父窗口、Content、XamlRoot 和识别使用的内容根。父子窗口都有独立 WindowGuard；source、内容和根保留引用。BoundView 必须通过验证构造，Session 在启动、更新、poll 和点击发布前持续检查；不能再任意组合 View 与 HWND。Session 停止时释放其引用，若外层 BoundView 仍在则绑定继续保留，最终释放时回收标记。
+
+routing::attach_interactive 将范围计划、绑定、组件事务、watchdog 和点击订阅接到一起。点击 HWND 从绑定产生，控件必须属于同一 root，只为选中时钟建立订阅，Prepared 阶段不消费事件；原系统行为路径仍可不订阅输入。拒绝发送或已停止时保留默认处理。这个入口尚未连接生产 TaskbarHost，不能视为真实任务栏点击已完成。
+
+新增 9 项真实 XAML 隔离场景，合计 65 项单元测试、118 项隔离检查。覆盖 COM 接口规范化、交换根/窗口及非 source 对象拒绝、外来点击控件拒绝、内容替换后恢复、重设子窗口父级后停用、关闭 source、选定时钟的原生输入窗口与序号、输入前发现归属变化、重新识别后重启以及发送拒绝/停止后默认行为。点击测试直接调用保留的真实 XAML 委托，不称为操作系统鼠标输入验证。
+
+测试发现第一次布局后沿用旧完整 View 会被严格快照校验拒绝；再次识别并捕获绑定后重启通过。场景另外显式修改一个非目标节点名称，确保不同 Windows 模板初始化时机下也能验证旧快照拒绝。活跃会话允许普通模型条目变化的规则未放宽，准备新会话仍要求新识别。真实 Shell source 获取、物理显示器关联、Explorer 重连与托盘交互仍待完成。

@@ -106,7 +106,13 @@ View 保留节点引用和到 XamlRoot 的父级链，准备时钟与模型时�
 
 协议 `routing::Plan::build` 将已解析的桌面设备列表和功能选项转换为单次窗口路由计划。路由需唯一，最多 16 个选定区域；跨进程/跨线程的模型共享被拒绝。模型来源是唯一主任务栏，可位于选定范围之外；时钟与可见性只作用于计划内目标。该计划是本地生成的输出结构，不是新增的远程启动命令。
 
-适配层 `routing::prepare` 从显式 BoundView 中捕获时钟、模型和可见性，核对当前 PID/TID、原生窗口和完整路由记录。BoundView 的调用方必须已经验证窗口与 XamlRoot 的关联及当前显示器映射；函数不会根据 HWND 推测 root，也不发现或接入 Explorer。捕获本身不写 XAML 显示属性；所持窗口、root 及模块必须覆盖整个会话生命周期。
+适配层 `routing::prepare` 从显式 BoundView 中捕获时钟、模型和可见性，核对当前 PID/TID、原生窗口和完整路由记录。BoundView 字段不再允许调用方直接填充，必须通过 `capture(route, view, source)` 验证实际 XAML source；当前物理显示器映射仍由宿主负责。函数不会根据 HWND 推测 root，也不发现或接入 Explorer。捕获本身不写 XAML 显示属性；所持窗口、root 及模块必须覆盖整个会话生命周期。
+
+`island::Binding` 规范化到 IDesktopWindowXamlSource，使用 SDK IDesktopWindowXamlSourceNative 取得 HWND，再检查同进程/线程、直接父窗口、Content 和 XamlRoot 身份。父子窗口分别持有 WindowGuard，COM 读取前后重新核对窗口关系。BoundView 与 Session 通过 Rc 保留同一绑定；停止的 Session 释放自身引用，若 BoundView 仍在，绑定仍保留供后续校验。整个绑定释放后才回收窗口标记。
+
+`routing::attach_interactive` 从该绑定产生 InputTarget，独立核对点击控件属于同一 root，窗口由 source 返回；不会让调用方另选输入 HWND。只为计划中的时钟准备订阅，返回尚未启动的 watchdog，成功应用整组组件后才启用输入。无自定义点击行为的路径仍可只使用 prepare/Watchdog::attach。完整准备快照在布局后可能变化，重建必须重新识别，不能复用旧 View。
+
+当前真实 Shell 使用 IXamlExplorerHostChildWindow，尚未取得其实际 DesktopWindowXamlSource。Binding 的验证不能证明生产 Shell 对象已经适配；本次没有调用其私有接口。离线模块与 PDB 的证据见 [任务栏 source 调查](../../docs/taskbar-source-binding.md)。
 
 `VisibilityLease` 仅修改直接托盘模型区域的 Visibility，禁止通知按钮和时钟区域。依赖属性入口从 winmd 生成 IUIElementStatics.VisibilityProperty。枚举值由新建的临时 XAML Grid 读取原生装箱对象；判等仅接受标准参数化 `IReference<Windows.UI.Xaml.Visibility>` 的精确签名，不把任意 OtherType 当成整数。所有目标先捕获、全部原值核对后写入；Session 负责部分失败整组回滚与 poll 中的归属冲突停用。
 

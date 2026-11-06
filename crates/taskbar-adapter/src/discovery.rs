@@ -37,6 +37,9 @@ struct GuardNode {
     class_name: String,
 }
 impl View {
+    pub(crate) fn root_content(&self) -> Result<Object, String> {
+        xaml::root_content(&self.panel)
+    }
     pub(crate) fn lease_guard(&self, roles: &[Role], clock: bool) -> Result<LeaseGuard, String> {
         let fresh = self.revalidate()?;
         let selection = fresh.selection()?;
@@ -213,6 +216,15 @@ impl View {
                 &fresh.objects[clock.container],
             )?,
         })
+    }
+    pub(crate) fn clock_input_element(&self) -> Result<Object, String> {
+        let fresh = self.revalidate()?;
+        let clock = fresh
+            .selection()?
+            .clock
+            .as_ref()
+            .ok_or("独立时钟点击区域不可用")?;
+        fresh.objects[clock.container].query(&IID_IUIElement)
     }
     pub(crate) fn visibility_target(
         &self,

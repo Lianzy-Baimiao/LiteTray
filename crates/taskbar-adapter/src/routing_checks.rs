@@ -150,18 +150,9 @@ pub(crate) fn run(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, Strin
         route(&untouched, true, "C"),
     ];
     let views = [
-        BoundView {
-            route: routes[0].clone(),
-            view: &a,
-        },
-        BoundView {
-            route: routes[1].clone(),
-            view: &b,
-        },
-        BoundView {
-            route: routes[2].clone(),
-            view: &c,
-        },
+        BoundView::capture(routes[0].clone(), &a, source.source()?)?,
+        BoundView::capture(routes[1].clone(), &b, target.source()?)?,
+        BoundView::capture(routes[2].clone(), &c, untouched.source()?)?,
     ];
     let plan = Plan::build(&routes, &["B".into()], options())?;
     let now = unsafe { GetTickCount64() };
@@ -203,14 +194,8 @@ pub(crate) fn run(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, Strin
     let mut changed = routes[1].clone();
     changed.device = "changed".into();
     let mismatched = [
-        BoundView {
-            route: routes[0].clone(),
-            view: &a,
-        },
-        BoundView {
-            route: changed,
-            view: &b,
-        },
+        BoundView::capture(routes[0].clone(), &a, source.source()?)?,
+        BoundView::capture(changed, &b, target.source()?)?,
     ];
     require(
         routing::prepare(&plan, &mismatched, owner.clone(), now).is_err()
@@ -327,6 +312,8 @@ pub(crate) fn run(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, Strin
         "empty session cannot activate",
     )?;
     checks.push("routing_empty_session_cannot_activate");
+    checks.extend(binding_checks(owner.clone(), frame.clone())?);
+    checks.extend(interactive_routing_checks(owner.clone(), frame.clone())?);
     checks.extend(runtime_guard_checks(owner.clone(), frame.clone())?);
     checks.extend(crate::window_guard::self_test()?);
     checks.extend(visibility_checks(owner, frame)?);
@@ -338,6 +325,103 @@ struct GuardFixture {
     routes: [Route; 2],
     source: ModelFixture,
     target: ModelFixture,
+}
+fn binding_checks(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, String> {
+    use crate::island::Binding;
+    use windows_sys::Win32::{Foundation::HWND, UI::WindowsAndMessaging::*};
+    let mut checks = Vec::new();
+    {
+        let fixture = GuardFixture::new(owner.clone(), frame.clone())?;
+        let identity = fixture
+            .source
+            .source()?
+            .query(&windows_sys::core::IID_IUnknown)?;
+        let binding = Binding::capture(
+            fixture.source.window(),
+            &identity,
+            &fixture.source_view.root_content()?,
+        )?;
+        binding.validate()?;
+        require(
+            binding.input(1, fixture.target.find("ClockText")?).is_err(),
+            "foreign input element rejected",
+        )?;
+        checks.push("island_binding_normalizes_source_interface_and_verifies_root");
+        require(
+            BoundView::capture(
+                fixture.routes[0].clone(),
+                &fixture.source_view,
+                fixture.target.source()?,
+            )
+            .is_err()
+                && BoundView::capture(
+                    fixture.routes[0].clone(),
+                    &fixture.target_view,
+                    fixture.source.source()?,
+                )
+                .is_err()
+                && BoundView::capture(
+                    fixture.routes[0].clone(),
+                    &fixture.source_view,
+                    &fixture.source.find("ClockText")?,
+                )
+                .is_err(),
+            "wrong window, root and source interface rejected",
+        )?;
+        checks.push("island_binding_rejects_swapped_windows_roots_and_non_sources");
+    }
+    {
+        let fixture = GuardFixture::new(owner.clone(), frame.clone())?;
+        let mut session = fixture.session(owner.clone())?;
+        let now = unsafe { GetTickCount64() };
+        session.start(frame.clone(), now)?;
+        let replacement = crate::clock::load(MARKUP)?;
+        fixture.target.replace_content(&replacement)?;
+        require(
+            session.poll(now + 1, true).is_err()
+                && session.state() == State::Closed
+                && text(&fixture.target.find("TimeInnerTextBlock")?)? == "Original time",
+            "source content replacement stops and restores captured tree",
+        )?;
+        checks.push("island_binding_content_replacement_restores_session");
+    }
+    {
+        let fixture = GuardFixture::new(owner.clone(), frame.clone())?;
+        let mut session = fixture.session(owner.clone())?;
+        let now = unsafe { GetTickCount64() };
+        session.start(frame.clone(), now)?;
+        let island = fixture.target.input("ClockText", 1)?.island;
+        let old_parent = unsafe { SetParent(island, fixture.source.window()) };
+        require(old_parent == fixture.target.window(), "reparent own island")?;
+        struct RestoreParent(HWND, HWND);
+        impl Drop for RestoreParent {
+            fn drop(&mut self) {
+                unsafe {
+                    SetParent(self.0, self.1);
+                }
+            }
+        }
+        let _restore = RestoreParent(island, old_parent);
+        require(
+            session.poll(now + 1, true).is_err()
+                && session.state() == State::Closed
+                && text(&fixture.target.find("TimeInnerTextBlock")?)? == "Original time",
+            "same-thread reparented island stops before renewal",
+        )?;
+        checks.push("island_binding_reparented_native_window_stops_session");
+    }
+    {
+        let fixture = GuardFixture::new(owner, frame)?;
+        let binding = Binding::capture(
+            fixture.source.window(),
+            fixture.source.source()?,
+            &fixture.source_view.root_content()?,
+        )?;
+        fixture.source.close_source()?;
+        require(binding.validate().is_err(), "closed native source rejected")?;
+        checks.push("island_binding_closed_source_cannot_be_reused");
+    }
+    Ok(checks)
 }
 impl GuardFixture {
     fn new(owner: Owner, frame: Frame) -> Result<Self, String> {
@@ -359,14 +443,16 @@ impl GuardFixture {
         routing::prepare(
             &plan,
             &[
-                BoundView {
-                    route: self.routes[0].clone(),
-                    view: &self.source_view,
-                },
-                BoundView {
-                    route: self.routes[1].clone(),
-                    view: &self.target_view,
-                },
+                BoundView::capture(
+                    self.routes[0].clone(),
+                    &self.source_view,
+                    self.source.source()?,
+                )?,
+                BoundView::capture(
+                    self.routes[1].clone(),
+                    &self.target_view,
+                    self.target.source()?,
+                )?,
             ],
             owner,
             unsafe { GetTickCount64() },
@@ -381,6 +467,143 @@ fn set_content(node: &Object, value: &Object) -> Result<(), String> {
             "Set guard fixture Content",
         )
     }
+}
+fn interactive_routing_checks(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, String> {
+    use std::{cell::RefCell, rc::Rc};
+    use windows_sys::Win32::{Foundation::HWND, UI::WindowsAndMessaging::*};
+    let fixture = GuardFixture::new(owner.clone(), frame.clone())?;
+    let plan = Plan::build(&fixture.routes, &["B".into()], options())?;
+    let views = [
+        BoundView::capture(
+            fixture.routes[0].clone(),
+            &fixture.source_view,
+            fixture.source.source()?,
+        )?,
+        BoundView::capture(
+            fixture.routes[1].clone(),
+            &fixture.target_view,
+            fixture.target.source()?,
+        )?,
+    ];
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let received = events.clone();
+    let watchdog = routing::attach_interactive(
+        &plan,
+        &views,
+        owner.clone(),
+        unsafe { GetTickCount64() },
+        move |event| {
+            received.borrow_mut().push(event);
+            true
+        },
+    )
+    .map_err(|e| format!("initial interactive attach: {e}"))?;
+    let probe = watchdog.input_probe(fixture.routes[1].window)?;
+    require(
+        !probe.invoke()?
+            && events.borrow().is_empty()
+            && watchdog.input_probe(fixture.routes[0].window).is_err(),
+        "only selected clock is prepared and inactive",
+    )?;
+    watchdog.start(frame.clone())?;
+    fixture.target.layout()?;
+    require(
+        probe.invoke()?,
+        "verified selected clock publishes native activation",
+    )?;
+    {
+        let received = events.borrow();
+        let event = received.first().ok_or("missing verified activation")?;
+        require(
+            received.len() == 1
+                && event.clock_id == fixture.routes[1].window
+                && event.owner == owner
+                && event.sequence == 1
+                && unsafe { GetParent(event.source_window as HWND) } == fixture.target.window(),
+            "activation uses exact source-provided island and selected route ID",
+        )?;
+        event.anchor.validate()?;
+    }
+    let mut checks = vec!["routing_verified_source_input_selects_only_clock_target"];
+
+    let island = fixture.target.input("ClockText", 1)?.island;
+    let old_parent = unsafe { SetParent(island, fixture.source.window()) };
+    require(
+        old_parent == fixture.target.window(),
+        "reparent interactive island",
+    )?;
+    struct RestoreParent(HWND, HWND);
+    impl Drop for RestoreParent {
+        fn drop(&mut self) {
+            unsafe {
+                SetParent(self.0, self.1);
+            }
+        }
+    }
+    let restore = RestoreParent(island, old_parent);
+    require(
+        !probe.invoke()?
+            && events.borrow().len() == 1
+            && watchdog.state() == State::Closed
+            && text(&fixture.target.find("TimeInnerTextBlock")?)? == "Original time",
+        "stale source-window relation stops before publishing input",
+    )?;
+    drop(restore);
+    drop(probe);
+    drop(watchdog);
+    checks.push("routing_verified_source_reparenting_blocks_input_and_restores");
+
+    // Make the stale snapshot deterministic even on builds that instantiate
+    // every template before the initial discovery rather than on first input.
+    rename(&fixture.target.find("UnusedSurface")?, "AfterLayout")?;
+    require(
+        routing::attach_interactive(
+            &plan,
+            &views,
+            owner.clone(),
+            unsafe { GetTickCount64() },
+            |_| false,
+        )
+        .is_err(),
+        "layout changed the complete preparation snapshot; old view cannot restart",
+    )?;
+    let refreshed_source = View::from_panel(&fixture.source.find("SystemTrayFrameGrid")?)?;
+    let refreshed_target = View::from_panel(&fixture.target.find("SystemTrayFrameGrid")?)?;
+    let refreshed_views = [
+        BoundView::capture(
+            fixture.routes[0].clone(),
+            &refreshed_source,
+            fixture.source.source()?,
+        )?,
+        BoundView::capture(
+            fixture.routes[1].clone(),
+            &refreshed_target,
+            fixture.target.source()?,
+        )?,
+    ];
+    let watchdog = routing::attach_interactive(
+        &plan,
+        &refreshed_views,
+        owner,
+        unsafe { GetTickCount64() },
+        |_| false,
+    )
+    .map_err(|e| format!("interactive reattach after layout and restoration: {e}"))?;
+    checks.push("routing_restart_after_layout_requires_fresh_discovery");
+    watchdog.start(frame)?;
+    fixture.target.layout()?;
+    let probe = watchdog.input_probe(fixture.routes[1].window)?;
+    require(
+        !probe.invoke()? && watchdog.state() == State::Active,
+        "host rejection preserves default clock behavior",
+    )?;
+    watchdog.stop()?;
+    require(
+        !probe.invoke()? && text(&fixture.target.find("TimeInnerTextBlock")?)? == "Original time",
+        "stopped route releases input and restores",
+    )?;
+    checks.push("routing_verified_input_rejection_and_stop_preserve_default");
+    Ok(checks)
 }
 fn runtime_guard_checks(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, String> {
     let mut checks = Vec::new();

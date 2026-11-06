@@ -8,6 +8,7 @@ mod discovery_checks;
 mod input;
 mod input_checks;
 mod inspect;
+mod island;
 mod lifecycle_checks;
 mod preview;
 mod property;

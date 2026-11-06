@@ -38,7 +38,7 @@ pub struct Session {
     tray: Option<ModelLease>,
     visibility: Option<crate::visibility::VisibilityLease>,
     guards: Vec<crate::discovery::LeaseGuard>,
-    windows: Vec<crate::window_guard::WindowGuard>,
+    bindings: Vec<Rc<crate::island::Binding>>,
     guards_prepared: bool,
 }
 impl Session {
@@ -68,7 +68,7 @@ impl Session {
             tray: None,
             visibility: None,
             guards: Vec::new(),
-            windows: Vec::new(),
+            bindings: Vec::new(),
             guards_prepared: false,
         })
     }
@@ -180,22 +180,26 @@ impl Session {
     pub(crate) fn prepare_guards(
         &mut self,
         guards: Vec<crate::discovery::LeaseGuard>,
-        windows: Vec<crate::window_guard::WindowGuard>,
+        bindings: Vec<Rc<crate::island::Binding>>,
     ) -> Result<(), String> {
         if self.state != State::Prepared || self.guards_prepared {
             return Err("托盘身份检查只能在准备阶段配置一次".into());
         }
-        if guards.is_empty() || guards.len() > MAX_CLOCKS + 1 || windows.len() > MAX_CLOCKS + 1 {
+        if guards.is_empty()
+            || guards.len() > MAX_CLOCKS + 1
+            || bindings.is_empty()
+            || bindings.len() > MAX_CLOCKS + 1
+        {
             return Err("托盘身份检查目标数量超限".into());
         }
         self.guards = guards;
-        self.windows = windows;
+        self.bindings = bindings;
         self.guards_prepared = true;
         Ok(())
     }
     fn validate_targets(&mut self) -> Result<(), String> {
         let result = self
-            .windows
+            .bindings
             .iter()
             .try_for_each(|g| g.validate())
             .and_then(|_| self.guards.iter().try_for_each(|g| g.validate()));
@@ -411,7 +415,7 @@ impl Session {
             self.inputs.clear();
             self.targets.clear();
             self.guards.clear();
-            self.windows.clear();
+            self.bindings.clear();
             self.state = State::Closed;
             Ok(())
         } else {

@@ -2,6 +2,7 @@
 //! routed input as the adapter. Never discovers or attaches to Explorer.
 use crate::{
     clock::{ClockLease, load},
+    island::{IID_NATIVE, Native},
     session::{InputTarget, Session, Target},
     watchdog::Watchdog,
     wide,
@@ -23,21 +24,14 @@ use windows_sys::{
         System::{DataExchange::COPYDATASTRUCT, LibraryLoader::*, Threading::*},
         UI::{Input::KeyboardAndMouse::SetFocus, WindowsAndMessaging::*},
     },
-    core::{GUID, IInspectable_Vtbl, IUnknown_Vtbl},
+    core::{GUID, IInspectable_Vtbl},
 };
 windows_link::link!("combase.dll" "system" fn RoActivateInstance(name:windows_sys::core::HSTRING,out:*mut *mut c_void)->i32);
 // ABI from Microsoft's windows.ui.xaml.hosting.desktopwindowxamlsource.h.
-const IID_NATIVE: GUID = GUID::from_u128(0x3cbcf1bf_2f76_4e9c_96ab_e84b37972554);
 const IID_NATIVE2: GUID = GUID::from_u128(0xe3dcd8c7_3057_4692_99c3_7b7720afda31);
 const IID_CLOSABLE: GUID = GUID::from_u128(0x30d5a829_7fa4_4026_83bb_d75bae4ea99e);
 const WM_FOCUS_CLOCK: u32 = WM_APP + 9;
 const FOCUS_PROPERTY: &str = "LiteTray.PreviewFocus";
-#[repr(C)]
-struct Native {
-    base: IUnknown_Vtbl,
-    attach: unsafe extern "system" fn(*mut c_void, HWND) -> i32,
-    window: unsafe extern "system" fn(*mut c_void, *mut HWND) -> i32,
-}
 #[repr(C)]
 struct Native2 {
     base: Native,
@@ -404,6 +398,34 @@ pub(crate) struct ModelFixture {
     preview: Preview,
 }
 impl ModelFixture {
+    pub(crate) fn source(&self) -> Result<&Object, String> {
+        self.preview
+            .source
+            .as_ref()
+            .ok_or("夹具 source 不可用".into())
+    }
+    pub(crate) fn replace_content(&self, root: &Object) -> Result<(), String> {
+        let source = self.source()?;
+        let root = root.query(&IID_IUIElement)?;
+        unsafe {
+            check(
+                (source.table::<IDesktopWindowXamlSource_Vtbl>().SetContent)(
+                    source.raw(),
+                    root.raw(),
+                ),
+                "Replace fixture source content",
+            )
+        }
+    }
+    pub(crate) fn close_source(&self) -> Result<(), String> {
+        let source = self.source()?.query(&IID_CLOSABLE)?;
+        unsafe {
+            check(
+                (source.table::<Closable>().close)(source.raw()),
+                "Close fixture source",
+            )
+        }
+    }
     pub(crate) fn input(&self, name: &str, id: u64) -> Result<InputTarget, String> {
         Ok(InputTarget {
             id,
