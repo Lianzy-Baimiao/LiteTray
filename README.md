@@ -24,6 +24,12 @@ Rust 原生 Windows 应用，GitHub 仓库保持私有。
 
 默认输出到项目 `local` 目录。已存在输出时不会覆盖，需显式传入 `-Force`。导出不包含模块源码，也不访问天气服务。
 
+设置中的“配置迁移”页可以选择该 JSON，预览每个字段的转换结果，再采用到设置草稿；点击“保存设置”后写入 LiteTray。支持两行日期/时间模板、秒数、共享字体和字号、宽度、天气刷新间隔及多屏组件范围。不能转换的模板会保留整行现有值，报告列出原因。报告可导出到配置目录。
+
+旧配置中的 wttr.in 网页变量可近似转换为内置天气摘要；城市坐标、天气来源顺序和凭据仍使用现有 LiteTray 配置。旧显示器序号需要重新核对。迁移不会改变 Windhawk，也不自动启用尚未完成的任务栏接管。
+
+命令行也支持只读预览：`LiteTray.exe --preview-windhawk <导出文件.json> [新报告.json]`。指定输出时拒绝覆盖已有文件，包括来源文件。
+
 ## 构建与运行
 
 需要 Rust stable 和 Windows C++ 链接工具。支持 MSVC（建议用于 CI/发布）和 GNU MinGW（本机开发）。
@@ -53,9 +59,12 @@ LiteTray.exe --probe-taskbar [output.json]
 LiteTray.exe --prepare-symbols [existing-symbol-cache]
 LiteTray.exe --inspect-taskbar [output.json]
 LiteTray.exe --self-test-clock
+LiteTray.exe --preview-windhawk <profile.json> [new-report.json]
 ```
 
 默认打开设置；关闭窗口收至托盘，右键托盘菜单可以退出。开机启动是可选项，默认关闭。配置保存在 `%LOCALAPPDATA%\LiteTray`；开发检查可用 `LITETRAY_DATA_DIR` 指向隔离目录。
+
+显式指定不同配置目录时可以并行运行独立实例；同一目录仍保持单实例。隔离的是配置和缓存，凭据管理器中的服务凭据仍按 Windows 用户共享。
 
 `--probe-taskbar` 通过同目录 Rust DLL 在 Explorer 任务栏线程执行一次受限只读探测，返回窗口树与模块身份后移除 hook，不修改托盘。`--prepare-symbols` 校验当前 taskbar.dll 的 PE/PDB 身份，优先使用独立缓存，也可显式导入匹配的已有 PDB；缺失时从 Microsoft 符号服务器下载，使用 DbgHelp 验证 GUID/age 后保存按模块 SHA-256 命名的符号映射及完整接口布局。`--inspect-taskbar` 的代码进一步核对加载模块和函数入口，读取受限 XAML 树；当前未完成实机验收，不会启用写入。
 

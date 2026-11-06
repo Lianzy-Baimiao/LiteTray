@@ -16,6 +16,7 @@ fn main() {
                     | "--probe-taskbar"
                     | "--inspect-taskbar"
                     | "--self-test-clock"
+                    | "--preview-windhawk"
             )
         }) {
             unsafe {
@@ -37,6 +38,24 @@ fn run() -> Result<(), String> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
     let config = config::load(&config::data_dir().join("config.json"))?;
     match arguments.first().map(String::as_str) {
+        Some("--preview-windhawk") => {
+            use std::io::Write;
+            let source = arguments.get(1).ok_or("请提供 Windhawk 导出文件路径")?;
+            let report = litetray::migration::read(std::path::Path::new(source), &config)?;
+            let text = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
+            if let Some(path) = arguments.get(2) {
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)
+                    .map_err(|e| format!("报告未保存（不覆盖已有文件）：{e}"))?;
+                file.write_all(text.as_bytes())
+                    .and_then(|_| file.sync_all())
+                    .map_err(|e| e.to_string())?;
+            }
+            println!("{text}");
+            Ok(())
+        }
         Some("--self-test-clock") => {
             let result = platform::adapter::self_test_clock()?;
             println!(
@@ -120,7 +139,7 @@ fn run() -> Result<(), String> {
         }
         Some("--help") => {
             println!(
-                "LiteTray [--settings | --calendar | --background | --diagnose [file] | --weather-check [file] | --check-updates | --self-test-clock | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
+                "LiteTray [--settings | --calendar | --background | --diagnose [file] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-clock | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
             );
             Ok(())
         }

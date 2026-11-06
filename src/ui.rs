@@ -2,7 +2,7 @@ use chrono::{Local, TimeZone, Utc};
 use litetray::{
     clock,
     config::{self, Appearance, ClickAction, Config, MonitorScope, Provider},
-    http,
+    http, migration,
     platform::{credentials, diagnostics, lunar, startup, wide},
     update::{self, UpdateStatus},
     weather,
@@ -43,13 +43,14 @@ const OPEN_RELEASE: u16 = 32;
 const EXIT: u16 = 33;
 const CALENDAR: u16 = 34;
 const MONTHCAL: u16 = 35;
-const PAGES: [&str; 6] = [
+const PAGES: [&str; 7] = [
     "日历与天气",
     "时钟显示",
     "多屏托盘",
     "天气来源",
     "常规设置",
     "关于与更新",
+    "配置迁移",
 ];
 thread_local! {static STATE:RefCell<Option<App>>=const{RefCell::new(None)};}
 #[derive(Clone, Copy)]
@@ -86,6 +87,8 @@ struct App {
     status: String,
     weather: Option<weather::WeatherResult>,
     update: Option<UpdateStatus>,
+    migration_source: Option<Vec<u8>>,
+    migration: Option<migration::Report>,
     tx: mpsc::Sender<Event>,
     rx: mpsc::Receiver<Event>,
     weather_busy: bool,
@@ -98,16 +101,18 @@ struct App {
 
 pub fn run(config: Config, mode: &str) -> Result<(), String> {
     unsafe {
+        let profile_suffix = instance_suffix()?;
+        let settings_class = format!("{CLASS}{profile_suffix}");
         let mutex_name = wide(&format!(
-            "Local\\LiteTray.{}",
-            std::env::var("USERNAME").unwrap_or_default()
+            "Local\\LiteTray.{}{profile_suffix}",
+            std::env::var("USERNAME").unwrap_or_default(),
         ));
         let mutex = CreateMutexW(null(), 0, mutex_name.as_ptr());
         if mutex.is_null() {
             return Err("无法建立单实例锁".into());
         }
         if GetLastError() == ERROR_ALREADY_EXISTS {
-            let other = FindWindowW(wide(CLASS).as_ptr(), null());
+            let other = FindWindowW(wide(&settings_class).as_ptr(), null());
             if !other.is_null() {
                 PostMessageW(
                     other,
@@ -130,7 +135,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
         };
         InitCommonControlsEx(&controls);
         let instance = GetModuleHandleW(null());
-        let class_name = wide(CLASS);
+        let class_name = wide(&settings_class);
         let panel_class = wide(PANEL_CLASS);
         let wc = WNDCLASSW {
             lpfnWndProc: Some(window_proc),
@@ -188,6 +193,8 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             status: "欢迎使用 LiteTray。任务栏适配正在开发，现有系统托盘保持可用。".into(),
             weather: None,
             update: None,
+            migration_source: None,
+            migration: None,
             tx,
             rx,
             weather_busy: false,
@@ -584,7 +591,7 @@ impl App {
                         width - 260,
                     );
                     self.label(
-                        "可用变量：%date%  %time%  %weekday%  %weather%  %year%  %month%  %day%",
+                        "常用：%date% %time% %weekday% %weather%\r\n格式：%year% %month2% %day2% %hour% %minute% %second%",
                         224,
                         218,
                         width - 260,
@@ -863,6 +870,31 @@ impl App {
                     self.button("打开项目", 607, 535, 397, 120);
                     self.label("检查通过 GitHub Releases 获取版本信息。私有仓库需要单独保存访问凭据。\r\n检测到新版后打开 GitHub 下载页，不会静默替换正在运行的程序。",224,458,width-260,65);
                     self.button("退出 LiteTray", EXIT, 224, 535, 145);
+                }
+                6 => {
+                    self.label("选择 tools/Export-WindhawkProfile.ps1 导出的 JSON 文件，查看逐项转换结果。",224,84,width-260,45);
+                    self.button("选择导出文件", 701, 224, 137, 170);
+                    self.button("采用到设置草稿", 702, 410, 137, 170);
+                    self.button("导出迁移报告", 703, 596, 137, 170);
+                    EnableWindow(self.field(702), self.migration.is_some() as i32);
+                    EnableWindow(self.field(703), self.migration.is_some() as i32);
+                    let text=self.migration.as_ref().map(migration::Report::text).unwrap_or_else(||"尚未选择文件。\r\n\r\n迁移只更新 LiteTray 的设置草稿；检查后点击“保存设置”生效。\r\n原 Windhawk 设置保持不变。".into());
+                    let report_control = self.control(
+                        "EDIT",
+                        "",
+                        704,
+                        WS_TABSTOP
+                            | WS_VSCROLL
+                            | ES_MULTILINE as u32
+                            | ES_AUTOVSCROLL as u32
+                            | ES_READONLY as u32,
+                        224,
+                        186,
+                        width - 260,
+                        (height - 290).max(220),
+                    );
+                    SendMessageW(report_control, EM_SETLIMITTEXT, 2 * 1024 * 1024, 0);
+                    SetWindowTextW(report_control, wide(&text).as_ptr());
                 }
                 _ => {}
             }
@@ -1148,7 +1180,9 @@ impl App {
         unsafe {
             let visible = IsWindowVisible(self.hwnd) != 0
                 || (!self.panel.is_null() && IsWindowVisible(self.panel) != 0);
-            let interval = if visible && self.saved.clock.show_seconds {
+            let interval = if visible
+                && (clock::needs_second_ticks(&self.draft.clock) || self.saved.clock.show_seconds)
+            {
                 1000
             } else {
                 60000
@@ -1505,10 +1539,110 @@ impl App {
                     open_target(&link);
                 }
                 607 => open_target("https://github.com/Lianzy-Baimiao/LiteTray"),
+                701 => {
+                    let result = choose_migration_file(self.hwnd).and_then(|path| {
+                        let Some(path) = path else { return Ok(None) };
+                        let bytes = migration::read_bytes(&path)?;
+                        let report = migration::preview(&bytes, &self.draft)?;
+                        Ok(Some((bytes, report)))
+                    });
+                    // Common dialogs pump messages; drain network completions
+                    // that arrived while App was borrowed by this command.
+                    self.receive();
+                    match result {
+                        Ok(Some((bytes, report))) => {
+                            self.migration_source = Some(bytes);
+                            self.migration = Some(report);
+                            self.status = "迁移预览已生成，请核对近似转换和需确认项目".into();
+                            self.render();
+                        }
+                        Ok(None) => {}
+                        Err(error) => self.set_status(error),
+                    }
+                }
+                702 => {
+                    if let Some(bytes) = &self.migration_source {
+                        // Rebase against the latest draft so inspecting a report,
+                        // then editing other pages, does not revert those edits.
+                        match migration::preview(bytes, &self.draft) {
+                            Ok(report) => {
+                                self.draft = report.candidate.clone();
+                                self.migration = Some(report);
+                                self.status = "转换结果已采用到草稿；核对后点击“保存设置”".into();
+                                self.render();
+                            }
+                            Err(error) => self.set_status(error),
+                        }
+                    }
+                }
+                703 => {
+                    if let Some(bytes) = &self.migration_source {
+                        let path = config::data_dir().join("migration-report.json");
+                        let result = migration::preview(bytes, &self.draft)
+                            .and_then(|report| {
+                                serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())
+                            })
+                            .and_then(|bytes| config::atomic_write(&path, &bytes));
+                        match result {
+                            Ok(()) => self.set_status(format!("报告已保存：{}", path.display())),
+                            Err(error) => self.set_status(error),
+                        }
+                    }
+                }
                 _ => {}
             }
             false
         }
+    }
+}
+
+fn instance_suffix() -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    // Keep the default profile compatible with earlier versions. Explicit
+    // developer/portable data directories each get their own instance lock.
+    if std::env::var_os("LITETRAY_DATA_DIR").is_none() {
+        return Ok(String::new());
+    }
+    let directory = config::data_dir();
+    std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+    let resolved = std::fs::canonicalize(directory).map_err(|e| e.to_string())?;
+    let normal = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .map(|p| p.join("LiteTray"));
+    if normal
+        .and_then(|p| std::fs::canonicalize(p).ok())
+        .is_some_and(|p| p == resolved)
+    {
+        return Ok(String::new());
+    }
+    let key = resolved.to_string_lossy().to_lowercase();
+    Ok(format!(".{:x}", Sha256::digest(key.as_bytes())))
+}
+unsafe fn choose_migration_file(owner: HWND) -> Result<Option<std::path::PathBuf>, String> {
+    unsafe {
+        use std::os::windows::ffi::OsStringExt;
+        use windows_sys::Win32::UI::Controls::Dialogs::*;
+        let mut path = vec![0u16; 32768];
+        let filter = wide("Windhawk 导出文件 (*.json)\0*.json\0所有文件\0*.*\0");
+        let title = wide("选择 Windhawk 配置导出文件");
+        let mut dialog: OPENFILENAMEW = std::mem::zeroed();
+        dialog.lStructSize = size_of::<OPENFILENAMEW>() as u32;
+        dialog.hwndOwner = owner;
+        dialog.lpstrFilter = filter.as_ptr();
+        dialog.lpstrTitle = title.as_ptr();
+        dialog.lpstrFile = path.as_mut_ptr();
+        dialog.nMaxFile = path.len() as u32;
+        dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER;
+        if GetOpenFileNameW(&mut dialog) == 0 {
+            let error = CommDlgExtendedError();
+            return if error == 0 {
+                Ok(None)
+            } else {
+                Err(format!("文件选择失败：0x{error:08X}"))
+            };
+        }
+        let length = path.iter().position(|c| *c == 0).ok_or("文件路径过长")?;
+        Ok(Some(std::ffi::OsString::from_wide(&path[..length]).into()))
     }
 }
 
