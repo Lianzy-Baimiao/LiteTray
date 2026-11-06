@@ -66,3 +66,9 @@
 用户报告右键导致任务栏重启后，Windows Winlogon 日志记录 00:35:44、00:35:56、00:36:07 三次外壳意外停止。隔离进程调用生产 `shared_target` 路径，旧实现稳定以 `0xC0000409` 终止，调试器读到 fast-fail 原因 10。原因是 `VisualTreeHelper.GetParent` 的入参应为 `IDependencyObject`，却传入同一对象的 `IFrameworkElement` 指针。修正查询接口后通过；通用树遍历入口也做相同规范化。
 
 新增原生检查覆盖无父级目标、普通任务栏嵌套目标和共享系统托盘目标，从 FrameworkElement、DependencyObject 和 IUnknown 三种接口进入。全部 149 项原生检查通过，94 项自动测试与 Clippy 通过。当前旧 h 版 DLL 固定加载在 Explorer PID31420 中；没有为了测试主动重启 Explorer，新补丁尚待重新加载后实机右键验收。
+
+## 用户授权重启并切换补丁 · 2026-11-07 00:49
+
+停止旧 h 版 LiteTray PID43448 后，仅重启持有任务栏的 Explorer PID14404；另一个文件管理器进程 PID12816 保留。新任务栏 Explorer PID39992，启动于 00:49:35，新 LiteTray PID32060 从 `dist/LiteTray-ui4-calendar-menu-fix` 后台启动。`local/menu-fix-deployment.json` 记录切换前后的 PID、路径和时间。
+
+模块枚举确认新 Explorer 中只有一份适配 DLL，路径为 menu-fix 目录，旧 h 版已不在该进程中。`local/menu-fix-live.json` 检查主副屏都显示 `11/07 周六 00:50:34` 和 `晴间多云 24°C`，完整托盘宽度、水平/垂直位置和图标身份顺序通过。配置仍为系统外观、所有显示器、Auto 宽度 0、图标复制开启。副屏无激活显示日程页，深色控件与空列表提示正常。此次未发送鼠标键盘输入，真实右键菜单仍待现场复测，不能用模块加载成功代替交互验收。
