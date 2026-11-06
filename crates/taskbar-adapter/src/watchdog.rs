@@ -167,6 +167,16 @@ impl Watchdog {
             }
         })
     }
+    pub(crate) fn start_tray(&self) -> Result<(), String> {
+        self.context.with_session(|session| {
+            if unsafe { self.context.alive() } {
+                session.start_tray(unsafe { GetTickCount64() })
+            } else {
+                session.stop()?;
+                Err("托盘宿主已失联".into())
+            }
+        })
+    }
     pub fn prepare_inputs(
         &self,
         targets: Vec<InputTarget>,

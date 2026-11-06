@@ -36,12 +36,13 @@ pub struct Session {
     inputs: Vec<(u64, Subscription)>,
     inputs_prepared: bool,
     tray: Option<ModelLease>,
+    visibility: Option<crate::visibility::VisibilityLease>,
 }
 impl Session {
     /// Captured targets must be disjoint; otherwise rollback order would
     /// overwrite another clock's original properties.
     pub fn new(owner: Owner, targets: Vec<Target>, now: u64) -> Result<Self, String> {
-        if targets.is_empty() || targets.len() > MAX_CLOCKS {
+        if targets.len() > MAX_CLOCKS {
             return Err("时钟目标数量无效".into());
         }
         for (i, target) in targets.iter().enumerate() {
@@ -62,6 +63,7 @@ impl Session {
             inputs: vec![],
             inputs_prepared: false,
             tray: None,
+            visibility: None,
         })
     }
     pub fn state(&self) -> State {
@@ -152,19 +154,58 @@ impl Session {
         self.tray = Some(ModelLease::capture(pairs)?);
         Ok(())
     }
+    pub(crate) fn prepare_visibility(
+        &mut self,
+        targets: Vec<crate::visibility::Target>,
+    ) -> Result<(), String> {
+        if self.state != State::Prepared || self.visibility.is_some() {
+            return Err("托盘可见性只能在准备阶段配置一次".into());
+        }
+        for visibility in &targets {
+            for target in &self.targets {
+                if target.clock.references(&visibility.element)? {
+                    return Err("托盘可见性控件与时钟目标重叠".into());
+                }
+            }
+        }
+        self.visibility = Some(crate::visibility::VisibilityLease::capture(targets)?);
+        Ok(())
+    }
     /// On failure the caller retains this session to retry unfinished restores.
     pub fn start(&mut self, frame: Frame, now: u64) -> Result<(), String> {
+        if self.targets.is_empty() {
+            return Err("此会话没有时钟，请使用托盘启动入口".into());
+        }
+        frame.validate()?;
+        self.start_components(Some(frame), now)
+    }
+    pub(crate) fn start_tray(&mut self, now: u64) -> Result<(), String> {
+        if !self.targets.is_empty() || self.tray.is_none() && self.visibility.is_none() {
+            return Err("独立托盘会话的组件不匹配或为空".into());
+        }
+        self.start_components(None, now)
+    }
+    fn start_components(&mut self, frame: Option<Frame>, now: u64) -> Result<(), String> {
         if self.state != State::Prepared {
             return Err("时钟会话已启动或已关闭".into());
         }
-        frame.validate()?;
         if self.lease.expired(now) {
             self.stop()?;
             return Err("时钟初始化已超时".into());
         }
-        self.apply(frame)?;
+        if let Some(frame) = frame {
+            self.apply(frame)?;
+        }
         if let Some(tray) = &mut self.tray
             && let Err(error) = tray.start()
+        {
+            return match self.stop() {
+                Ok(()) => Err(error),
+                Err(restore) => Err(format!("{error}；{restore}")),
+            };
+        }
+        if let Some(visibility) = &mut self.visibility
+            && let Err(error) = visibility.start()
         {
             return match self.stop() {
                 Ok(()) => Err(error),
@@ -205,6 +246,9 @@ impl Session {
         self.lease.commit(&command, now)
     }
     fn apply(&mut self, frame: Frame) -> Result<(), String> {
+        if self.targets.is_empty() {
+            return Err("独立托盘会话不接受时钟更新".into());
+        }
         let style_changed = self
             .frame
             .as_ref()
@@ -239,6 +283,15 @@ impl Session {
             || self.state != State::Closed && (!host_alive || self.lease.expired(now))
         {
             self.stop()?;
+        }
+        if self.state == State::Active
+            && let Some(visibility) = &self.visibility
+            && let Err(error) = visibility.validate()
+        {
+            return match self.stop() {
+                Ok(()) => Err(error),
+                Err(restore) => Err(format!("{error}；{restore}")),
+            };
         }
         if self.state == State::Active
             && let Some(tray) = &mut self.tray
@@ -280,6 +333,11 @@ impl Session {
             if let Err(error) = input.detach() {
                 errors.push(format!("时钟 {id} 点击恢复：{error}"));
             }
+        }
+        if let Some(visibility) = &mut self.visibility
+            && let Err(error) = visibility.stop()
+        {
+            errors.push(format!("托盘可见性恢复：{error}"));
         }
         if let Some(tray) = &mut self.tray
             && let Err(error) = tray.stop()

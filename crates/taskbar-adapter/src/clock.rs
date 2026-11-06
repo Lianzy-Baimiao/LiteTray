@@ -285,6 +285,7 @@ pub(crate) fn self_test() -> Result<serde_json::Value, String> {
             "WindowsXamlManager.InitializeForCurrentThread",
         )?;
         let _manager = Object::owned(manager)?;
+        crate::routing_checks::check_visibility_scalar()?;
         let time = load(
             r#"<TextBlock xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Text="{Binding}" DataContext="Original time"/>"#,
         )?;
@@ -423,6 +424,7 @@ pub(crate) fn self_test() -> Result<serde_json::Value, String> {
         )?;
         drop(lease);
         let mut checks = vec![
+            "visibility_scalar_native_property_capture_apply_restore",
             "binding_capture",
             "local_value_capture",
             "unset_capture",

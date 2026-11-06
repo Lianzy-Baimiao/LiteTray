@@ -22,6 +22,9 @@ impl Property {
     pub(crate) fn capture(target: &Object, property: Object) -> Result<Self, String> {
         unsafe {
             let dependency = target.query(&IID_IDependencyObject)?;
+            // Normalize at the ABI boundary: COM identity can be a different
+            // interface pointer, even while referring to this same property.
+            let property = property.query(&IID_IDependencyProperty)?;
             let framework = target.query(&IID_IFrameworkElement2)?;
             let mut expression = null_mut();
             check(
@@ -255,6 +258,12 @@ pub(crate) fn equal_optional(a: Option<&Object>, b: Option<&Object>) -> Result<b
 fn equal_value(a: &Object, b: &Object) -> Result<bool, String> {
     if same_object(a, b)? {
         return Ok(true);
+    }
+    if let (Some(a), Some(b)) = (
+        crate::visibility::enum_value(a)?,
+        crate::visibility::enum_value(b)?,
+    ) {
+        return Ok(a == b);
     }
     let (Ok(a), Ok(b)) = (a.query(&IID_IPropertyValue), b.query(&IID_IPropertyValue)) else {
         return Ok(false);

@@ -18,6 +18,8 @@ pub struct Diagnostics {
     pub monitors: Vec<Monitor>,
     pub monitor_warnings: Vec<String>,
     pub monitor_selection: Option<crate::monitors::Selection>,
+    pub target_plan: Option<litetray_adapter_protocol::routing::Plan>,
+    pub target_plan_error: Option<String>,
     pub taskbars: Vec<Taskbar>,
     pub adapter_status: String,
 }
@@ -43,6 +45,8 @@ pub fn collect() -> Diagnostics {
             monitors: monitors.displays,
             monitor_warnings: monitors.warnings,
             monitor_selection: None,
+            target_plan: None,
+            target_plan_error: None,
             taskbars,
             adapter_status: "独立原生程序已就绪；任务栏接管适配尚未启用".into(),
         }
@@ -50,13 +54,34 @@ pub fn collect() -> Diagnostics {
 }
 pub fn collect_for(tray: &crate::config::TrayConfig) -> Diagnostics {
     let mut result = collect();
-    result.monitor_selection = Some(crate::monitors::resolve(
+    let selection = crate::monitors::resolve(
         tray,
         &crate::monitors::Snapshot {
             displays: result.monitors.clone(),
             warnings: result.monitor_warnings.clone(),
         },
-    ));
+    );
+    let routes = result
+        .taskbars
+        .iter()
+        .map(|t| {
+            Ok(litetray_adapter_protocol::routing::Route {
+                window: t.hwnd as u64,
+                process_id: t.process_id,
+                thread_id: t.thread_id,
+                secondary: t.class == "Shell_SecondaryTrayWnd",
+                device: t
+                    .display_device
+                    .clone()
+                    .ok_or("任务栏显示器映射缺失，稍后重新枚举")?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>();
+    match routes.and_then(|routes| crate::routing::plan(tray, &selection, &routes)) {
+        Ok(plan) => result.target_plan = Some(plan),
+        Err(error) => result.target_plan_error = Some(error),
+    }
+    result.monitor_selection = Some(selection);
     result
 }
 unsafe extern "system" fn window_callback(hwnd: HWND, data: LPARAM) -> i32 {

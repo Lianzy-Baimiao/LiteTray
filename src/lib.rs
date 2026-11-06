@@ -7,5 +7,6 @@ pub mod pe;
 #[cfg(windows)]
 pub mod platform;
 pub mod popup;
+pub mod routing;
 pub mod update;
 pub mod weather;

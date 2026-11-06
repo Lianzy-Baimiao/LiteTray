@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 pub mod activation;
 pub mod clock;
+pub mod routing;
 pub mod topology;
 pub const VERSION: u32 = 1;
 pub const REQUEST_TAG: usize = 0x4c544101;

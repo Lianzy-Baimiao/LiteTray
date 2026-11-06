@@ -140,6 +140,21 @@ impl View {
             )?,
         })
     }
+    pub(crate) fn visibility_target(
+        &self,
+        role: Role,
+        visible: bool,
+    ) -> Result<crate::visibility::Target, String> {
+        if !role.model() {
+            return Err("此区域不能作为托盘可见性目标".into());
+        }
+        let fresh = self.revalidate()?;
+        let surface = surface(fresh.selection()?, role)?;
+        Ok(crate::visibility::Target {
+            element: fresh.objects[surface.node].query(&IID_IUnknown)?,
+            visible,
+        })
+    }
     /// Derive fields from native interfaces and populated nonvisual models.
     /// All requested roles must yield usable pairs or the whole plan fails.
     /// This only prepares data sharing: visibility, menus and shell callbacks

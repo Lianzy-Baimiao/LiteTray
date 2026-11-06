@@ -179,6 +179,13 @@ pub struct IDependencyObject_Vtbl {
     ) -> windows_sys::core::HRESULT,
     Dispatcher: usize,
 }
+pub const IID_IDependencyProperty: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0x85b13970_9bc4_4e96_acf1_30c8fd3d55c8);
+#[repr(C)]
+pub struct IDependencyProperty_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    GetMetadata: usize,
+}
 pub const IID_IDependencyPropertyStatics: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0x49e5f28f_8259_4d5c_aae0_83d56dbb68d9);
 #[repr(C)]
@@ -1123,6 +1130,55 @@ pub struct IUIElement10_Vtbl {
     UIContext: usize,
     Shadow: usize,
     SetShadow: usize,
+}
+pub const IID_IUIElementStatics: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0x58d3573b_f52c_45be_988b_a5869564873c);
+#[repr(C)]
+pub struct IUIElementStatics_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    KeyDownEvent: usize,
+    KeyUpEvent: usize,
+    PointerEnteredEvent: usize,
+    PointerPressedEvent: usize,
+    PointerMovedEvent: usize,
+    PointerReleasedEvent: usize,
+    PointerExitedEvent: usize,
+    PointerCaptureLostEvent: usize,
+    PointerCanceledEvent: usize,
+    PointerWheelChangedEvent: usize,
+    TappedEvent: usize,
+    DoubleTappedEvent: usize,
+    HoldingEvent: usize,
+    RightTappedEvent: usize,
+    ManipulationStartingEvent: usize,
+    ManipulationInertiaStartingEvent: usize,
+    ManipulationStartedEvent: usize,
+    ManipulationDeltaEvent: usize,
+    ManipulationCompletedEvent: usize,
+    DragEnterEvent: usize,
+    DragLeaveEvent: usize,
+    DragOverEvent: usize,
+    DropEvent: usize,
+    AllowDropProperty: usize,
+    OpacityProperty: usize,
+    ClipProperty: usize,
+    RenderTransformProperty: usize,
+    ProjectionProperty: usize,
+    RenderTransformOriginProperty: usize,
+    IsHitTestVisibleProperty: usize,
+    pub VisibilityProperty: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    UseLayoutRoundingProperty: usize,
+    TransitionsProperty: usize,
+    CacheModeProperty: usize,
+    IsTapEnabledProperty: usize,
+    IsDoubleTapEnabledProperty: usize,
+    IsRightTapEnabledProperty: usize,
+    IsHoldingEnabledProperty: usize,
+    ManipulationModeProperty: usize,
+    PointerCapturesProperty: usize,
 }
 pub const IID_IVisualTreeHelperStatics: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0xe75758c4_d25d_4b1d_971f_596f17f12baa);

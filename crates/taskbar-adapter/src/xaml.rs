@@ -18,6 +18,19 @@ pub struct Object {
     pointer: NonNull<c_void>,
     _thread: PhantomData<Rc<()>>,
 }
+impl Clone for Object {
+    fn clone(&self) -> Self {
+        // COM identity (QI(IUnknown)) need not have the same pointer/vtable as
+        // this interface. Preserve the exact ABI pointer when retaining it.
+        unsafe {
+            (self.table::<IUnknown_Vtbl>().AddRef)(self.raw());
+        }
+        Self {
+            pointer: self.pointer,
+            _thread: PhantomData,
+        }
+    }
+}
 impl Object {
     /// The pointer must own one valid COM reference on this thread.
     pub unsafe fn owned(pointer: *mut c_void) -> Result<Self, String> {

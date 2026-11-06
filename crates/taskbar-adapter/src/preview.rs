@@ -374,6 +374,9 @@ pub(crate) struct ModelFixture {
     preview: Preview,
 }
 impl ModelFixture {
+    pub(crate) fn window(&self) -> HWND {
+        self.preview.window
+    }
     pub(crate) fn new(owner: Owner, frame: Frame, markup: &str) -> Result<Self, String> {
         let mut preview = Preview::create(owner, frame, false)?;
         if let Some(watchdog) = preview.watchdog.take() {
