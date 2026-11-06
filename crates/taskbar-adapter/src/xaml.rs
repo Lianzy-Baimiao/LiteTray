@@ -255,7 +255,9 @@ pub(crate) fn walk(
             &IID_IVisualTreeHelperStatics,
         )?;
         let table = helper.table::<IVisualTreeHelperStatics_Vtbl>();
-        let mut pending = vec![(root, 0u32, false)];
+        // Normalize at the API boundary; callers may hold FrameworkElement,
+        // UIElement or IUnknown pointers for this same object.
+        let mut pending = vec![(root.query(&IID_IDependencyObject)?, 0u32, false)];
         let mut elements = Vec::new();
         let mut truncated = false;
         while let Some((node, depth, in_tray)) = pending.pop() {

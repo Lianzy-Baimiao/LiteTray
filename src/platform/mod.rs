@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod app_icon;
 pub mod clock_preview;
 pub mod credentials;
 pub mod diagnostics;
@@ -8,6 +9,7 @@ pub mod probe;
 pub mod startup;
 pub mod symbols;
 pub mod taskbar_clock;
+pub mod tray_popup;
 pub fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(Some(0)).collect()
 }

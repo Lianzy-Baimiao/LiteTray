@@ -1,5 +1,6 @@
 //! Shared native drawing primitives. All dimensions are logical pixels.
 use super::*;
+use windows_sys::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
 
 #[derive(Clone, Copy)]
 pub(super) struct Theme {
@@ -12,34 +13,278 @@ pub(super) struct Theme {
     pub accent: u32,
     pub tint: u32,
     pub on_accent: u32,
+    pub high_contrast: bool,
+}
+thread_local! { static THEMES: Cell<[Option<Theme>; 2]> = const { Cell::new([None, None]) }; }
+pub(super) fn invalidate_theme() {
+    THEMES.with(|cache| cache.set([None, None]));
 }
 impl Theme {
     pub fn new(dark: bool) -> Self {
-        if dark {
+        THEMES.with(|cache| {
+            let mut values = cache.get();
+            if let Some(theme) = values[dark as usize] {
+                return theme;
+            }
+            let theme = Self::read(dark);
+            values[dark as usize] = Some(theme);
+            cache.set(values);
+            theme
+        })
+    }
+    fn read(dark: bool) -> Self {
+        unsafe {
+            let mut contrast: HIGHCONTRASTW = std::mem::zeroed();
+            contrast.cbSize = size_of::<HIGHCONTRASTW>() as u32;
+            if SystemParametersInfoW(
+                SPI_GETHIGHCONTRAST,
+                contrast.cbSize,
+                &mut contrast as *mut _ as _,
+                0,
+            ) != 0
+                && contrast.dwFlags & HCF_HIGHCONTRASTON != 0
+            {
+                return Self {
+                    bg: GetSysColor(COLOR_WINDOW),
+                    surface: GetSysColor(COLOR_WINDOW),
+                    field: GetSysColor(COLOR_BTNFACE),
+                    text: GetSysColor(COLOR_WINDOWTEXT),
+                    muted: GetSysColor(COLOR_WINDOWTEXT),
+                    border: GetSysColor(COLOR_WINDOWTEXT),
+                    accent: GetSysColor(COLOR_HIGHLIGHT),
+                    tint: GetSysColor(COLOR_BTNFACE),
+                    on_accent: GetSysColor(COLOR_HIGHLIGHTTEXT),
+                    high_contrast: true,
+                };
+            }
+        }
+        let mut theme = if dark {
             Self {
-                bg: rgb(28, 29, 32),
-                surface: rgb(37, 39, 43),
-                field: rgb(48, 50, 56),
-                text: rgb(241, 242, 244),
-                muted: rgb(177, 181, 191),
-                border: rgb(65, 68, 76),
+                bg: rgb(32, 32, 32),
+                surface: rgb(43, 43, 43),
+                field: rgb(51, 51, 51),
+                text: rgb(255, 255, 255),
+                muted: rgb(195, 195, 195),
+                border: rgb(66, 66, 66),
                 accent: rgb(146, 185, 255),
                 tint: rgb(43, 62, 89),
                 on_accent: rgb(20, 37, 62),
+                high_contrast: false,
             }
         } else {
             Self {
                 bg: rgb(243, 243, 243),
-                surface: rgb(250, 251, 252),
-                field: rgb(240, 242, 245),
-                text: rgb(32, 34, 37),
-                muted: rgb(98, 103, 115),
-                border: rgb(222, 226, 232),
+                surface: rgb(255, 255, 255),
+                field: rgb(250, 250, 250),
+                text: rgb(26, 26, 26),
+                muted: rgb(96, 96, 96),
+                border: rgb(225, 225, 225),
                 accent: rgb(35, 95, 187),
                 tint: rgb(231, 238, 249),
                 on_accent: rgb(255, 255, 255),
+                high_contrast: false,
             }
+        };
+        use windows::UI::ViewManagement::{UIColorType, UISettings};
+        if let Ok(color) = UISettings::new().and_then(|ui| {
+            ui.GetColorValue(if dark {
+                UIColorType::AccentLight2
+            } else {
+                UIColorType::AccentDark1
+            })
+        }) {
+            theme.accent = rgb(color.R as u32, color.G as u32, color.B as u32);
         }
+        let luminance = |c: u32| {
+            let c = c as f64 / 255.;
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let l = 0.2126 * luminance(theme.accent & 255)
+            + 0.7152 * luminance((theme.accent >> 8) & 255)
+            + 0.0722 * luminance((theme.accent >> 16) & 255);
+        theme.on_accent = if l > 0.179 {
+            rgb(0, 0, 0)
+        } else {
+            rgb(255, 255, 255)
+        };
+        theme.tint = blend(theme.surface, theme.accent, if dark { 18 } else { 10 });
+        theme
+    }
+}
+fn blend(base: u32, color: u32, percent: u32) -> u32 {
+    let component = |shift: u32| {
+        (((base >> shift) & 255u32) * (100 - percent) + ((color >> shift) & 255u32) * percent) / 100
+    };
+    rgb(component(0), component(8), component(16))
+}
+pub(super) fn font_face() -> String {
+    unsafe {
+        let mut metrics: NONCLIENTMETRICSW = std::mem::zeroed();
+        metrics.cbSize = size_of::<NONCLIENTMETRICSW>() as u32;
+        if SystemParametersInfoW(
+            SPI_GETNONCLIENTMETRICS,
+            metrics.cbSize,
+            &mut metrics as *mut _ as _,
+            0,
+        ) != 0
+        {
+            let name = metrics.lfMessageFont.lfFaceName;
+            return String::from_utf16_lossy(
+                &name[..name.iter().position(|c| *c == 0).unwrap_or(name.len())],
+            );
+        }
+    }
+    "Segoe UI".into()
+}
+pub(super) unsafe fn style_combo(hwnd: HWND, dark: bool, dpi: u32) {
+    unsafe {
+        if dark {
+            SetPropW(
+                hwnd,
+                wide("LiteTray.ControlDark").as_ptr(),
+                1usize as HANDLE,
+            );
+        }
+        // Keep the native combo's input, keyboard navigation, list and UIA;
+        // paint its closed surface and rows with the same system palette.
+        SetWindowTheme(hwnd, wide("").as_ptr(), wide("").as_ptr());
+        SendMessageW(hwnd, CB_SETITEMHEIGHT, usize::MAX, (28 * dpi / 96) as isize);
+        SendMessageW(hwnd, CB_SETITEMHEIGHT, 0, (28 * dpi / 96) as isize);
+        SetWindowSubclass(hwnd, Some(combo_proc), 4, 0);
+    }
+}
+unsafe fn combo_text(hwnd: HWND, index: i32) -> String {
+    unsafe {
+        if index < 0 {
+            return String::new();
+        }
+        let len = SendMessageW(hwnd, CB_GETLBTEXTLEN, index as usize, 0);
+        if !(0..=4096).contains(&len) {
+            return String::new();
+        }
+        let mut text = vec![0u16; len as usize + 1];
+        let count = SendMessageW(
+            hwnd,
+            CB_GETLBTEXT,
+            index as usize,
+            text.as_mut_ptr() as isize,
+        );
+        if count < 0 {
+            return String::new();
+        }
+        String::from_utf16_lossy(&text[..count as usize])
+    }
+}
+pub(super) unsafe fn draw_combo(item: &DRAWITEMSTRUCT, dark: bool) {
+    unsafe {
+        let t = Theme::new(dark);
+        let selected = item.itemState & ODS_SELECTED != 0;
+        fill(
+            item.hDC,
+            item.rcItem,
+            if selected { t.tint } else { t.field },
+        );
+        let mut r = item.rcItem;
+        r.left += 8;
+        text(
+            item.hDC,
+            &combo_text(item.hwndItem, item.itemID as i32),
+            r,
+            SendMessageW(item.hwndItem, WM_GETFONT, 0, 0) as HFONT,
+            if item.itemState & ODS_DISABLED != 0 {
+                t.muted
+            } else {
+                t.text
+            },
+            DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
+        );
+        if item.itemState & ODS_FOCUS != 0 {
+            DrawFocusRect(item.hDC, &item.rcItem);
+        }
+    }
+}
+unsafe extern "system" fn combo_proc(
+    hwnd: HWND,
+    msg: u32,
+    w: WPARAM,
+    l: LPARAM,
+    id: usize,
+    _data: usize,
+) -> LRESULT {
+    unsafe {
+        match msg {
+            WM_PAINT | WM_PRINTCLIENT => {
+                let mut ps: PAINTSTRUCT = std::mem::zeroed();
+                let dc = if msg == WM_PRINTCLIENT {
+                    w as HDC
+                } else {
+                    BeginPaint(hwnd, &mut ps)
+                };
+                let mut r: RECT = std::mem::zeroed();
+                GetClientRect(hwnd, &mut r);
+                let dark = !GetPropW(hwnd, wide("LiteTray.ControlDark").as_ptr()).is_null();
+                let t = Theme::new(dark);
+                let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+                let s = |n| n * dpi / 96;
+                fill(dc, r, t.surface);
+                rounded(
+                    dc,
+                    r,
+                    t.field,
+                    if GetFocus() == hwnd {
+                        t.accent
+                    } else {
+                        t.border
+                    },
+                    s(6),
+                );
+                let mut label = r;
+                label.left += s(10);
+                label.right -= s(30);
+                let value = combo_text(hwnd, SendMessageW(hwnd, CB_GETCURSEL, 0, 0) as i32);
+                text(
+                    dc,
+                    &value,
+                    label,
+                    SendMessageW(hwnd, WM_GETFONT, 0, 0) as HFONT,
+                    if IsWindowEnabled(hwnd) != 0 {
+                        t.text
+                    } else {
+                        t.muted
+                    },
+                    DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
+                );
+                let pen = CreatePen(PS_SOLID, s(1).max(1), t.muted);
+                let old = SelectObject(dc, pen);
+                let x = r.right - s(20);
+                let y = r.bottom / 2 - s(2);
+                MoveToEx(dc, x, y, null_mut());
+                LineTo(dc, x + s(4), y + s(4));
+                LineTo(dc, x + s(8), y);
+                SelectObject(dc, old);
+                DeleteObject(pen);
+                if msg != WM_PRINTCLIENT {
+                    EndPaint(hwnd, &ps);
+                }
+                return 0;
+            }
+            WM_ERASEBKGND => return 1,
+            WM_SETFOCUS | WM_KILLFOCUS | CB_SETCURSEL | WM_ENABLE => {
+                let result = DefSubclassProc(hwnd, msg, w, l);
+                InvalidateRect(hwnd, null(), 0);
+                return result;
+            }
+            WM_NCDESTROY => {
+                RemovePropW(hwnd, wide("LiteTray.ControlDark").as_ptr());
+                RemoveWindowSubclass(hwnd, Some(combo_proc), id);
+            }
+            _ => {}
+        }
+        DefSubclassProc(hwnd, msg, w, l)
     }
 }
 pub(super) fn rect(x: i32, y: i32, w: i32, h: i32) -> RECT {

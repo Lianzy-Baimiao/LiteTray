@@ -1,7 +1,7 @@
 //! Physical-screen placement shared by clock and tray entry points.
 pub use litetray_adapter_protocol::activation::Rect;
-pub const WIDTH: i32 = 660;
-pub const HEIGHT: i32 = 452;
+pub const WIDTH: i32 = 720;
+pub const HEIGHT: i32 = 656;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Placement {
     pub rect: Rect,

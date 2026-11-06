@@ -23,6 +23,8 @@ fn main() {
                     | "--self-test-preview-recovery"
                     | "--self-test-clock-owner"
                     | "--preview-windhawk"
+                    | "--show-secondary"
+                    | "--self-test-app-icon"
             )
         }) {
             unsafe {
@@ -42,6 +44,14 @@ fn main() {
 fn run() -> Result<(), String> {
     use litetray::{config, http, platform, update, weather};
     let arguments: Vec<_> = std::env::args().skip(1).collect();
+    if arguments.first().map(String::as_str) == Some("--self-test-app-icon") {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&platform::app_icon::verify()?)
+                .map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
     // Internal isolated-test child: no profile, tray discovery or network.
     if arguments.first().map(String::as_str) == Some("--self-test-clock-owner") {
         return platform::adapter::self_test_clock_owner();
@@ -193,7 +203,7 @@ fn run() -> Result<(), String> {
         }
         Some("--help") => {
             println!(
-                "LiteTray [--settings | --calendar | --clock-preview | --background | --diagnose [file] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-clock | --self-test-shell-source | --self-test-preview-recovery | --test-secondary-clock <report.json> | --test-secondary-tray <report.json> | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
+                "LiteTray [--settings | --calendar | --clock-preview | --background | --show-secondary [calendar|agenda|timers|clock|appearance] | --diagnose [file] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-app-icon | --self-test-clock | --self-test-shell-source | --self-test-preview-recovery | --test-secondary-clock <report.json> | --test-secondary-tray <report.json> | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
             );
             Ok(())
         }
@@ -201,6 +211,7 @@ fn run() -> Result<(), String> {
         | Some("--settings")
         | Some("--calendar")
         | Some("--background")
+        | Some("--show-secondary")
         | Some("--clock-preview") => ui::run(
             config,
             arguments

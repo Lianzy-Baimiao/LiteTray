@@ -1,13 +1,18 @@
+mod agenda;
 mod calendar;
 mod dashboard;
 mod design;
+mod page;
+#[cfg(test)]
+mod visual_checks;
 use chrono::{Local, TimeZone, Utc};
 use litetray::{
     clock,
     config::{self, Appearance, ClickAction, Config, MonitorScope, Provider},
-    http, migration, monitors,
+    http, migration, monitors, organizer,
     platform::{
-        clock_preview, credentials, diagnostics, displays, lunar, startup, taskbar_clock, wide,
+        app_icon, clock_preview, credentials, diagnostics, displays, lunar, startup, taskbar_clock,
+        tray_popup, wide,
     },
     popup,
     update::{self, UpdateStatus},
@@ -32,7 +37,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 3";
+const UI_REVISION: &str = "开发版 4";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -41,6 +46,7 @@ const WM_SHOW_SETTINGS: u32 = WM_APP + 3;
 const WM_SHOW_PANEL: u32 = WM_APP + 4;
 const WM_CLOCK_ACTIVATED: u32 = WM_APP + 5;
 const WM_PREVIEW_CLOCK: u32 = WM_APP + 6;
+const WM_SHOW_SECONDARY: u32 = WM_APP + 7;
 const NAV: u16 = 100;
 const SAVE: u16 = 20;
 const STATUS: u16 = 900;
@@ -49,7 +55,7 @@ const UPDATE: u16 = 31;
 const OPEN_RELEASE: u16 = 32;
 const EXIT: u16 = 33;
 const CALENDAR: u16 = 34;
-const PAGES: [&str; 8] = [
+const PAGES: [&str; 10] = [
     "日历与天气",
     "时钟显示",
     "多屏托盘",
@@ -58,6 +64,8 @@ const PAGES: [&str; 8] = [
     "关于与更新",
     "配置迁移",
     "时钟样式",
+    "日程与待办",
+    "闹钟与专注",
 ];
 thread_local! {static STATE:RefCell<Option<App>>=const{RefCell::new(None)};}
 // Independent of App's modal-dialog borrow. Each native call retains its own
@@ -85,6 +93,13 @@ enum Event {
 }
 struct App {
     hwnd: HWND,
+    page_host: HWND,
+    organizer: Rc<RefCell<organizer::Store>>,
+    agenda_state: [Option<agenda::Snapshot>; 2],
+    agenda_scope: Option<chrono::NaiveDate>,
+    notices: std::collections::VecDeque<organizer::Notice>,
+    next_notice: Instant,
+    popup_router: tray_popup::Router,
     panel: HWND,
     preview: Option<Rc<clock_preview::Preview>>,
     taskbar: Option<Rc<taskbar_clock::Service>>,
@@ -118,6 +133,16 @@ struct App {
     build: u32,
 }
 
+fn secondary_page() -> usize {
+    match std::env::args().nth(2).as_deref() {
+        Some("calendar") => 1,
+        Some("agenda") => 9,
+        Some("timers") => 10,
+        Some("clock") => 2,
+        Some("appearance") => 5,
+        _ => 0,
+    }
+}
 pub fn run(config: Config, mode: &str) -> Result<(), String> {
     unsafe {
         let profile_suffix = instance_suffix()?;
@@ -154,14 +179,20 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
                 }
                 PostMessageW(
                     other,
-                    if mode == "--clock-preview" {
+                    if mode == "--show-secondary" {
+                        WM_SHOW_SECONDARY
+                    } else if mode == "--clock-preview" {
                         WM_PREVIEW_CLOCK
                     } else if mode == "--calendar" {
                         WM_SHOW_PANEL
                     } else {
                         WM_SHOW_SETTINGS
                     },
-                    0,
+                    if mode == "--show-secondary" {
+                        secondary_page()
+                    } else {
+                        0
+                    },
                     0,
                 );
                 Ok(())
@@ -182,7 +213,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             lpfnWndProc: Some(window_proc),
             hInstance: instance,
             hCursor: LoadCursorW(null_mut(), IDC_ARROW),
-            hIcon: LoadIconW(null_mut(), IDI_APPLICATION),
+            hIcon: app_icon::load(GetDpiForSystem().max(96), true),
             lpszClassName: class_name.as_ptr(),
             ..std::mem::zeroed()
         };
@@ -220,9 +251,19 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             1usize as HANDLE,
         );
         let dpi = GetDpiForWindow(hwnd).max(96);
+        app_icon::apply(hwnd, dpi);
         let (tx, rx) = mpsc::channel();
         let mut app = App {
             hwnd,
+            page_host: null_mut(),
+            organizer: Rc::new(RefCell::new(organizer::Store::open(
+                &config::data_dir().join("agenda.json"),
+            ))),
+            agenda_state: [None, None],
+            agenda_scope: None,
+            notices: std::collections::VecDeque::new(),
+            next_notice: Instant::now(),
+            popup_router: tray_popup::Router::default(),
             panel: null_mut(),
             preview: None,
             taskbar: Some(Rc::new(taskbar_clock::service(
@@ -283,6 +324,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             cache_error: None,
         });
         app.render();
+        app.popup_router.configure(&app.saved.tray);
         app.add_tray();
         app.start_weather(false);
         if app.draft.updates.check_on_startup {
@@ -290,7 +332,9 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
         }
         STATE.with(|state| *state.borrow_mut() = Some(app));
         if mode != "--background" {
-            if mode == "--clock-preview" {
+            if mode == "--show-secondary" {
+                PostMessageW(hwnd, WM_SHOW_SECONDARY, secondary_page(), 0);
+            } else if mode == "--clock-preview" {
                 PostMessageW(hwnd, WM_PREVIEW_CLOCK, 0, 0);
             } else if mode == "--calendar" {
                 PostMessageW(hwnd, WM_SHOW_PANEL, 0, 0);
@@ -357,8 +401,9 @@ impl App {
     unsafe fn recreate_resources(&mut self) {
         unsafe {
             self.release_resources();
-            self.font = make_font(self.scale(14), 400, "Microsoft YaHei UI");
-            self.title_font = make_font(self.scale(28), 600, "Microsoft YaHei UI");
+            let face = design::font_face();
+            self.font = make_font(self.scale(14), 400, &face);
+            self.title_font = make_font(self.scale(28), 600, &face);
             self.background = CreateSolidBrush(self.bg_color());
             self.edit_background = CreateSolidBrush(self.edit_color());
             self.surface_background = CreateSolidBrush(design::Theme::new(self.dark()).surface);
@@ -434,9 +479,20 @@ impl App {
         h: i32,
     ) -> HWND {
         unsafe {
-            let content = x >= 224 && y >= 80 && id != STATUS && id != SAVE;
-            let x = if x >= 224 { x + 42 } else { x };
-            let y = if content { y + 86 } else { y };
+            let content = x >= 224 && y >= 80 && id != STATUS && id != SAVE && id != 42;
+            let style = if class == "COMBOBOX" {
+                style | CBS_OWNERDRAWFIXED as u32 | CBS_HASSTRINGS as u32
+            } else {
+                style
+            };
+            let x = if content {
+                x - 224 + 20
+            } else if x >= 224 {
+                x + 24
+            } else {
+                x
+            };
+            let y = if content { y - 80 + 20 } else { y };
             let hwnd = CreateWindowExW(
                 0,
                 wide(class).as_ptr(),
@@ -452,7 +508,7 @@ impl App {
                 self.scale(y),
                 self.scale(w),
                 self.scale(h),
-                self.hwnd,
+                if content { self.page_host } else { self.hwnd },
                 id as usize as HMENU,
                 GetModuleHandleW(null()),
                 null(),
@@ -471,19 +527,19 @@ impl App {
                 );
             }
             if class == "COMBOBOX" {
+                design::style_combo(hwnd, self.dark(), self.dpi);
+            }
+            if class == "BUTTON" && style & 0xf == BS_AUTOCHECKBOX as u32 {
                 SetWindowTheme(
                     hwnd,
                     wide(if self.dark() {
-                        "DarkMode_CFD"
+                        "DarkMode_Explorer"
                     } else {
                         "Explorer"
                     })
                     .as_ptr(),
                     null(),
                 );
-            }
-            if class == "BUTTON" && style & 0xf == BS_AUTOCHECKBOX as u32 {
-                SetWindowTheme(hwnd, wide("").as_ptr(), wide("").as_ptr());
             }
             if class == "BUTTON" && style & 0xf == BS_OWNERDRAW as u32 {
                 SetWindowSubclass(hwnd, Some(design::hover_proc), 2, 0);
@@ -580,6 +636,28 @@ impl App {
     fn selected(&self, id: u16) -> usize {
         unsafe { SendMessageW(self.field(id), CB_GETCURSEL, 0, 0).max(0) as usize }
     }
+    fn input_snapshot(&self) -> Vec<(u16, String)> {
+        self.fields
+            .iter()
+            .filter_map(|(&id, &hwnd)| unsafe {
+                let mut name = [0u16; 32];
+                let count = GetClassNameW(hwnd, name.as_mut_ptr(), 32).max(0) as usize;
+                (String::from_utf16_lossy(&name[..count]) == "Edit")
+                    .then(|| (id, window_text(hwnd)))
+                    .or_else(|| {
+                        (String::from_utf16_lossy(&name[..count]) == "EDIT")
+                            .then(|| (id, window_text(hwnd)))
+                    })
+            })
+            .collect()
+    }
+    unsafe fn restore_inputs(&self, fields: Vec<(u16, String)>) {
+        unsafe {
+            for (id, value) in fields {
+                set_text(self.field(id), &value);
+            }
+        }
+    }
     unsafe fn set_status(&mut self, text: impl Into<String>) {
         unsafe {
             self.status = text.into();
@@ -593,19 +671,33 @@ impl App {
             if let Some(calendar) = dashboard::selection(self.field(dashboard::ID)) {
                 self.calendar = Some(calendar);
             }
+            if let Some(snapshot) = agenda::snapshot(self.field(agenda::ID)) {
+                let index = snapshot.timer_mode as usize;
+                self.agenda_state[index] = Some(snapshot);
+            }
             for child in self.children.drain(..) {
                 DestroyWindow(child);
             }
             self.fields.clear();
             let mut rect = std::mem::zeroed();
             GetClientRect(self.hwnd, &mut rect);
-            let width = rect.right * 96 / self.dpi as i32 - 42;
+            let width = rect.right * 96 / self.dpi as i32 - 56;
             let height = rect.bottom * 96 / self.dpi as i32;
+            self.page_host = page::create(
+                self.hwnd,
+                design::rect(
+                    self.scale(248),
+                    self.scale(124),
+                    rect.right - self.scale(276),
+                    rect.bottom - self.scale(220),
+                ),
+            );
+            self.children.push(self.page_host);
             let brand = self.label("LiteTray", 22, 24, 170, 38);
             SendMessageW(brand, WM_SETFONT, self.title_font as usize, 1);
             self.label("轻托盘", 26, 72, 194, 25);
-            for (row, i) in [0, 1, 7, 2, 3, 4, 5, 6].into_iter().enumerate() {
-                self.button(PAGES[i], NAV + i as u16, 16, 144 + row as i32 * 48, 210);
+            for (row, i) in [0, 8, 9, 1, 7, 2, 3, 4, 5, 6].into_iter().enumerate() {
+                self.button(PAGES[i], NAV + i as u16, 16, 134 + row as i32 * 44, 208);
             }
             self.label(
                 &format!("{UI_REVISION}  v{}", env!("CARGO_PKG_VERSION")),
@@ -617,32 +709,35 @@ impl App {
             let heading = self.label(PAGES[self.page], 224, 30, width - 250, 42);
             SendMessageW(heading, WM_SETFONT, self.title_font as usize, 1);
             let descriptions = [
-                "让日期、天气和每一刻，都清晰可见。",
-                "定义任务栏里的两行文字，让信息一眼可见。",
-                "选择显示器，以及每块屏幕上的托盘内容。",
-                "选择可靠的天气来源，保持数据新鲜。",
-                "按你的习惯设置外观与启动方式。",
+                "月历、日程和天气。",
+                "设置任务栏时钟的内容与点击行为。",
+                "管理各屏幕上的时钟与托盘图标。",
+                "设置城市、天气来源与更新频率。",
+                "外观跟随 Windows，也可以选择固定明暗模式。",
                 "关于 LiteTray，以及应用更新。",
                 "带上熟悉的设置，开始使用 LiteTray。",
                 "调整每一行的字体、颜色和对齐方式。",
+                "记录待办、日程和重要日期。点击保存后保存在本机。",
+                "专注计时、定时提醒与最近提醒记录。",
             ];
             self.label(descriptions[self.page], 224, 78, width - 260, 26);
             let c = self.draft.clone();
             match self.page {
                 0 => {
                     let view = dashboard::create(
-                        self.hwnd,
+                        self.page_host,
                         design::rect(
-                            self.scale(258),
-                            self.scale(124),
-                            self.scale(width - 240),
-                            self.scale((height - 228).min(610)),
+                            self.scale(8),
+                            self.scale(8),
+                            self.scale(width - 236),
+                            self.scale((height - 238).min(680)),
                         ),
                         self.dark(),
                         false,
                     );
                     self.children.push(view);
                     self.fields.insert(dashboard::ID, view);
+                    dashboard::bind_store(view, self.organizer.clone());
                     if let Some(calendar) = self.calendar {
                         dashboard::restore_selection(view, calendar);
                     }
@@ -700,10 +795,10 @@ impl App {
                         418,
                         330,
                     );
-                    self.button("测试独立时钟预览", 209, 574, 418, 250);
+                    self.button("预览时钟", 209, 574, 418, 250);
                     self.control(
                         "STATIC",
-                        "原生预览：尚未打开",
+                        "预览：尚未打开",
                         210,
                         SS_LEFT as u32,
                         224,
@@ -711,7 +806,7 @@ impl App {
                         width - 260,
                         58,
                     );
-                    self.button("启用并保存（实验）", 212, 224, 532, 250);
+                    self.button("启用任务栏时钟", 212, 224, 532, 250);
                     self.button("停用并恢复", 213, 492, 532, 170);
                 }
                 2 => {
@@ -898,11 +993,11 @@ impl App {
                         176,
                         350,
                     );
-                    self.label("关闭设置窗口会收至托盘；右键托盘图标可退出程序。\r\n配置和天气缓存保存在当前用户目录，API Key 不写入配置文件。",224,231,width-260,65);
+                    self.label("强调色、高对比度与界面字体跟随 Windows，系统外观变化时自动更新。\r\n关闭窗口后继续后台运行；右键托盘图标可退出。",224,231,width-260,65);
                     self.button("打开配置目录", 503, 224, 320, 170);
                     self.button("导出诊断信息", 504, 412, 320, 170);
                     self.button("退出程序", EXIT, 600, 320, 170);
-                    self.label("兼容策略：先检测系统能力，再启用对应任务栏适配。\r\nWindows 10 经典任务栏和 Windows 11 XAML 任务栏分别实现。\r\n未知系统版本不使用未验证的内存偏移。",224,389,width-260,100);
+                    self.label("保存后的日程与计时进度保留在本机。需要登录后继续提醒时，请开启随 Windows 启动。\r\n通知遵循 Windows 的通知设置；最近提醒也会保留在“闹钟与专注”中。",224,389,width-260,100);
                 }
                 5 => {
                     self.label(&format!("LiteTray 轻托盘  {} · {UI_REVISION}\r\n自动宽度时钟、日历天气、主屏托盘图标复制",env!("CARGO_PKG_VERSION")),224,86,width-260,80);
@@ -1069,11 +1164,36 @@ impl App {
                     self.button("应用草稿到原生预览", 209, 224, 530, 250);
                     self.button("重置本页", 805, 492, 530, 185);
                 }
+                8 | 9 => {
+                    let timers = self.page == 9;
+                    let view = agenda::create(
+                        self.page_host,
+                        design::rect(
+                            0,
+                            0,
+                            self.scale(width - 220),
+                            self.scale(if timers { 874 } else { 712 }),
+                        ),
+                        self.dark(),
+                        self.organizer.clone(),
+                        timers,
+                        self.agenda_scope,
+                        self.agenda_state[timers as usize].as_ref(),
+                    );
+                    self.children.push(view);
+                    self.fields.insert(agenda::ID, view);
+                }
                 _ => {}
             }
             self.control(
                 "STATIC",
-                &self.status.clone(),
+                &if self.page == 8 {
+                    "选择日程后编辑 · 点击保存后生效".into()
+                } else if self.page == 9 {
+                    "使用 Windows 通知 · 最近提醒保存在本机".into()
+                } else {
+                    self.status.clone()
+                },
                 STATUS,
                 SS_LEFT as u32,
                 224,
@@ -1081,17 +1201,20 @@ impl App {
                 width - 415,
                 64,
             );
-            self.button(
-                if self.page == 0 {
-                    "设置时钟"
-                } else {
-                    "保存设置"
-                },
-                if self.page == 0 { 42 } else { SAVE },
-                width - 155,
-                height - 68,
-                125,
-            );
+            if self.page < 8 {
+                self.button(
+                    if self.page == 0 {
+                        "设置时钟"
+                    } else {
+                        "保存设置"
+                    },
+                    if self.page == 0 { 42 } else { SAVE },
+                    width - 121,
+                    height - 68,
+                    125,
+                );
+            }
+            page::finish(self.page_host);
             self.update_views();
             InvalidateRect(self.hwnd, null(), 1);
         }
@@ -1258,6 +1381,7 @@ impl App {
                 return Err(error);
             }
             self.saved = self.draft.clone();
+            self.popup_router.configure(&self.saved.tray);
             self.status = match self
                 .taskbar
                 .as_ref()
@@ -1277,6 +1401,7 @@ impl App {
     }
     unsafe fn update_views(&mut self) {
         unsafe {
+            agenda::tick(self.field(agenda::ID));
             let summary = self
                 .weather
                 .as_ref()
@@ -1311,9 +1436,9 @@ impl App {
                     set_text(
                         self.field(212),
                         if self.saved.tray.clock_enabled {
-                            "重试连接"
+                            "重新应用"
                         } else {
-                            "启用并保存（实验）"
+                            "启用任务栏时钟"
                         },
                     );
                     EnableWindow(
@@ -1408,7 +1533,9 @@ impl App {
                             self.start_weather(true);
                             continue;
                         }
-                        self.set_status(result.status());
+                        if self.page == 0 {
+                            self.set_status(result.status());
+                        }
                         self.weather = Some(result);
                         self.update_views();
                     }
@@ -1451,7 +1578,78 @@ impl App {
             } else {
                 interval
             };
+            let interval = if !self.notices.is_empty()
+                || self
+                    .organizer
+                    .borrow()
+                    .data
+                    .timers
+                    .iter()
+                    .any(|t| t.due.is_some())
+                || self
+                    .organizer
+                    .borrow()
+                    .data
+                    .entries
+                    .iter()
+                    .any(|e| e.enabled && !e.done && e.remind_minutes.is_some())
+            {
+                interval.min(1000)
+            } else {
+                interval
+            };
+            let interval = if self.saved.tray.enabled && self.saved.tray.show_icons {
+                interval.min(10000)
+            } else {
+                interval
+            };
             SetTimer(self.hwnd, 1, interval, None);
+        }
+    }
+    unsafe fn organizer_tick(&mut self) {
+        unsafe {
+            let result = self.organizer.borrow_mut().tick(Utc::now());
+            match result {
+                Ok(notices) => {
+                    if !notices.is_empty() {
+                        self.notices.extend(notices);
+                        agenda::refresh(self.field(agenda::ID));
+                    }
+                }
+                Err(error) => self.set_status(format!("提醒暂未发送，保存失败：{error}")),
+            }
+            if Instant::now() < self.next_notice {
+                return;
+            }
+            let Some(notice) = self.notices.pop_front() else {
+                return;
+            };
+            let mut data: NOTIFYICONDATAW = std::mem::zeroed();
+            data.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
+            data.hWnd = self.hwnd;
+            data.uID = 1;
+            data.uFlags = NIF_INFO;
+            data.dwInfoFlags = NIIF_INFO | NIIF_RESPECT_QUIET_TIME;
+            for (target, source) in data
+                .szInfoTitle
+                .iter_mut()
+                .take(63)
+                .zip(notice.title.encode_utf16())
+            {
+                *target = source;
+            }
+            for (target, source) in data
+                .szInfo
+                .iter_mut()
+                .take(255)
+                .zip(notice.body.encode_utf16())
+            {
+                *target = source;
+            }
+            if Shell_NotifyIconW(NIM_MODIFY, &data) == 0 {
+                self.set_status("提醒已记录，可在“闹钟与专注”查看；Windows 通知暂不可用");
+            }
+            self.next_notice = Instant::now() + Duration::from_secs(8);
         }
     }
     unsafe fn add_tray(&self) {
@@ -1462,7 +1660,7 @@ impl App {
             data.uID = 1;
             data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
             data.uCallbackMessage = WM_TRAY;
-            data.hIcon = LoadIconW(null_mut(), IDI_APPLICATION);
+            data.hIcon = app_icon::load(self.dpi, false);
             let tip = wide("LiteTray · 日历与天气\n左键展开面板，右键打开菜单");
             for (dest, src) in data.szTip.iter_mut().zip(tip) {
                 *dest = src;
@@ -1617,12 +1815,14 @@ impl App {
                 height,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
-            dashboard::create(
+            let view = dashboard::create(
                 hwnd,
                 design::rect(0, 0, scale(popup::WIDTH), scale(popup::HEIGHT)),
                 self.dark(),
                 true,
             );
+            dashboard::bind_store(view, self.organizer.clone());
+            app_icon::apply(hwnd, dpi as u32);
             let rounded = 2_i32;
             if self.build >= 22000 {
                 DwmSetWindowAttribute(hwnd, 33, &rounded as *const _ as _, 4);
@@ -2093,6 +2293,40 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 return Some(0);
             }
             match msg {
+                agenda::CHANGED => {
+                    app.organizer_tick();
+                    app.update_views();
+                    app.schedule_tick();
+                    Some(0)
+                }
+                agenda::OPEN_DATE => {
+                    app.close_panel();
+                    app.agenda_scope = chrono::NaiveDate::from_num_days_from_ce_opt(w as i32);
+                    app.agenda_state[0] = None;
+                    app.page = 8;
+                    app.render();
+                    if let Some(date) = app.agenda_scope {
+                        agenda::open_date(app.field(agenda::ID), date);
+                    }
+                    ShowWindow(hwnd, SW_SHOW);
+                    SetForegroundWindow(hwnd);
+                    Some(0)
+                }
+                agenda::OPEN_ENTRY => {
+                    app.close_panel();
+                    app.page = 8;
+                    app.render();
+                    agenda::open_entry(app.field(agenda::ID), w as u64);
+                    ShowWindow(hwnd, SW_SHOW);
+                    SetForegroundWindow(hwnd);
+                    Some(0)
+                }
+                agenda::OPEN_ALARMS => {
+                    app.page = 8;
+                    app.render();
+                    agenda::open_alarms(app.field(agenda::ID));
+                    Some(0)
+                }
                 taskbar_clock::WM_ACTIVATED => {
                     if let Some(event) = app.taskbar.as_ref().and_then(|t| t.take_activation()) {
                         app.show_panel_at(event.anchor);
@@ -2170,6 +2404,8 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     Some(0)
                 }
                 WM_TIMER => {
+                    app.popup_router.tick(&app.saved.tray);
+                    app.organizer_tick();
                     if IsWindowVisible(hwnd) != 0
                         || (!app.panel.is_null() && IsWindowVisible(app.panel) != 0)
                         || app.preview.is_some()
@@ -2192,6 +2428,37 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     app.schedule_tick();
                     Some(0)
                 }
+                WM_SHOW_SECONDARY => {
+                    let _ = app.collect_page();
+                    if (1..=PAGES.len()).contains(&w) {
+                        app.page = w - 1;
+                    }
+                    let snapshot = displays::collect();
+                    if let Some(display) = snapshot.displays.iter().find(|d| !d.primary) {
+                        let area = display.work;
+                        let dpi = GetDpiForWindow(hwnd).max(96);
+                        let margin = (32 * dpi / 96) as i32;
+                        let width = app.scale(1120).min(area[2] - area[0] - margin * 2);
+                        let height = app.scale(920).min(area[3] - area[1] - margin * 2);
+                        SetWindowPos(
+                            hwnd,
+                            null_mut(),
+                            area[0] + margin,
+                            area[1] + margin,
+                            width,
+                            height,
+                            SWP_NOZORDER | SWP_NOACTIVATE,
+                        );
+                        let dpi = GetDpiForWindow(hwnd).max(96);
+                        if dpi != app.dpi {
+                            app.dpi = dpi;
+                            app.recreate_resources();
+                        }
+                        app.render();
+                        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                    }
+                    Some(0)
+                }
                 WM_SHOW_PANEL => {
                     app.show_panel();
                     Some(0)
@@ -2200,20 +2467,30 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     match l as u32 {
                         WM_LBUTTONUP => app.show_panel(),
                         WM_RBUTTONUP | WM_CONTEXTMENU => app.tray_menu(),
+                        NIN_BALLOONUSERCLICK => {
+                            app.page = 9;
+                            app.render();
+                            ShowWindow(hwnd, SW_SHOW);
+                            SetForegroundWindow(hwnd);
+                        }
                         _ => {}
                     }
                     Some(0)
                 }
                 WM_SIZE => {
                     if w != SIZE_MINIMIZED as usize {
+                        let fields = app.input_snapshot();
                         let _ = app.collect_page();
                         app.render();
+                        app.restore_inputs(fields);
                     }
                     Some(0)
                 }
                 WM_DPICHANGED => {
+                    let fields = app.input_snapshot();
                     let _ = app.collect_page();
                     app.dpi = (w & 0xffff) as u32;
+                    app_icon::apply(hwnd, app.dpi);
                     app.recreate_resources();
                     let rect = &*(l as *const RECT);
                     SetWindowPos(
@@ -2226,13 +2503,17 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                         SWP_NOZORDER,
                     );
                     app.render();
+                    app.restore_inputs(fields);
                     Some(0)
                 }
-                WM_SETTINGCHANGE => {
-                    if app.draft.appearance == Appearance::System {
+                WM_SETTINGCHANGE | WM_THEMECHANGED | WM_DWMCOLORIZATIONCOLORCHANGED => {
+                    design::invalidate_theme();
+                    {
+                        let fields = app.input_snapshot();
                         let _ = app.collect_page();
                         app.recreate_resources();
                         app.render();
+                        app.restore_inputs(fields);
                     }
                     Some(0)
                 }
@@ -2339,9 +2620,13 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
         let p = PALETTE.with(Cell::get)?;
         match msg {
             WM_ERASEBKGND => Some(1),
-            WM_PAINT => {
+            WM_PAINT | WM_PRINTCLIENT => {
                 let mut ps: PAINTSTRUCT = std::mem::zeroed();
-                let dc = BeginPaint(hwnd, &mut ps);
+                let dc = if msg == WM_PRINTCLIENT {
+                    w as HDC
+                } else {
+                    BeginPaint(hwnd, &mut ps)
+                };
                 let mut r: RECT = std::mem::zeroed();
                 GetClientRect(hwnd, &mut r);
                 let t = design::Theme::new(p.dark);
@@ -2349,11 +2634,11 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                 if !GetPropW(hwnd, wide("LiteTray.SettingsSurface").as_ptr()).is_null() {
                     let dpi = GetDpiForWindow(hwnd).max(96) as i32;
                     let s = |n: i32| n * dpi / 96;
-                    design::fill(dc, design::rect(s(240), 0, s(1), r.bottom), t.border);
-                    if p.active != NAV {
+                    design::fill(dc, design::rect(s(232), 0, s(1), r.bottom), t.border);
+                    {
                         design::rounded(
                             dc,
-                            design::rect(s(250), s(146), r.right - s(276), r.bottom - s(246)),
+                            design::rect(s(247), s(123), r.right - s(274), r.bottom - s(218)),
                             t.surface,
                             t.border,
                             s(16),
@@ -2361,7 +2646,7 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                     }
                     design::fill(
                         dc,
-                        design::rect(s(258), r.bottom - s(96), r.right - s(284), s(1)),
+                        design::rect(s(248), r.bottom - s(84), r.right - s(276), s(1)),
                         t.border,
                     );
                     let mut child = GetWindow(hwnd, GW_CHILD);
@@ -2393,7 +2678,9 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                         child = GetWindow(child, GW_HWNDNEXT);
                     }
                 }
-                EndPaint(hwnd, &ps);
+                if msg != WM_PRINTCLIENT {
+                    EndPaint(hwnd, &ps);
+                }
                 Some(0)
             }
             WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
@@ -2410,6 +2697,10 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
             }
             WM_DRAWITEM if l != 0 => {
                 let item = &*(l as *const DRAWITEMSTRUCT);
+                if item.CtlType == ODT_COMBOBOX {
+                    design::draw_combo(item, p.dark);
+                    return Some(1);
+                }
                 if item.CtlType != ODT_BUTTON {
                     return None;
                 }
@@ -2440,7 +2731,7 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                 if nav {
                     let icons = [
                         "\u{e787}", "\u{e823}", "\u{e7f4}", "\u{e753}", "\u{e713}", "\u{e946}",
-                        "\u{e8b5}", "\u{e790}",
+                        "\u{e8b5}", "\u{e790}", "\u{e8fd}", "\u{e916}",
                     ];
                     let icon_font = make_font(s(17), 400, "Segoe MDL2 Assets");
                     design::text(

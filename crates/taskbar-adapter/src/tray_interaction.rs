@@ -610,11 +610,15 @@ fn shared_target(element: &Object) -> Result<bool, String> {
             }
         }
         let mut parent = null_mut();
+        // WinRT parameters require the declared ABI interface, not merely a
+        // different interface on the same COM object. Passing FrameworkElement
+        // here terminates XAML with FAST_FAIL_GUARD_ICALL_CHECK_FAILURE (10).
+        let dependency = node.query(&IID_IDependencyObject)?;
         unsafe {
             check(
                 (helper.table::<IVisualTreeHelperStatics_Vtbl>().GetParent)(
                     helper.raw(),
-                    node.raw(),
+                    dependency.raw(),
                     &mut parent,
                 ),
                 "Shared menu parent",
@@ -626,6 +630,40 @@ fn shared_target(element: &Object) -> Result<bool, String> {
         node = unsafe { Object::owned(parent)? };
     }
     Ok(false)
+}
+pub(crate) fn check_context_target() -> Result<Vec<&'static str>, String> {
+    // A normal taskbar context menu enters the same ancestry guard, starting
+    // from IFrameworkElement rather than IDependencyObject.
+    let root = crate::clock::load(
+        r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"/>"#,
+    )?;
+    if shared_target(&root.query(&IID_IFrameworkElement)?)? {
+        return Err("普通任务栏菜单目标被误识别为共享托盘菜单".into());
+    }
+    Ok(vec![
+        "native_context_menu_framework_element_ancestry_does_not_crash",
+    ])
+}
+pub(crate) fn check_context_ancestry(
+    target: &Object,
+    shared: bool,
+) -> Result<&'static str, String> {
+    for interface in [
+        IID_IFrameworkElement,
+        windows_sys::core::IID_IUnknown,
+        IID_IDependencyObject,
+    ] {
+        if shared_target(&target.query(&interface)?)? != shared {
+            return Err("菜单祖先分类或接口规范化失败".into());
+        }
+        // Also exercise the general tree reader with each caller interface.
+        xaml::walk(target.query(&interface)?, |_, _| Ok(()))?;
+    }
+    Ok(if shared {
+        "native_shared_menu_ancestor_accepts_framework_dependency_and_identity_interfaces"
+    } else {
+        "native_ordinary_taskbar_menu_nested_target_is_not_redirected"
+    })
 }
 unsafe fn show(
     original: &AtomicUsize,

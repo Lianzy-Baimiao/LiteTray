@@ -160,6 +160,19 @@ pub(crate) fn run(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, Strin
             .map(BoundView::interaction_host)
             .collect::<Result<Vec<_>, _>>()?,
     )?;
+    let menu_fixture = ModelFixture::new(
+        owner.clone(),
+        frame.clone(),
+        r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"><StackPanel><Grid x:Name="MainStack"><StackPanel><TextBlock x:Name="SharedMenuTarget" Text="Shared"/></StackPanel></Grid><Grid><TextBlock x:Name="OrdinaryMenuTarget" Text="Ordinary"/></Grid></StackPanel></Grid>"#,
+    )?;
+    let shared_menu_check = crate::tray_interaction::check_context_ancestry(
+        &menu_fixture.find("SharedMenuTarget")?,
+        true,
+    )?;
+    let ordinary_menu_check = crate::tray_interaction::check_context_ancestry(
+        &menu_fixture.find("OrdinaryMenuTarget")?,
+        false,
+    )?;
     let plan = Plan::build(&routes, &["B".into()], options())?;
     let now = unsafe { GetTickCount64() };
     let mut session = routing::prepare(&plan, &views, owner.clone(), now)?;
@@ -194,6 +207,8 @@ pub(crate) fn run(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, Strin
     let mut checks = vec![
         "routing_selected_replica_native_apply_restore_and_unselected_preservation",
         hover_check,
+        shared_menu_check,
+        ordinary_menu_check,
     ];
     require(
         routing::prepare(&plan, &views[..1], owner.clone(), now).is_err(),

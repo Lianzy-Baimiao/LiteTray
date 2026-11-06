@@ -7,14 +7,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, path::Path};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DailyForecast {
     pub date: String,
     pub low_c: f64,
     pub high_c: f64,
     pub description: String,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Weather {
     pub provider: Provider,
     pub city: String,
@@ -53,12 +53,12 @@ impl Weather {
         Ok(())
     }
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Attempt {
     pub provider: Provider,
     pub error: String,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WeatherResult {
     pub weather: Option<Weather>,
     pub cached: bool,

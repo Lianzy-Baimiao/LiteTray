@@ -24,7 +24,7 @@ Copy-BinaryIfChanged $BinaryPath (Join-Path $output 'LiteTray.exe')
 Copy-BinaryIfChanged $adapter (Join-Path $output 'litetray_taskbar_adapter.dll')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination (Join-Path $output 'README.md')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD-PARTY-NOTICES.md') -Destination (Join-Path $output 'THIRD-PARTY-NOTICES.md')
-$documents=@('docs/implementation-plan.md','docs/progress.md','docs/taskbar-source-binding.md','docs/live-clock-acceptance.md','docs/images/panel-light.png','docs/images/panel-dark.png','crates/taskbar-adapter/ABI.md')
+$documents=@('docs/implementation-plan.md','docs/progress.md','docs/taskbar-source-binding.md','docs/live-clock-acceptance.md','docs/images/panel-light.png','docs/images/panel-dark.png','docs/images/agenda-dark.png','crates/taskbar-adapter/ABI.md')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null
