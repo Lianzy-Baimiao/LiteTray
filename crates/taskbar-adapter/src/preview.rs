@@ -66,6 +66,22 @@ fn close(object: &Object) {
         }
     }
 }
+fn runtime() -> Result<Object, String> {
+    unsafe {
+        let init = factory(
+            "Windows.UI.Xaml.Hosting.WindowsXamlManager",
+            &IID_IWindowsXamlManagerStatics,
+        )?;
+        let mut manager = null_mut();
+        check(
+            (init
+                .table::<IWindowsXamlManagerStatics_Vtbl>()
+                .InitializeForCurrentThread)(init.raw(), &mut manager),
+            "Initialize XAML preview",
+        )?;
+        Object::owned(manager)
+    }
+}
 pub struct Preview {
     window: HWND,
     pub island: HWND,
@@ -104,18 +120,7 @@ impl Preview {
                 thread: GetCurrentThreadId(),
                 class: wide(&format!("LiteTray.ClockPreview.{}", GetCurrentThreadId())),
             };
-            let init = factory(
-                "Windows.UI.Xaml.Hosting.WindowsXamlManager",
-                &IID_IWindowsXamlManagerStatics,
-            )?;
-            let mut manager = null_mut();
-            check(
-                (init
-                    .table::<IWindowsXamlManagerStatics_Vtbl>()
-                    .InitializeForCurrentThread)(init.raw(), &mut manager),
-                "Initialize XAML preview",
-            )?;
-            preview.manager = Some(Object::owned(manager)?);
+            preview.manager = Some(runtime()?);
             let wc = WNDCLASSW {
                 lpfnWndProc: Some(procedure),
                 hInstance: GetModuleHandleW(null()),
@@ -269,7 +274,24 @@ impl Preview {
         self.command(Change::Update { frame })
     }
     pub fn heartbeat(&self) -> Result<(), String> {
+        unsafe {
+            if GetWindowThreadProcessId(self.window, null_mut()) != self.thread
+                || GetWindowThreadProcessId(self.island, null_mut()) != self.thread
+                || IsChild(self.window, self.island) == 0
+            {
+                return Err("原生预览窗口已失效".into());
+            }
+        }
         self.command(Change::Heartbeat)
+    }
+    fn status(&self) -> litetray_adapter_protocol::clock::SessionStatus {
+        self.watchdog.as_ref().map_or(
+            litetray_adapter_protocol::clock::SessionStatus::Busy,
+            Watchdog::status,
+        )
+    }
+    fn stop(&self) -> Result<(), String> {
+        self.watchdog.as_ref().ok_or("预览会话缺失")?.stop()
     }
     fn command(&self, change: Change) -> Result<(), String> {
         if unsafe { GetCurrentThreadId() } != self.thread {
@@ -295,10 +317,18 @@ impl Preview {
         unsafe { IsWindowVisible(self.window) != 0 }
     }
     pub fn show(&self) {
+        self.present(true);
+    }
+    fn present(&self, activate: bool) {
         unsafe {
-            ShowWindow(self.window, SW_SHOW);
-            SetForegroundWindow(self.window);
-            PostMessageW(self.window, WM_FOCUS_CLOCK, 0, 0);
+            ShowWindow(
+                self.window,
+                if activate { SW_SHOW } else { SW_SHOWNOACTIVATE },
+            );
+            if activate {
+                SetForegroundWindow(self.window);
+                PostMessageW(self.window, WM_FOCUS_CLOCK, 0, 0);
+            }
         }
     }
     pub fn pretranslate(&self, message: &MSG) -> bool {
@@ -730,6 +760,39 @@ unsafe extern "system" fn procedure(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
 
 /// In-process ABI: all functions must be called on the creating STA, with the
 /// module retained until Destroy. Opaque handles never cross a process.
+/// Keep one runtime alive across all preview generations on this STA. Closing
+/// its last XAML manager is terminal for the thread's XAML hosting lifetime.
+/// # Safety
+/// The error buffer is writable for capacity bytes. Call on an initialized STA.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn LiteTrayPreviewRuntimeCreate(
+    error: *mut u8,
+    capacity: usize,
+) -> *mut c_void {
+    match runtime() {
+        Ok(manager) => Box::into_raw(Box::new(manager)).cast(),
+        Err(message) => {
+            if !error.is_null() && capacity > 0 {
+                let n = message.len().min(capacity - 1);
+                unsafe {
+                    std::ptr::copy_nonoverlapping(message.as_ptr(), error, n);
+                    *error.add(n) = 0;
+                }
+            }
+            null_mut()
+        }
+    }
+}
+/// # Safety
+/// Destroy once on its creating STA, after every preview handle and native call
+/// is finished and before unloading the module. Do not restart XAML afterward.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn LiteTrayPreviewRuntimeDestroy(handle: *mut c_void) {
+    if !handle.is_null() {
+        let manager = unsafe { Box::from_raw(handle.cast::<Object>()) };
+        close(&manager);
+    }
+}
 /// # Safety
 /// All input/output buffers are valid for their supplied lengths. Call on an STA.
 #[unsafe(no_mangle)]
@@ -752,7 +815,7 @@ pub unsafe extern "system" fn LiteTrayPreviewCreate(
                 serde_json::from_value(value["owner"].clone()).map_err(|e| e.to_string())?;
             let frame =
                 serde_json::from_value(value["frame"].clone()).map_err(|e| e.to_string())?;
-            Preview::create(owner, frame, true)
+            Preview::create(owner, frame, value["visible"].as_bool().unwrap_or(true))
         })();
         match result {
             Ok(preview) => {
@@ -797,6 +860,35 @@ pub unsafe extern "system" fn LiteTrayPreviewHeartbeat(handle: *mut c_void) -> i
             return 0;
         }
         (&*handle.cast::<Preview>()).heartbeat().is_ok() as i32
+    }
+}
+/// # Safety
+/// `handle` is the live Create handle, used on its owning STA.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn LiteTrayPreviewState(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        return -1;
+    }
+    unsafe { (&*handle.cast::<Preview>()).status() as i32 }
+}
+/// # Safety
+/// `handle` is the live Create handle, used on its owning STA. Only Closed
+/// from State proves restoration; a rejected stop does not authorize unload.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn LiteTrayPreviewStop(handle: *mut c_void) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+    unsafe { (&*handle.cast::<Preview>()).stop().is_ok() as i32 }
+}
+/// # Safety
+/// `handle` is the live Create handle, used on its owning STA.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn LiteTrayPreviewPresent(handle: *mut c_void, activate: i32) {
+    if !handle.is_null() {
+        unsafe {
+            (&*handle.cast::<Preview>()).present(activate != 0);
+        }
     }
 }
 /// # Safety

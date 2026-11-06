@@ -30,6 +30,19 @@ struct Context {
     detached: Cell<bool>,
 }
 impl Context {
+    fn status(&self) -> litetray_adapter_protocol::clock::SessionStatus {
+        use litetray_adapter_protocol::clock::SessionStatus as Status;
+        let Ok(session) = self.session.try_borrow() else {
+            return Status::Busy;
+        };
+        match session.as_ref().map(Session::state) {
+            None => Status::Busy,
+            Some(State::Prepared) => Status::Prepared,
+            Some(State::Active) => Status::Active,
+            Some(State::Restoring) => Status::Restoring,
+            Some(State::Closed) => Status::Closed,
+        }
+    }
     // Detach before COM calls. Reentrant messages observe an unavailable
     // session rather than borrowing it while a native setter pumps messages.
     fn with_session(
@@ -89,6 +102,7 @@ pub struct Watchdog {
     class: Vec<u16>,
 }
 thread_local! {static WINDOWS:Cell<u32>=const{Cell::new(0)};}
+
 impl Watchdog {
     pub fn attach(session: Session) -> Result<Self, String> {
         unsafe {
@@ -236,6 +250,9 @@ impl Watchdog {
             .as_ref()
             .map_or(State::Restoring, Session::state)
     }
+    pub(crate) fn status(&self) -> litetray_adapter_protocol::clock::SessionStatus {
+        self.context.status()
+    }
     pub fn error(&self) -> Option<String> {
         self.context.error.borrow().clone()
     }
@@ -339,5 +356,25 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             return 0;
         }
         DefWindowProcW(hwnd, message, w, l)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn temporarily_unavailable_session_never_claims_closed() {
+        let context = Context {
+            session: RefCell::new(None),
+            process: null_mut(),
+            receiver: null_mut(),
+            process_id: 0,
+            error: RefCell::new(None),
+            detached: Cell::new(false),
+        };
+        let busy = litetray_adapter_protocol::clock::SessionStatus::Busy;
+        assert_eq!(context.status(), busy);
+        let _borrow = context.session.borrow_mut();
+        assert_eq!(context.status(), busy);
     }
 }

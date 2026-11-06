@@ -53,10 +53,20 @@ pub fn self_test_clock() -> Result<serde_json::Value, String> {
         let mut output = vec![0u8; 16384];
         let status = check(output.as_mut_ptr(), output.len());
         let length = output.iter().position(|b| *b == 0).ok_or("检查响应过长")?;
-        let value = serde_json::from_slice(&output[..length]).map_err(|_| "检查响应无效")?;
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&output[..length]).map_err(|_| "检查响应无效")?;
         if status != 0 {
             return Err(format!("隔离 XAML 检查失败：{value}"));
         }
+        // Each suite owns a complete STA/XAML lifetime. A closed XAML thread
+        // cannot initialize a second lifetime; recovery itself keeps its runtime.
+        let host_checks = std::thread::spawn(super::clock_preview::self_test)
+            .join()
+            .map_err(|_| "预览恢复检查线程失败")??;
+        value["checks"]
+            .as_array_mut()
+            .ok_or("检查列表无效")?
+            .extend(host_checks.into_iter().map(serde_json::Value::from));
         Ok(value)
     }
 }

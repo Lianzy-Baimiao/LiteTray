@@ -62,6 +62,12 @@ https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/Recompile
 
 宿主对每次 native 调用持有独立 Rc，直到调用返回才允许销毁预览和卸载模块。续租入口在设置对象借用之外，由主窗口计时器驱动，最长 5 秒一次；文件对话框的嵌套消息循环不会因 App 正在借用而漏掉心跳。真实对话框保持超过 58 秒后仍可显示当前时间和点击展开面板已验证。暂停消息泵或睡眠恢复属于另一个场景，仍需验收。
 
+预览新增本进程 ABI：`LiteTrayPreviewState` 返回 Busy=0、Prepared=1、Active=2、Restoring=3、Closed=4，空句柄返回 -1；未知状态和 Busy 都不证明恢复完成。`LiteTrayPreviewStop` 的成功返回仅表示调用成功，宿主仍须单独观察 Closed。宿主只在此后释放旧连接并允许新建，恢复失败三次则保留连接等待明确重试。有效原生句柄必须仍由创建 STA 持有；接口不校验任意外来指针，也不是跨进程协议。
+
+`LiteTrayPreviewRuntimeCreate/Destroy` 建立覆盖所有预览代次的线程 XAML 生命周期。每个连接额外持有该环境的 Rc，运行环境最终释放前必须销毁所有预览句柄并结束在途调用。自动恢复不卸载 DLL 或关闭最后一个 WindowsXamlManager；本机实测最后一个 manager 关闭后，同线程再次 InitializeForCurrentThread 返回 0x8000FFFF，须等整个服务退出才关闭运行环境。首次窗口创建失败也保留环境供重试。已有原生套件与宿主恢复套件在各自的 STA 中执行，不能在已经结束 XAML 生命周期的线程上重启套件。
+
+Create 输入新增可选 `visible`，省略时维持原先立即显示的行为。宿主始终隐藏创建，再通过 `LiteTrayPreviewPresent(handle, activate)` 显示；自动重建使用 SW_SHOWNOACTIVATE，只有明确打开预览才请求前台与焦点。宿主原生调用门闩将同步重入识别为 Busy，并保留连接。更新失败、原生停止和窗口失效触发恢复状态机；排队点击在真正展开面板前再次核对当前代次及 Active 状态。恢复策略仅整合进本进程预览，生产任务栏重连和模块生命周期仍未完成。
+
 自检直接调用新建 WinRT TappedRoutedEventArgs 的委托，验证几何、handled 和引用释放，不能称为模拟了操作系统输入。当前实机鼠标点击、回车打开面板和 Esc 关闭另经界面测试通过；空格和跨屏拖动仍需可靠实测。预览路径没有任务栏发现或 hook 安装；真实时钟节点、XamlRoot 与 HWND 的对应验证，以及生产会话加载和退出仍待完成。
 
 ## 原生托盘模型

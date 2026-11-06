@@ -658,11 +658,22 @@ impl App {
                         330,
                     );
                     self.button("打开原生时钟预览", 209, 574, 418, 250);
-                    self.label(
-                        "原生预览使用 LiteTray 日历，可检查两行显示、鼠标与键盘操作；拖动窗口可检查其他屏幕。任务栏接管和系统日历行为仍待验证。",
+                    self.control(
+                        "STATIC",
+                        "原生预览：尚未打开",
+                        210,
+                        SS_LEFT as u32,
                         224,
-                        480,
+                        466,
                         width - 260,
+                        58,
+                    );
+                    self.button("重试预览连接", 211, 224, 532, 190);
+                    self.label(
+                        "可检查显示与日历点击。连续故障会暂停自动恢复；任务栏接管仍待验证。",
+                        432,
+                        532,
+                        width - 460,
                         55,
                     );
                 }
@@ -1098,6 +1109,16 @@ impl App {
             if let Some(preview) = &self.preview {
                 let _ = preview.update(&clock_preview::frame(&self.draft.clock, &summary));
             }
+            if self.page == 1 {
+                set_text(
+                    self.field(210),
+                    &self
+                        .preview
+                        .as_ref()
+                        .map_or_else(|| "原生预览：尚未打开".into(), |p| p.status_text()),
+                );
+                EnableWindow(self.field(211), i32::from(self.preview.is_some()));
+            }
             if !self.panel.is_null() {
                 let weather = GetDlgItem(self.panel, WEATHER_VIEW as i32);
                 set_text(weather, &self.weather_text());
@@ -1269,8 +1290,8 @@ impl App {
             };
             // An existing native preview owns a leased clock session even
             // while hidden; keep updates within its heartbeat budget.
-            let interval = if self.preview.is_some() {
-                interval.min(5000)
+            let interval = if let Some(preview) = &self.preview {
+                interval.min(preview.tick_millis())
             } else {
                 interval
             };
@@ -1586,6 +1607,14 @@ impl App {
                             Err(e) => self.set_status(e),
                         }
                     }
+                    self.update_views();
+                    self.schedule_tick();
+                }
+                211 => {
+                    if let Some(preview) = &self.preview {
+                        preview.retry();
+                    }
+                    self.update_views();
                     self.schedule_tick();
                 }
                 40 => {
@@ -1896,7 +1925,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     Some(1)
                 }
                 WM_CLOCK_ACTIVATED => {
-                    if let Some(event) = app.pending_activation.take() {
+                    if let Some(event) = app.pending_activation.take()
+                        && app
+                            .preview
+                            .as_ref()
+                            .is_some_and(|p| p.owns_activation(&event))
+                    {
                         app.show_panel_at(event.anchor);
                     }
                     Some(0)

@@ -10,6 +10,29 @@ pub const MAX_CLOCKS: usize = 16;
 /// A nonzero native return value acknowledges application; zero rejects it.
 pub const COMMAND_TAG: usize = 0x4c544103;
 
+/// In-process status ABI. Busy/unknown never counts as a restoration proof.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionStatus {
+    Busy = 0,
+    Prepared = 1,
+    Active = 2,
+    Restoring = 3,
+    Closed = 4,
+}
+impl SessionStatus {
+    pub fn from_code(value: i32) -> Result<Self, String> {
+        match value {
+            0 => Ok(Self::Busy),
+            1 => Ok(Self::Prepared),
+            2 => Ok(Self::Active),
+            3 => Ok(Self::Restoring),
+            4 => Ok(Self::Closed),
+            _ => Err("未知原生会话状态".into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Owner {

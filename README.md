@@ -60,6 +60,7 @@ LiteTray.exe --probe-taskbar [output.json]
 LiteTray.exe --prepare-symbols [existing-symbol-cache]
 LiteTray.exe --inspect-taskbar [output.json]
 LiteTray.exe --self-test-clock
+LiteTray.exe --self-test-preview-recovery
 LiteTray.exe --preview-windhawk <profile.json> [new-report.json]
 ```
 
@@ -81,13 +82,15 @@ LiteTray.exe --preview-windhawk <profile.json> [new-report.json]
 
 预览的点击和文字由同一会话管理，失联或停止时同时解除输入和恢复原值。文件选择对话框保持打开超过 58 秒后，时钟和点击仍正常，已做实机检查；睡眠恢复与真实任务栏仍需单独验收。
 
+预览会话意外停止后，宿主确认旧会话已关闭，再按 1 秒、5 秒间隔尝试重建；连续三次故障暂停自动恢复，运行稳定 60 秒后清除连续失败计数。原状态恢复连续失败时保留旧连接并暂停重建，不能直接丢弃旧连接。时钟页显示状态和原因，可使用“重试预览连接”；自动重建保留隐藏状态，显示时不主动请求焦点。旧会话排队中的点击会被丢弃。以上恢复目前只用于独立预览，尚未连接 Explorer。
+
 面板按触发控件的物理屏幕矩形定位，托盘入口优先使用 Shell 返回的图标矩形；布局考虑工作区边界、负坐标和 DPI。不同任务栏方向与小屏缩放已做几何测试，真实混合 DPI 多屏组合仍待验收。
 
 `--probe-taskbar` 通过同目录 Rust DLL 在 Explorer 任务栏线程执行一次受限只读探测，返回窗口树与模块身份后移除 hook，不修改托盘。`--prepare-symbols` 校验当前 taskbar.dll 的 PE/PDB 身份，优先使用独立缓存，也可显式导入匹配的已有 PDB；缺失时从 Microsoft 符号服务器下载，使用 DbgHelp 验证 GUID/age 后保存按模块 SHA-256 命名的符号映射及完整接口布局。`--inspect-taskbar` 的代码进一步核对加载模块和函数入口，读取受限 XAML 树；当前未完成实机验收，不会启用写入。
 
 只读检查报告的 `topology` 字段进一步限定原生托盘容器，识别通知图标、隐藏图标、系统图标、控制中心、时钟与通知入口。时钟只选择独立的两行文字容器；重复节点、未知类型、不可见或未布局状态会报告不可用。识别结果可以准备可恢复的时钟/模型事务，已在本进程夹具中验证；真实 SystemTray 类、显示器选择、点击路由和接入仍待验收。
 
-`--self-test-clock` 在 **LiteTray 自己进程** 的新 XAML 控件中检查时钟文本和样式写入、原值/原绑定恢复、部分失败回滚、会话更新、外部修改保留与失联恢复。另启动同一程序的隔离测试子进程，验证真实跨进程更新和子进程结束后的自动恢复，并创建隐藏的 XAML Island 验证输入订阅与释放。托盘模型事务共享 DataContext、ItemsSource 和非可视 Content；独立 island 验证集合增删传播、来源替换/清空、原绑定恢复及与时钟一起停止。当前合计 101 个隔离场景，约 20 秒，包含选定目标、独立托盘会话、可见性恢复和真实 Windows 定时器的 15 秒心跳超时验证。它不访问 Explorer，也不修改任务栏。适合开发检查，不代表已经实现任务栏接管：
+`--self-test-clock` 在 **LiteTray 自己进程** 的新 XAML 控件中检查时钟文本和样式写入、原值/原绑定恢复、部分失败回滚、会话更新、外部修改保留与失联恢复。另启动同一程序的隔离测试子进程，验证真实跨进程更新和子进程结束后的自动恢复，并创建隐藏的 XAML Island 验证输入订阅与释放。托盘模型事务共享 DataContext、ItemsSource 和非可视 Content；独立 island 验证集合增删传播、来源替换/清空、原绑定恢复及与时钟一起停止。当前合计 109 个隔离场景，约 20 秒，包含选定目标、独立托盘会话、可见性恢复、宿主预览重建和真实 Windows 定时器的 15 秒心跳超时验证。`--self-test-preview-recovery` 可单独运行其中 8 项宿主恢复检查，使用真实 DLL 和隐藏窗口，退避时间由测试控制，无需等待超时。它们不访问 Explorer，也不修改任务栏。适合开发检查，不代表已经实现任务栏接管：
 
 ```powershell
 .\tools\Test-XamlClock.ps1 -BinaryPath <release目录>\LiteTray.exe
