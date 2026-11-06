@@ -144,11 +144,15 @@ fn run() -> Result<(), String> {
         }
         Some("--help") => {
             println!(
-                "LiteTray [--settings | --calendar | --background | --diagnose [file] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-clock | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
+                "LiteTray [--settings | --calendar | --clock-preview | --background | --diagnose [file] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-clock | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
             );
             Ok(())
         }
-        None | Some("--settings") | Some("--calendar") | Some("--background") => ui::run(
+        None
+        | Some("--settings")
+        | Some("--calendar")
+        | Some("--background")
+        | Some("--clock-preview") => ui::run(
             config,
             arguments
                 .first()

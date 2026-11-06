@@ -3,8 +3,10 @@
 //! after the synchronous roundtrip completes.
 #![cfg(windows)]
 mod clock;
+mod input;
 mod inspect;
 mod lifecycle_checks;
+mod preview;
 mod session;
 mod watchdog;
 mod xaml;

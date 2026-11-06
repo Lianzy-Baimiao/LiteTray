@@ -39,8 +39,21 @@ https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/host-standard-c
 
 每个已写属性保存实际 local value，后续更新和恢复先核对属性归属；其他组件新写的值、尺寸或绑定会被保留。检测到冲突会停止会话。相同可见文本上的新绑定也视为外部写入。无法区分外部组件再次写入完全相同的普通值，这不构成通用跨插件锁。
 
-隔离检查目前覆盖 37 个场景，包含两组真实 XAML 控件、配置更新、乱序/其他会话消息、超时、退出、窗口消失、外部写入冲突，以及实际 WM_COPYDATA 的包边界、跨线程样式更新、跨进程文字更新和宿主进程退出。实等 15 秒验证原生计时器自动恢复；12 次完整启停通过原生消息停止，再比较进程句柄数与 USER 对象数，确认该检查场景没有累积原生资源。此结果不代表长期运行或 Explorer 的内存增量测量。
+隔离检查目前覆盖 41 个场景，包含两组真实 XAML 控件、配置更新、乱序/其他会话消息、超时、退出、窗口消失、外部写入冲突，以及实际 WM_COPYDATA 的包边界、跨线程样式更新、跨进程文字更新和宿主进程退出。新增隐藏 XAML Island 的输入事件订阅/解除、事件发布失败保留默认行为、坐标和委托释放检查。实等 15 秒验证原生计时器自动恢复；12 次完整启停通过原生消息停止，再比较进程句柄数与 USER 对象数，确认该检查场景没有累积原生资源。此结果不代表长期运行或 Explorer 的内存增量测量。
 
 跨进程场景启动同一 LiteTray.exe 的内部测试子进程，创建独立 HWND 并发送一次更新。子进程核对目标为同路径 LiteTray 的 watchdog 窗口，父进程验证实际 XAML 文本后只结束自己创建的测试子进程，再等待原生计时器恢复。测试有有界输入、响应和进程存活时限，不读取用户配置、不发现任务栏、不安装 hook。
 
 上述会话和原生命令端点目前由隔离检查创建，尚未连接真实任务栏。长期接管仍需：原生节点识别与实际显示协调、点击转发、生产会话加载/退出协议、Explorer 重启恢复，以及多屏托盘复制。不能将隔离验证结果作为这些能力的完成证据。
+
+## 时钟输入与独立预览
+
+`input.rs` 在 XAML 所属 STA 上订阅 Tapped/KeyDown。委托只暴露 IUnknown 和对应 delegate IID，不声明 Agile；上下文使用线程绑定引用，输入回调只计算控件矩形和投递有界事件。键盘分支限制为 Enter/Space，并过滤 WasKeyDown 重复；已经 handled 的输入保持原处理。发送成功才标记事件 handled，发送失败保持默认行为。解除订阅先停用上下文再移除两个 token；若原生移除失败，模块保持映射至进程退出，避免残留委托调用已卸载代码。
+
+几何计算使用 TransformToVisual(XamlRoot.Content)、TransformBounds 和 RasterizationScale，再加已验证的 island HWND 客户区原点。调用者必须证明 HWND 对应同一个 XAML root，不能把任务栏外层 HWND 直接代入。协议保留有符号物理坐标，宿主校验已建立会话、时钟 ID、源窗口和递增序号，后续异步处理弹窗，避免在输入调用栈里创建 UI。
+
+`preview.rs` 通过 DesktopWindowXamlSource 在本进程的独立窗口承载真实两行时钟，使用同一 ClockLease 和 Subscription。原生 IDesktopWindowXamlSourceNative/Native2 的 IID 与三个方法槽来自 Microsoft SDK 头文件：
+https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/windows.ui.xaml.hosting.desktopwindowxamlsource.h
+
+预览模块必须留在创建线程，按“解除输入、恢复属性、关闭 XAML source、销毁窗口、关闭 manager”的顺序退出。焦点使用原生 Control.Focus，且在首次布局与切回窗口后投递焦点请求。宿主只对消息所属窗口使用 IsDialogMessage，防止设置页抢走预览的 Tab/Enter；面板处理 IDCANCEL，避免 Esc 被原生对话框预处理吞掉。
+
+自检直接调用新建 WinRT TappedRoutedEventArgs 的委托，验证几何、handled 和引用释放，不能称为模拟了操作系统输入。当前实机鼠标点击、回车打开面板和 Esc 关闭另经界面测试通过；空格和跨屏拖动仍需可靠实测。预览路径没有任务栏发现或 hook 安装，真实时钟订阅归属与 watchdog 生命周期尚需生产会话整合。

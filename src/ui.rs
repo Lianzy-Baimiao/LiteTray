@@ -3,7 +3,8 @@ use litetray::{
     clock,
     config::{self, Appearance, ClickAction, Config, MonitorScope, Provider},
     http, migration,
-    platform::{credentials, diagnostics, lunar, startup, wide},
+    platform::{clock_preview, credentials, diagnostics, lunar, startup, wide},
+    popup,
     update::{self, UpdateStatus},
     weather,
 };
@@ -31,6 +32,8 @@ const WM_TRAY: u32 = WM_APP + 1;
 const WM_RESULT: u32 = WM_APP + 2;
 const WM_SHOW_SETTINGS: u32 = WM_APP + 3;
 const WM_SHOW_PANEL: u32 = WM_APP + 4;
+const WM_CLOCK_ACTIVATED: u32 = WM_APP + 5;
+const WM_PREVIEW_CLOCK: u32 = WM_APP + 6;
 const NAV: u16 = 100;
 const SAVE: u16 = 20;
 const STATUS: u16 = 900;
@@ -73,6 +76,8 @@ struct App {
     hwnd: HWND,
     panel: HWND,
     panel_font: HFONT,
+    preview: Option<clock_preview::Preview>,
+    pending_activation: Option<litetray_adapter_protocol::activation::Activation>,
     children: Vec<HWND>,
     fields: HashMap<u16, HWND>,
     font: HFONT,
@@ -116,7 +121,9 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             if !other.is_null() {
                 PostMessageW(
                     other,
-                    if mode == "--calendar" {
+                    if mode == "--clock-preview" {
+                        WM_PREVIEW_CLOCK
+                    } else if mode == "--calendar" {
                         WM_SHOW_PANEL
                     } else {
                         WM_SHOW_SETTINGS
@@ -179,6 +186,8 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             hwnd,
             panel: null_mut(),
             panel_font: null_mut(),
+            preview: None,
+            pending_activation: None,
             children: vec![],
             fields: HashMap::new(),
             font: null_mut(),
@@ -234,7 +243,9 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
         }
         STATE.with(|state| *state.borrow_mut() = Some(app));
         if mode != "--background" {
-            if mode == "--calendar" {
+            if mode == "--clock-preview" {
+                PostMessageW(hwnd, WM_PREVIEW_CLOCK, 0, 0);
+            } else if mode == "--calendar" {
                 PostMessageW(hwnd, WM_SHOW_PANEL, 0, 0);
             } else {
                 ShowWindow(hwnd, SW_SHOW);
@@ -244,9 +255,25 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
         SetTimer(hwnd, 1, 1000, None);
         let mut message: MSG = std::mem::zeroed();
         while GetMessageW(&mut message, null_mut(), 0, 0) > 0 {
+            // App and Preview remain alive until after this message loop. Do
+            // not hold a RefCell borrow while XAML can deliver routed input.
+            let translate = STATE.with(|s| {
+                s.borrow()
+                    .as_ref()
+                    .and_then(|a| a.preview.as_ref())
+                    .map(|p| p.pretranslator())
+            });
+            if let Some((translate, handle)) = translate
+                && translate(handle, &message) != 0
+            {
+                continue;
+            }
             let panel = STATE.with(|s| s.borrow().as_ref().map(|a| a.panel).unwrap_or(null_mut()));
-            if (!panel.is_null() && IsDialogMessageW(panel, &message) != 0)
-                || IsDialogMessageW(hwnd, &message) != 0
+            if (!panel.is_null()
+                && (message.hwnd == panel || IsChild(panel, message.hwnd) != 0)
+                && IsDialogMessageW(panel, &message) != 0)
+                || ((message.hwnd == hwnd || IsChild(hwnd, message.hwnd) != 0)
+                    && IsDialogMessageW(hwnd, &message) != 0)
             {
                 continue;
             }
@@ -255,6 +282,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
         }
         STATE.with(|s| {
             if let Some(mut app) = s.borrow_mut().take() {
+                app.preview.take();
                 app.remove_tray();
                 app.release_resources();
             }
@@ -629,8 +657,9 @@ impl App {
                         418,
                         330,
                     );
+                    self.button("打开原生时钟预览", 209, 574, 418, 250);
                     self.label(
-                        "任务栏接管适配尚在开发。这里保存显示偏好，日历和天气面板已经可独立使用。",
+                        "原生预览使用 LiteTray 日历，可检查两行显示、鼠标与键盘操作；拖动窗口可检查其他屏幕。任务栏接管和系统日历行为仍待验证。",
                         224,
                         480,
                         width - 260,
@@ -1020,6 +1049,11 @@ impl App {
                 );
                 set_text(self.field(WEATHER_VIEW), &self.weather_text());
             }
+            if let Some(preview) = &self.preview
+                && preview.visible()
+            {
+                let _ = preview.update(&clock_preview::frame(&self.draft.clock, &summary));
+            }
             if !self.panel.is_null() {
                 let weather = GetDlgItem(self.panel, WEATHER_VIEW as i32);
                 set_text(weather, &self.weather_text());
@@ -1179,9 +1213,11 @@ impl App {
     unsafe fn schedule_tick(&self) {
         unsafe {
             let visible = IsWindowVisible(self.hwnd) != 0
-                || (!self.panel.is_null() && IsWindowVisible(self.panel) != 0);
+                || (!self.panel.is_null() && IsWindowVisible(self.panel) != 0)
+                || self.preview.as_ref().is_some_and(|p| p.visible());
             let interval = if visible
-                && (clock::needs_second_ticks(&self.draft.clock) || self.saved.clock.show_seconds)
+                && (clock::needs_second_ticks(&self.draft.clock)
+                    || clock::needs_second_ticks(&self.saved.clock))
             {
                 1000
             } else {
@@ -1249,14 +1285,52 @@ impl App {
     }
     unsafe fn show_panel(&mut self) {
         unsafe {
-            if !self.panel.is_null() && IsWindowVisible(self.panel) != 0 {
+            // Prefer the actual tray icon bounds for keyboard activation too.
+            let id = NOTIFYICONIDENTIFIER {
+                cbSize: size_of::<NOTIFYICONIDENTIFIER>() as u32,
+                hWnd: self.hwnd,
+                uID: 1,
+                guidItem: std::mem::zeroed(),
+            };
+            let mut rect: RECT = std::mem::zeroed();
+            if Shell_NotifyIconGetRect(&id, &mut rect) < 0 {
+                let mut point = POINT { x: 0, y: 0 };
+                GetCursorPos(&mut point);
+                rect = RECT {
+                    left: point.x,
+                    top: point.y,
+                    right: point.x.saturating_add(1),
+                    bottom: point.y.saturating_add(1),
+                };
+            }
+            self.show_panel_at(popup::Rect {
+                left: rect.left,
+                top: rect.top,
+                right: rect.right,
+                bottom: rect.bottom,
+            });
+        }
+    }
+    unsafe fn show_panel_at(&mut self, anchor: popup::Rect) {
+        unsafe {
+            if anchor.validate().is_err() {
+                return;
+            }
+            let rect = RECT {
+                left: anchor.left,
+                top: anchor.top,
+                right: anchor.right,
+                bottom: anchor.bottom,
+            };
+            let monitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST);
+            if !self.panel.is_null()
+                && IsWindowVisible(self.panel) != 0
+                && MonitorFromWindow(self.panel, MONITOR_DEFAULTTONEAREST) == monitor
+            {
                 ShowWindow(self.panel, SW_HIDE);
                 return;
             }
             self.close_panel();
-            let mut point = std::mem::zeroed();
-            GetCursorPos(&mut point);
-            let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
             let mut info: MONITORINFO = std::mem::zeroed();
             info.cbSize = size_of::<MONITORINFO>() as u32;
             if GetMonitorInfoW(monitor, &mut info) == 0 {
@@ -1267,8 +1341,8 @@ impl App {
                 wide(PANEL_CLASS).as_ptr(),
                 wide("LiteTray 日历与天气").as_ptr(),
                 WS_POPUP | WS_BORDER | WS_CLIPCHILDREN,
-                point.x,
-                point.y,
+                anchor.left,
+                anchor.top,
                 1,
                 1,
                 self.hwnd,
@@ -1284,14 +1358,29 @@ impl App {
             // Derive scale from the popup's actual monitor. Settings can be on
             // a completely different display with a different effective DPI.
             let dpi = GetDpiForWindow(hwnd).max(96) as i32;
-            let scale = |value: i32| value * dpi / 96;
+            let work = popup::Rect {
+                left: info.rcWork.left,
+                top: info.rcWork.top,
+                right: info.rcWork.right,
+                bottom: info.rcWork.bottom,
+            };
+            let placement = match popup::place(anchor, work, dpi as u32) {
+                Ok(p) => p,
+                Err(e) => {
+                    self.close_panel();
+                    self.set_status(e);
+                    return;
+                }
+            };
+            let scale = |value: i32| {
+                (i64::from(value) * i64::from(dpi) * i64::from(placement.scale_percent) / 9600)
+                    .max(1) as i32
+            };
             self.panel_font = make_font(scale(15), 400, "Segoe UI");
-            let width = scale(680);
-            let height = scale(445);
-            let x = (point.x - width + scale(30))
-                .max(info.rcWork.left)
-                .min((info.rcWork.right - width).max(info.rcWork.left));
-            let y = (info.rcWork.bottom - height - scale(10)).max(info.rcWork.top);
+            let width = placement.rect.right - placement.rect.left;
+            let height = placement.rect.bottom - placement.rect.top;
+            let x = placement.rect.left;
+            let y = placement.rect.top;
             SetWindowPos(
                 hwnd,
                 null_mut(),
@@ -1419,6 +1508,30 @@ impl App {
                 }
                 UPDATE => self.start_update(),
                 CALENDAR => self.show_panel(),
+                209 => {
+                    if let Err(e) = self.collect_page().and_then(|_| self.draft.validate()) {
+                        self.set_status(e);
+                        return false;
+                    }
+                    let summary = self
+                        .weather
+                        .as_ref()
+                        .and_then(|r| r.weather.as_ref())
+                        .map(|w| w.summary())
+                        .unwrap_or_else(|| "天气暂无数据".into());
+                    if let Some(preview) = &self.preview {
+                        preview.show();
+                    } else {
+                        match clock_preview::Preview::open(
+                            self.hwnd,
+                            clock_preview::frame(&self.draft.clock, &summary),
+                        ) {
+                            Ok(preview) => self.preview = Some(preview),
+                            Err(e) => self.set_status(e),
+                        }
+                    }
+                    self.schedule_tick();
+                }
                 40 => {
                     ShowWindow(self.panel, SW_HIDE);
                     ShowWindow(self.hwnd, SW_SHOW);
@@ -1675,6 +1788,44 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 return Some(0);
             }
             match msg {
+                WM_PREVIEW_CLOCK => {
+                    app.command(209);
+                    Some(0)
+                }
+                WM_COPYDATA => {
+                    use litetray_adapter_protocol::activation::{EVENT_TAG, MAX_EVENT};
+                    if l == 0 || app.pending_activation.is_some() {
+                        return Some(0);
+                    }
+                    let copy =
+                        &*(l as *const windows_sys::Win32::System::DataExchange::COPYDATASTRUCT);
+                    if copy.dwData != EVENT_TAG
+                        || copy.cbData == 0
+                        || copy.cbData as usize > MAX_EVENT
+                        || copy.lpData.is_null()
+                    {
+                        return Some(0);
+                    }
+                    let Some(preview) = &mut app.preview else {
+                        return Some(0);
+                    };
+                    let bytes =
+                        std::slice::from_raw_parts(copy.lpData.cast::<u8>(), copy.cbData as usize);
+                    let Ok(event) = preview.accept(w as HWND, bytes) else {
+                        return Some(0);
+                    };
+                    if PostMessageW(hwnd, WM_CLOCK_ACTIVATED, 0, 0) == 0 {
+                        return Some(0);
+                    }
+                    app.pending_activation = Some(event);
+                    Some(1)
+                }
+                WM_CLOCK_ACTIVATED => {
+                    if let Some(event) = app.pending_activation.take() {
+                        app.show_panel_at(event.anchor);
+                    }
+                    Some(0)
+                }
                 WM_COMMAND => {
                     let id = (w & 0xffff) as u16;
                     if (w >> 16) == BN_CLICKED as usize {
@@ -1690,6 +1841,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 WM_TIMER => {
                     if IsWindowVisible(hwnd) != 0
                         || (!app.panel.is_null() && IsWindowVisible(app.panel) != 0)
+                        || app.preview.as_ref().is_some_and(|p| p.visible())
                     {
                         app.update_views();
                     }
@@ -1777,6 +1929,11 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             }
         });
         if quit {
+            STATE.with(|s| {
+                if let Some(app) = s.borrow_mut().as_mut() {
+                    app.preview.take();
+                }
+            });
             DestroyWindow(hwnd);
             return 0;
         }
@@ -1804,7 +1961,7 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM)
         }
         if msg == WM_COMMAND {
             let id = (w & 0xffff) as u16;
-            if id == 41 {
+            if id == 41 || id == IDCANCEL as u16 {
                 ShowWindow(hwnd, SW_HIDE);
                 return 0;
             }

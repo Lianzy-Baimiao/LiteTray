@@ -15,6 +15,18 @@ fn main() {
         "Windows.UI.Xaml.IFrameworkElement2",
         "Windows.UI.Xaml.IFrameworkElementStatics",
         "Windows.UI.Xaml.IUIElement10",
+        "Windows.UI.Xaml.IUIElement",
+        "Windows.UI.Xaml.Controls.IControl",
+        "Windows.UI.Xaml.FocusState",
+        "Windows.UI.Xaml.Input.ITappedRoutedEventArgs",
+        "Windows.UI.Xaml.Input.IKeyRoutedEventArgs",
+        "Windows.UI.Xaml.Hosting.IDesktopWindowXamlSource",
+        "Windows.UI.Xaml.Media.IGeneralTransform",
+        "Windows.Foundation.Point",
+        "Windows.Foundation.Rect",
+        "Windows.Foundation.Size",
+        "Windows.System.VirtualKey",
+        "Windows.UI.Core.CorePhysicalKeyStatus",
         "Windows.UI.Xaml.IXamlRoot",
         "Windows.UI.Xaml.IDependencyObject",
         "Windows.UI.Xaml.IDependencyPropertyStatics",
@@ -41,7 +53,6 @@ fn main() {
     let getter = "unsafe extern \"system\" fn(*mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> windows_sys::core::HRESULT";
     let patches=[
         ("    XamlRoot: usize,".to_owned(),format!("    pub XamlRoot: {getter},")),
-        ("    Content: usize,".to_owned(),format!("    pub Content: {getter},")),
         ("    Parent: usize,".to_owned(),format!("    pub Parent: {getter},")),
         ("    TextProperty: usize,".to_owned(),format!("    pub TextProperty: {getter},")),
         ("    WidthProperty: usize,".to_owned(),format!("    pub WidthProperty: {getter},")),
@@ -54,6 +65,12 @@ fn main() {
         ("    GetChildrenCount: usize,".to_owned(),"    pub GetChildrenCount: unsafe extern \"system\" fn(*mut core::ffi::c_void, *mut core::ffi::c_void, *mut i32) -> windows_sys::core::HRESULT,".into()),
         ("    GetParent: usize,".to_owned(),"    pub GetParent: unsafe extern \"system\" fn(*mut core::ffi::c_void, *mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> windows_sys::core::HRESULT,".into()),
     ];
+    // Content is present on both XamlRoot and DesktopWindowXamlSource.
+    assert_eq!(source.matches("    Content: usize,").count(), 2);
+    source = source.replace(
+        "    Content: usize,",
+        &format!("    pub Content: {getter},"),
+    );
     for (before, after) in patches {
         assert_eq!(
             source.matches(&before).count(),
@@ -74,6 +91,10 @@ fn main() {
     }
     for (method, signature) in [
         (
+            "SetContent",
+            "*mut core::ffi::c_void, *mut core::ffi::c_void",
+        ),
+        (
             "SetValue",
             "*mut core::ffi::c_void, *mut core::ffi::c_void, *mut core::ffi::c_void",
         ),
@@ -90,6 +111,14 @@ fn main() {
         assert_eq!(source.matches(&before).count(), 1);
         source=source.replace(&before,&format!("    pub {method}: unsafe extern \"system\" fn({signature}) -> windows_sys::core::HRESULT,"));
     }
+    for method in ["Tapped", "KeyDown"] {
+        let before = format!("    {method}: usize,");
+        assert_eq!(source.matches(&before).count(), 1);
+        source = source.replace(&before, &format!("    pub {method}: unsafe extern \"system\" fn(*mut core::ffi::c_void, *mut core::ffi::c_void, *mut i64) -> windows_sys::core::HRESULT,"));
+    }
+    let before = "    TransformToVisual: usize,";
+    assert_eq!(source.matches(before).count(), 1);
+    source = source.replace(before, "    pub TransformToVisual: unsafe extern \"system\" fn(*mut core::ffi::c_void, *mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> windows_sys::core::HRESULT,");
     std::fs::write(&output, source).unwrap();
     let status = std::process::Command::new("rustfmt")
         .arg(&output)

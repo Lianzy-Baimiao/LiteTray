@@ -5,5 +5,6 @@ pub mod migration;
 pub mod pe;
 #[cfg(windows)]
 pub mod platform;
+pub mod popup;
 pub mod update;
 pub mod weather;

@@ -8,6 +8,25 @@
     clippy::all
 )]
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CorePhysicalKeyStatus {
+    pub RepeatCount: u32,
+    pub ScanCode: u32,
+    pub IsExtendedKey: bool,
+    pub IsMenuKeyDown: bool,
+    pub WasKeyDown: bool,
+    pub IsKeyReleased: bool,
+}
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct FocusState(pub i32);
+impl FocusState {
+    pub const Unfocused: Self = Self(0i32);
+    pub const Pointer: Self = Self(1i32);
+    pub const Keyboard: Self = Self(2i32);
+    pub const Programmatic: Self = Self(3i32);
+}
 pub const IID_IBindingExpression: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0x516a19a5_c2fd_4a9e_9fd3_9aa42f995a3c);
 #[repr(C)]
@@ -29,6 +48,72 @@ pub const IID_IBindingExpressionBase: windows_sys::core::GUID =
 #[repr(C)]
 pub struct IBindingExpressionBase_Vtbl {
     pub base__: windows_sys::core::IInspectable_Vtbl,
+}
+pub const IID_IControl: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0xa8912263_2951_4f58_a9c5_5a134eaa7f07);
+#[repr(C)]
+pub struct IControl_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    pub FontSize:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut f64) -> windows_sys::core::HRESULT,
+    pub SetFontSize:
+        unsafe extern "system" fn(*mut core::ffi::c_void, f64) -> windows_sys::core::HRESULT,
+    FontFamily: usize,
+    SetFontFamily: usize,
+    FontWeight: usize,
+    SetFontWeight: usize,
+    FontStyle: usize,
+    SetFontStyle: usize,
+    FontStretch: usize,
+    SetFontStretch: usize,
+    pub CharacterSpacing:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut i32) -> windows_sys::core::HRESULT,
+    pub SetCharacterSpacing:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i32) -> windows_sys::core::HRESULT,
+    Foreground: usize,
+    SetForeground: usize,
+    pub IsTabStop:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub SetIsTabStop:
+        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_sys::core::HRESULT,
+    pub IsEnabled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub SetIsEnabled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_sys::core::HRESULT,
+    pub TabIndex:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut i32) -> windows_sys::core::HRESULT,
+    pub SetTabIndex:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i32) -> windows_sys::core::HRESULT,
+    TabNavigation: usize,
+    SetTabNavigation: usize,
+    Template: usize,
+    SetTemplate: usize,
+    Padding: usize,
+    SetPadding: usize,
+    HorizontalContentAlignment: usize,
+    SetHorizontalContentAlignment: usize,
+    VerticalContentAlignment: usize,
+    SetVerticalContentAlignment: usize,
+    Background: usize,
+    SetBackground: usize,
+    BorderThickness: usize,
+    SetBorderThickness: usize,
+    BorderBrush: usize,
+    SetBorderBrush: usize,
+    pub FocusState: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut FocusState,
+    ) -> windows_sys::core::HRESULT,
+    IsEnabledChanged: usize,
+    pub RemoveIsEnabledChanged:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    pub ApplyTemplate:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub Focus: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        FocusState,
+        *mut bool,
+    ) -> windows_sys::core::HRESULT,
 }
 pub const IID_IDependencyObject: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0x5c526665_f60e_4912_af59_5fe0680f089d);
@@ -72,6 +157,29 @@ pub struct IDependencyPropertyStatics_Vtbl {
     ) -> windows_sys::core::HRESULT,
     Register: usize,
     RegisterAttached: usize,
+}
+pub const IID_IDesktopWindowXamlSource: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0xd585bfe1_00ff_51be_ba1d_a1329956ea0a);
+#[repr(C)]
+pub struct IDesktopWindowXamlSource_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    pub Content: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    pub SetContent: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    pub HasFocus:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    TakeFocusRequested: usize,
+    pub RemoveTakeFocusRequested:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    GotFocus: usize,
+    pub RemoveGotFocus:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    NavigateFocus: usize,
 }
 pub const IID_IFontFamilyFactory: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0xd5603377_3dae_4dcd_af09_f9498e9ec659);
@@ -234,6 +342,47 @@ pub struct IFrameworkElementStatics_Vtbl {
     StyleProperty: usize,
     FlowDirectionProperty: usize,
 }
+pub const IID_IGeneralTransform: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0xa06798b7_a2ec_415f_ade2_eade9333f2c7);
+#[repr(C)]
+pub struct IGeneralTransform_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    Inverse: usize,
+    pub TransformPoint: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        Point,
+        *mut Point,
+    ) -> windows_sys::core::HRESULT,
+    pub TryTransform: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        Point,
+        *mut Point,
+        *mut bool,
+    ) -> windows_sys::core::HRESULT,
+    pub TransformBounds: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        Rect,
+        *mut Rect,
+    ) -> windows_sys::core::HRESULT,
+}
+pub const IID_IKeyRoutedEventArgs: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0xd4cd3dfe_4079_42e9_a39a_3095d3f049c6);
+#[repr(C)]
+pub struct IKeyRoutedEventArgs_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    pub Key: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut VirtualKey,
+    ) -> windows_sys::core::HRESULT,
+    pub KeyStatus: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut CorePhysicalKeyStatus,
+    ) -> windows_sys::core::HRESULT,
+    pub Handled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub SetHandled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_sys::core::HRESULT,
+}
 pub const IID_IPropertyValue: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0x4bd682dd_7554_40e9_9a9b_82654ede7e62);
 #[repr(C)]
@@ -277,9 +426,12 @@ pub struct IPropertyValue_Vtbl {
     ) -> windows_sys::core::HRESULT,
     GetDateTime: usize,
     GetTimeSpan: usize,
-    GetPoint: usize,
-    GetSize: usize,
-    GetRect: usize,
+    pub GetPoint:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut Point) -> windows_sys::core::HRESULT,
+    pub GetSize:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut Size) -> windows_sys::core::HRESULT,
+    pub GetRect:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut Rect) -> windows_sys::core::HRESULT,
     pub GetUInt8Array: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *mut u32,
@@ -352,9 +504,21 @@ pub struct IPropertyValue_Vtbl {
     ) -> windows_sys::core::HRESULT,
     GetDateTimeArray: usize,
     GetTimeSpanArray: usize,
-    GetPointArray: usize,
-    GetSizeArray: usize,
-    GetRectArray: usize,
+    pub GetPointArray: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut u32,
+        *mut *mut Point,
+    ) -> windows_sys::core::HRESULT,
+    pub GetSizeArray: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut u32,
+        *mut *mut Size,
+    ) -> windows_sys::core::HRESULT,
+    pub GetRectArray: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut u32,
+        *mut *mut Rect,
+    ) -> windows_sys::core::HRESULT,
 }
 pub const IID_IPropertyValueStatics: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0x629bdbc8_d932_4ff4_96b9_8d96c5c1e858);
@@ -437,9 +601,21 @@ pub struct IPropertyValueStatics_Vtbl {
     ) -> windows_sys::core::HRESULT,
     CreateDateTime: usize,
     CreateTimeSpan: usize,
-    CreatePoint: usize,
-    CreateSize: usize,
-    CreateRect: usize,
+    pub CreatePoint: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        Point,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    pub CreateSize: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        Size,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    pub CreateRect: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        Rect,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
     pub CreateUInt8Array: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         u32,
@@ -526,9 +702,36 @@ pub struct IPropertyValueStatics_Vtbl {
     ) -> windows_sys::core::HRESULT,
     CreateDateTimeArray: usize,
     CreateTimeSpanArray: usize,
-    CreatePointArray: usize,
-    CreateSizeArray: usize,
-    CreateRectArray: usize,
+    pub CreatePointArray: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        u32,
+        *const Point,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    pub CreateSizeArray: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        u32,
+        *const Size,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    pub CreateRectArray: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        u32,
+        *const Rect,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+}
+pub const IID_ITappedRoutedEventArgs: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0xa099e6be_e624_459a_bb1d_e05c73e2cc66);
+#[repr(C)]
+pub struct ITappedRoutedEventArgs_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    PointerDeviceType: usize,
+    pub Handled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub SetHandled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_sys::core::HRESULT,
+    GetPosition: usize,
 }
 pub const IID_ITextBlock: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0xae2d9271_3b4a_45fc_8468_f7949548f4d5);
@@ -598,7 +801,11 @@ pub struct ITextBlock_Vtbl {
         unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
     pub SelectAll: unsafe extern "system" fn(*mut core::ffi::c_void) -> windows_sys::core::HRESULT,
     Select: usize,
-    Focus: usize,
+    pub Focus: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        FocusState,
+        *mut bool,
+    ) -> windows_sys::core::HRESULT,
 }
 pub const IID_ITextBlockStatics: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0x193ec042_a847_4552_b4e8_db36655b840a);
@@ -630,6 +837,171 @@ pub struct ITextBlockStatics_Vtbl {
     LineStackingStrategyProperty: usize,
     IsTextSelectionEnabledProperty: usize,
     SelectedTextProperty: usize,
+}
+pub const IID_IUIElement: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0x676d0be9_b65c_41c6_ba40_58cf87f201c1);
+#[repr(C)]
+pub struct IUIElement_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    pub DesiredSize:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut Size) -> windows_sys::core::HRESULT,
+    pub AllowDrop:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub SetAllowDrop:
+        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_sys::core::HRESULT,
+    pub Opacity:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut f64) -> windows_sys::core::HRESULT,
+    pub SetOpacity:
+        unsafe extern "system" fn(*mut core::ffi::c_void, f64) -> windows_sys::core::HRESULT,
+    Clip: usize,
+    SetClip: usize,
+    RenderTransform: usize,
+    SetRenderTransform: usize,
+    Projection: usize,
+    SetProjection: usize,
+    pub RenderTransformOrigin:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut Point) -> windows_sys::core::HRESULT,
+    pub SetRenderTransformOrigin:
+        unsafe extern "system" fn(*mut core::ffi::c_void, Point) -> windows_sys::core::HRESULT,
+    pub IsHitTestVisible:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub SetIsHitTestVisible:
+        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_sys::core::HRESULT,
+    Visibility: usize,
+    SetVisibility: usize,
+    pub RenderSize:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut Size) -> windows_sys::core::HRESULT,
+    pub UseLayoutRounding:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub SetUseLayoutRounding:
+        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_sys::core::HRESULT,
+    Transitions: usize,
+    SetTransitions: usize,
+    CacheMode: usize,
+    SetCacheMode: usize,
+    pub IsTapEnabled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub SetIsTapEnabled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_sys::core::HRESULT,
+    pub IsDoubleTapEnabled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub SetIsDoubleTapEnabled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_sys::core::HRESULT,
+    pub IsRightTapEnabled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub SetIsRightTapEnabled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_sys::core::HRESULT,
+    pub IsHoldingEnabled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub SetIsHoldingEnabled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_sys::core::HRESULT,
+    ManipulationMode: usize,
+    SetManipulationMode: usize,
+    PointerCaptures: usize,
+    KeyUp: usize,
+    pub RemoveKeyUp:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    pub KeyDown: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut i64,
+    ) -> windows_sys::core::HRESULT,
+    pub RemoveKeyDown:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    GotFocus: usize,
+    pub RemoveGotFocus:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    LostFocus: usize,
+    pub RemoveLostFocus:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    DragEnter: usize,
+    pub RemoveDragEnter:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    DragLeave: usize,
+    pub RemoveDragLeave:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    DragOver: usize,
+    pub RemoveDragOver:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    Drop: usize,
+    pub RemoveDrop:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    PointerPressed: usize,
+    pub RemovePointerPressed:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    PointerMoved: usize,
+    pub RemovePointerMoved:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    PointerReleased: usize,
+    pub RemovePointerReleased:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    PointerEntered: usize,
+    pub RemovePointerEntered:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    PointerExited: usize,
+    pub RemovePointerExited:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    PointerCaptureLost: usize,
+    pub RemovePointerCaptureLost:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    PointerCanceled: usize,
+    pub RemovePointerCanceled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    PointerWheelChanged: usize,
+    pub RemovePointerWheelChanged:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    pub Tapped: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut i64,
+    ) -> windows_sys::core::HRESULT,
+    pub RemoveTapped:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    DoubleTapped: usize,
+    pub RemoveDoubleTapped:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    Holding: usize,
+    pub RemoveHolding:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    RightTapped: usize,
+    pub RemoveRightTapped:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    ManipulationStarting: usize,
+    pub RemoveManipulationStarting:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    ManipulationInertiaStarting: usize,
+    pub RemoveManipulationInertiaStarting:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    ManipulationStarted: usize,
+    pub RemoveManipulationStarted:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    ManipulationDelta: usize,
+    pub RemoveManipulationDelta:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    ManipulationCompleted: usize,
+    pub RemoveManipulationCompleted:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+    pub Measure:
+        unsafe extern "system" fn(*mut core::ffi::c_void, Size) -> windows_sys::core::HRESULT,
+    pub Arrange:
+        unsafe extern "system" fn(*mut core::ffi::c_void, Rect) -> windows_sys::core::HRESULT,
+    CapturePointer: usize,
+    ReleasePointerCapture: usize,
+    pub ReleasePointerCaptures:
+        unsafe extern "system" fn(*mut core::ffi::c_void) -> windows_sys::core::HRESULT,
+    AddHandler: usize,
+    RemoveHandler: usize,
+    pub TransformToVisual: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    pub InvalidateMeasure:
+        unsafe extern "system" fn(*mut core::ffi::c_void) -> windows_sys::core::HRESULT,
+    pub InvalidateArrange:
+        unsafe extern "system" fn(*mut core::ffi::c_void) -> windows_sys::core::HRESULT,
+    pub UpdateLayout:
+        unsafe extern "system" fn(*mut core::ffi::c_void) -> windows_sys::core::HRESULT,
 }
 pub const IID_IUIElement10: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0xd531c629_ad2c_5f6b_adcf_fb87287d18d7);
@@ -710,7 +1082,8 @@ pub struct IXamlRoot_Vtbl {
         *mut core::ffi::c_void,
         *mut *mut core::ffi::c_void,
     ) -> windows_sys::core::HRESULT,
-    Size: usize,
+    pub Size:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut Size) -> windows_sys::core::HRESULT,
     pub RasterizationScale:
         unsafe extern "system" fn(*mut core::ffi::c_void, *mut f64) -> windows_sys::core::HRESULT,
     pub IsHostVisible:
@@ -719,6 +1092,12 @@ pub struct IXamlRoot_Vtbl {
     Changed: usize,
     pub RemoveChanged:
         unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Point {
+    pub X: f32,
+    pub Y: f32,
 }
 #[repr(transparent)]
 #[derive(Clone, Copy)]
@@ -765,4 +1144,195 @@ impl PropertyType {
     pub const SizeArray: Self = Self(1042i32);
     pub const RectArray: Self = Self(1043i32);
     pub const OtherTypeArray: Self = Self(1044i32);
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Rect {
+    pub X: f32,
+    pub Y: f32,
+    pub Width: f32,
+    pub Height: f32,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Size {
+    pub Width: f32,
+    pub Height: f32,
+}
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct VirtualKey(pub i32);
+impl VirtualKey {
+    pub const None: Self = Self(0i32);
+    pub const LeftButton: Self = Self(1i32);
+    pub const RightButton: Self = Self(2i32);
+    pub const Cancel: Self = Self(3i32);
+    pub const MiddleButton: Self = Self(4i32);
+    pub const XButton1: Self = Self(5i32);
+    pub const XButton2: Self = Self(6i32);
+    pub const Back: Self = Self(8i32);
+    pub const Tab: Self = Self(9i32);
+    pub const Clear: Self = Self(12i32);
+    pub const Enter: Self = Self(13i32);
+    pub const Shift: Self = Self(16i32);
+    pub const Control: Self = Self(17i32);
+    pub const Menu: Self = Self(18i32);
+    pub const Pause: Self = Self(19i32);
+    pub const CapitalLock: Self = Self(20i32);
+    pub const Kana: Self = Self(21i32);
+    pub const Hangul: Self = Self(21i32);
+    pub const ImeOn: Self = Self(22i32);
+    pub const Junja: Self = Self(23i32);
+    pub const Final: Self = Self(24i32);
+    pub const Hanja: Self = Self(25i32);
+    pub const Kanji: Self = Self(25i32);
+    pub const ImeOff: Self = Self(26i32);
+    pub const Escape: Self = Self(27i32);
+    pub const Convert: Self = Self(28i32);
+    pub const NonConvert: Self = Self(29i32);
+    pub const Accept: Self = Self(30i32);
+    pub const ModeChange: Self = Self(31i32);
+    pub const Space: Self = Self(32i32);
+    pub const PageUp: Self = Self(33i32);
+    pub const PageDown: Self = Self(34i32);
+    pub const End: Self = Self(35i32);
+    pub const Home: Self = Self(36i32);
+    pub const Left: Self = Self(37i32);
+    pub const Up: Self = Self(38i32);
+    pub const Right: Self = Self(39i32);
+    pub const Down: Self = Self(40i32);
+    pub const Select: Self = Self(41i32);
+    pub const Print: Self = Self(42i32);
+    pub const Execute: Self = Self(43i32);
+    pub const Snapshot: Self = Self(44i32);
+    pub const Insert: Self = Self(45i32);
+    pub const Delete: Self = Self(46i32);
+    pub const Help: Self = Self(47i32);
+    pub const Number0: Self = Self(48i32);
+    pub const Number1: Self = Self(49i32);
+    pub const Number2: Self = Self(50i32);
+    pub const Number3: Self = Self(51i32);
+    pub const Number4: Self = Self(52i32);
+    pub const Number5: Self = Self(53i32);
+    pub const Number6: Self = Self(54i32);
+    pub const Number7: Self = Self(55i32);
+    pub const Number8: Self = Self(56i32);
+    pub const Number9: Self = Self(57i32);
+    pub const A: Self = Self(65i32);
+    pub const B: Self = Self(66i32);
+    pub const C: Self = Self(67i32);
+    pub const D: Self = Self(68i32);
+    pub const E: Self = Self(69i32);
+    pub const F: Self = Self(70i32);
+    pub const G: Self = Self(71i32);
+    pub const H: Self = Self(72i32);
+    pub const I: Self = Self(73i32);
+    pub const J: Self = Self(74i32);
+    pub const K: Self = Self(75i32);
+    pub const L: Self = Self(76i32);
+    pub const M: Self = Self(77i32);
+    pub const N: Self = Self(78i32);
+    pub const O: Self = Self(79i32);
+    pub const P: Self = Self(80i32);
+    pub const Q: Self = Self(81i32);
+    pub const R: Self = Self(82i32);
+    pub const S: Self = Self(83i32);
+    pub const T: Self = Self(84i32);
+    pub const U: Self = Self(85i32);
+    pub const V: Self = Self(86i32);
+    pub const W: Self = Self(87i32);
+    pub const X: Self = Self(88i32);
+    pub const Y: Self = Self(89i32);
+    pub const Z: Self = Self(90i32);
+    pub const LeftWindows: Self = Self(91i32);
+    pub const RightWindows: Self = Self(92i32);
+    pub const Application: Self = Self(93i32);
+    pub const Sleep: Self = Self(95i32);
+    pub const NumberPad0: Self = Self(96i32);
+    pub const NumberPad1: Self = Self(97i32);
+    pub const NumberPad2: Self = Self(98i32);
+    pub const NumberPad3: Self = Self(99i32);
+    pub const NumberPad4: Self = Self(100i32);
+    pub const NumberPad5: Self = Self(101i32);
+    pub const NumberPad6: Self = Self(102i32);
+    pub const NumberPad7: Self = Self(103i32);
+    pub const NumberPad8: Self = Self(104i32);
+    pub const NumberPad9: Self = Self(105i32);
+    pub const Multiply: Self = Self(106i32);
+    pub const Add: Self = Self(107i32);
+    pub const Separator: Self = Self(108i32);
+    pub const Subtract: Self = Self(109i32);
+    pub const Decimal: Self = Self(110i32);
+    pub const Divide: Self = Self(111i32);
+    pub const F1: Self = Self(112i32);
+    pub const F2: Self = Self(113i32);
+    pub const F3: Self = Self(114i32);
+    pub const F4: Self = Self(115i32);
+    pub const F5: Self = Self(116i32);
+    pub const F6: Self = Self(117i32);
+    pub const F7: Self = Self(118i32);
+    pub const F8: Self = Self(119i32);
+    pub const F9: Self = Self(120i32);
+    pub const F10: Self = Self(121i32);
+    pub const F11: Self = Self(122i32);
+    pub const F12: Self = Self(123i32);
+    pub const F13: Self = Self(124i32);
+    pub const F14: Self = Self(125i32);
+    pub const F15: Self = Self(126i32);
+    pub const F16: Self = Self(127i32);
+    pub const F17: Self = Self(128i32);
+    pub const F18: Self = Self(129i32);
+    pub const F19: Self = Self(130i32);
+    pub const F20: Self = Self(131i32);
+    pub const F21: Self = Self(132i32);
+    pub const F22: Self = Self(133i32);
+    pub const F23: Self = Self(134i32);
+    pub const F24: Self = Self(135i32);
+    pub const NavigationView: Self = Self(136i32);
+    pub const NavigationMenu: Self = Self(137i32);
+    pub const NavigationUp: Self = Self(138i32);
+    pub const NavigationDown: Self = Self(139i32);
+    pub const NavigationLeft: Self = Self(140i32);
+    pub const NavigationRight: Self = Self(141i32);
+    pub const NavigationAccept: Self = Self(142i32);
+    pub const NavigationCancel: Self = Self(143i32);
+    pub const NumberKeyLock: Self = Self(144i32);
+    pub const Scroll: Self = Self(145i32);
+    pub const LeftShift: Self = Self(160i32);
+    pub const RightShift: Self = Self(161i32);
+    pub const LeftControl: Self = Self(162i32);
+    pub const RightControl: Self = Self(163i32);
+    pub const LeftMenu: Self = Self(164i32);
+    pub const RightMenu: Self = Self(165i32);
+    pub const GoBack: Self = Self(166i32);
+    pub const GoForward: Self = Self(167i32);
+    pub const Refresh: Self = Self(168i32);
+    pub const Stop: Self = Self(169i32);
+    pub const Search: Self = Self(170i32);
+    pub const Favorites: Self = Self(171i32);
+    pub const GoHome: Self = Self(172i32);
+    pub const GamepadA: Self = Self(195i32);
+    pub const GamepadB: Self = Self(196i32);
+    pub const GamepadX: Self = Self(197i32);
+    pub const GamepadY: Self = Self(198i32);
+    pub const GamepadRightShoulder: Self = Self(199i32);
+    pub const GamepadLeftShoulder: Self = Self(200i32);
+    pub const GamepadLeftTrigger: Self = Self(201i32);
+    pub const GamepadRightTrigger: Self = Self(202i32);
+    pub const GamepadDPadUp: Self = Self(203i32);
+    pub const GamepadDPadDown: Self = Self(204i32);
+    pub const GamepadDPadLeft: Self = Self(205i32);
+    pub const GamepadDPadRight: Self = Self(206i32);
+    pub const GamepadMenu: Self = Self(207i32);
+    pub const GamepadView: Self = Self(208i32);
+    pub const GamepadLeftThumbstickButton: Self = Self(209i32);
+    pub const GamepadRightThumbstickButton: Self = Self(210i32);
+    pub const GamepadLeftThumbstickUp: Self = Self(211i32);
+    pub const GamepadLeftThumbstickDown: Self = Self(212i32);
+    pub const GamepadLeftThumbstickRight: Self = Self(213i32);
+    pub const GamepadLeftThumbstickLeft: Self = Self(214i32);
+    pub const GamepadRightThumbstickUp: Self = Self(215i32);
+    pub const GamepadRightThumbstickDown: Self = Self(216i32);
+    pub const GamepadRightThumbstickRight: Self = Self(217i32);
+    pub const GamepadRightThumbstickLeft: Self = Self(218i32);
 }

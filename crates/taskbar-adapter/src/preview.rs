@@ -1,0 +1,554 @@
+//! In-process native clock preview for exercising the same properties and
+//! routed input as the adapter. Never discovers or attaches to Explorer.
+use crate::{
+    clock::{ClockLease, load},
+    input::Subscription,
+    wide,
+    xaml::{Object, StringHandle, check, factory},
+    xaml_abi::*,
+};
+use litetray_adapter_protocol::{
+    activation::{EVENT_TAG, MAX_EVENT},
+    clock::{Frame, Owner},
+};
+use std::{
+    cell::Cell,
+    ffi::c_void,
+    ptr::{null, null_mut},
+    rc::Rc,
+};
+use windows_sys::{
+    Win32::{
+        Foundation::*,
+        System::{DataExchange::COPYDATASTRUCT, LibraryLoader::*, Threading::*},
+        UI::{Input::KeyboardAndMouse::SetFocus, WindowsAndMessaging::*},
+    },
+    core::{GUID, IInspectable_Vtbl, IUnknown_Vtbl},
+};
+windows_link::link!("combase.dll" "system" fn RoActivateInstance(name:windows_sys::core::HSTRING,out:*mut *mut c_void)->i32);
+// ABI from Microsoft's windows.ui.xaml.hosting.desktopwindowxamlsource.h.
+const IID_NATIVE: GUID = GUID::from_u128(0x3cbcf1bf_2f76_4e9c_96ab_e84b37972554);
+const IID_NATIVE2: GUID = GUID::from_u128(0xe3dcd8c7_3057_4692_99c3_7b7720afda31);
+const IID_CLOSABLE: GUID = GUID::from_u128(0x30d5a829_7fa4_4026_83bb_d75bae4ea99e);
+const WM_FOCUS_CLOCK: u32 = WM_APP + 9;
+const FOCUS_PROPERTY: &str = "LiteTray.PreviewFocus";
+#[repr(C)]
+struct Native {
+    base: IUnknown_Vtbl,
+    attach: unsafe extern "system" fn(*mut c_void, HWND) -> i32,
+    window: unsafe extern "system" fn(*mut c_void, *mut HWND) -> i32,
+}
+#[repr(C)]
+struct Native2 {
+    base: Native,
+    pretranslate: unsafe extern "system" fn(*mut c_void, *const MSG, *mut i32) -> i32,
+}
+#[repr(C)]
+struct Closable {
+    base: IInspectable_Vtbl,
+    close: unsafe extern "system" fn(*mut c_void) -> i32,
+}
+pub(crate) fn activate(name: &str) -> Result<Object, String> {
+    unsafe {
+        let name = StringHandle::new(name)?;
+        let mut object = null_mut();
+        check(
+            RoActivateInstance(name.0, &mut object),
+            "RoActivateInstance",
+        )?;
+        Object::owned(object)
+    }
+}
+fn close(object: &Object) {
+    unsafe {
+        if let Ok(c) = object.query(&IID_CLOSABLE) {
+            let _ = (c.table::<Closable>().close)(c.raw());
+        }
+    }
+}
+pub struct Preview {
+    window: HWND,
+    pub island: HWND,
+    manager: Option<Object>,
+    source: Option<Object>,
+    native: Option<Object>,
+    focus: Option<Object>,
+    input: Option<Subscription>,
+    clock: Option<ClockLease>,
+    frame: Option<Frame>,
+    thread: u32,
+    class: Vec<u16>,
+}
+impl Preview {
+    pub fn create(owner: Owner, frame: Frame, visible: bool) -> Result<Self, String> {
+        unsafe {
+            owner.validate()?;
+            frame.validate()?;
+            let mut pid = 0;
+            if GetWindowThreadProcessId(owner.receiver as HWND, &mut pid) != GetCurrentThreadId()
+                || pid != GetCurrentProcessId()
+                || pid != owner.process_id
+            {
+                return Err("原生预览仅可由本进程 UI 线程创建".into());
+            }
+            let mut preview = Self {
+                window: null_mut(),
+                island: null_mut(),
+                manager: None,
+                source: None,
+                native: None,
+                focus: None,
+                input: None,
+                clock: None,
+                frame: None,
+                thread: GetCurrentThreadId(),
+                class: wide(&format!("LiteTray.ClockPreview.{}", GetCurrentThreadId())),
+            };
+            let init = factory(
+                "Windows.UI.Xaml.Hosting.WindowsXamlManager",
+                &IID_IWindowsXamlManagerStatics,
+            )?;
+            let mut manager = null_mut();
+            check(
+                (init
+                    .table::<IWindowsXamlManagerStatics_Vtbl>()
+                    .InitializeForCurrentThread)(init.raw(), &mut manager),
+                "Initialize XAML preview",
+            )?;
+            preview.manager = Some(Object::owned(manager)?);
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(procedure),
+                hInstance: GetModuleHandleW(null()),
+                hCursor: LoadCursorW(null_mut(), IDC_ARROW),
+                lpszClassName: preview.class.as_ptr(),
+                ..std::mem::zeroed()
+            };
+            if RegisterClassW(&wc) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS {
+                return Err("创建原生预览窗口类失败".into());
+            }
+            let mut parent: RECT = std::mem::zeroed();
+            GetWindowRect(owner.receiver as HWND, &mut parent);
+            preview.window = CreateWindowExW(
+                WS_EX_APPWINDOW,
+                preview.class.as_ptr(),
+                wide("LiteTray 原生时钟预览 · 点击或按回车打开日历").as_ptr(),
+                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
+                parent.left + 80,
+                parent.top + 80,
+                520,
+                180,
+                null_mut(),
+                null_mut(),
+                wc.hInstance,
+                null(),
+            );
+            if preview.window.is_null() {
+                return Err("创建原生预览窗口失败".into());
+            }
+            let source = activate("Windows.UI.Xaml.Hosting.DesktopWindowXamlSource")?
+                .query(&IID_IDesktopWindowXamlSource)?;
+            let native = source.query(&IID_NATIVE)?;
+            check(
+                (native.table::<Native>().attach)(native.raw(), preview.window),
+                "Attach XAML preview",
+            )?;
+            check(
+                (native.table::<Native>().window)(native.raw(), &mut preview.island),
+                "XAML preview HWND",
+            )?;
+            preview.native = Some(source.query(&IID_NATIVE2)?);
+            preview.source = Some(source);
+            let root = load(
+                r##"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Background="#202020"><ContentControl x:Name="Clock" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Background="#303030" Padding="12" HorizontalAlignment="Center" VerticalAlignment="Center" IsTabStop="True" UseSystemFocusVisuals="True" AutomationProperties.Name="时钟预览，按回车或空格打开日历"><StackPanel><TextBlock x:Name="Time" Foreground="White" Text="Original time"/><TextBlock x:Name="Date" Foreground="White" Text="Original date"/></StackPanel></ContentControl></Grid>"##,
+            )?;
+            let find = |name: &str| -> Result<Object, String> {
+                let fe = root.query(&IID_IFrameworkElement)?;
+                let name = StringHandle::new(name)?;
+                let mut object = null_mut();
+                check(
+                    (fe.table::<IFrameworkElement_Vtbl>().FindName)(fe.raw(), name.0, &mut object),
+                    "Find preview element",
+                )?;
+                Object::owned(object)
+            };
+            let clock = find("Clock")?;
+            preview.focus = Some(clock.query(&IID_IControl)?);
+            // The window owns a COM reference until WM_NCDESTROY. This allows
+            // a posted focus request after XAML has finished its first layout.
+            let focus = clock.query(&IID_IControl)?;
+            if SetPropW(preview.window, wide(FOCUS_PROPERTY).as_ptr(), focus.raw()) == 0 {
+                return Err("无法保存预览焦点对象".into());
+            }
+            std::mem::forget(focus);
+            let time = find("Time")?;
+            let date = find("Date")?;
+            preview.clock = Some(ClockLease::capture(&time, &date, &clock)?);
+            preview.update(frame)?;
+            let source = preview.source.as_ref().unwrap();
+            let root_ui = root.query(&IID_IUIElement)?;
+            check(
+                (source.table::<IDesktopWindowXamlSource_Vtbl>().SetContent)(
+                    source.raw(),
+                    root_ui.raw(),
+                ),
+                "Set XAML preview content",
+            )?;
+            let receiver = owner.receiver as HWND;
+            let island = preview.island;
+            preview.input = Some(Subscription::attach(
+                &clock,
+                island,
+                owner,
+                1,
+                Rc::new(Cell::new(0)),
+                move |event| {
+                    let Ok(bytes) = serde_json::to_vec(&event) else {
+                        return false;
+                    };
+                    if bytes.len() > MAX_EVENT {
+                        return false;
+                    }
+                    let copy = COPYDATASTRUCT {
+                        dwData: EVENT_TAG,
+                        cbData: bytes.len() as u32,
+                        lpData: bytes.as_ptr() as *mut _,
+                    };
+                    let mut accepted = 0;
+                    SendMessageTimeoutW(
+                        receiver,
+                        WM_COPYDATA,
+                        island as usize,
+                        &copy as *const _ as isize,
+                        SMTO_ABORTIFHUNG,
+                        100,
+                        &mut accepted,
+                    ) != 0
+                        && accepted == 1
+                },
+            )?);
+            let dpi = windows_sys::Win32::UI::HiDpi::GetDpiForWindow(preview.window).max(96) as i32;
+            let mut rect = RECT {
+                left: 0,
+                top: 0,
+                right: 520 * dpi / 96,
+                bottom: 130 * dpi / 96,
+            };
+            AdjustWindowRectEx(
+                &mut rect,
+                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+                0,
+                WS_EX_APPWINDOW,
+            );
+            SetWindowPos(
+                preview.window,
+                null_mut(),
+                0,
+                0,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            preview.resize();
+            if visible {
+                preview.show();
+            }
+            Ok(preview)
+        }
+    }
+    pub fn update(&mut self, frame: Frame) -> Result<(), String> {
+        if unsafe { GetCurrentThreadId() } != self.thread {
+            return Err("原生预览线程不匹配".into());
+        }
+        frame.validate()?;
+        let clock = self.clock.as_mut().ok_or("原生预览时钟尚未创建")?;
+        if self
+            .frame
+            .as_ref()
+            .is_none_or(|old| old.style != frame.style)
+        {
+            clock.apply(
+                &frame.text.top,
+                &frame.text.bottom,
+                frame.style.font_size as f64,
+                &frame.style.font_family,
+                frame.style.width as f64,
+            )?;
+        } else {
+            clock.tick(&frame.text.top, &frame.text.bottom)?;
+        }
+        self.frame = Some(frame);
+        Ok(())
+    }
+    pub fn visible(&self) -> bool {
+        unsafe { IsWindowVisible(self.window) != 0 }
+    }
+    pub fn show(&self) {
+        unsafe {
+            ShowWindow(self.window, SW_SHOW);
+            SetForegroundWindow(self.window);
+            PostMessageW(self.window, WM_FOCUS_CLOCK, 0, 0);
+        }
+    }
+    pub fn pretranslate(&self, message: &MSG) -> bool {
+        unsafe {
+            if message.hwnd != self.window && IsChild(self.window, message.hwnd) == 0 {
+                return false;
+            }
+            if message.message == WM_KEYDOWN && message.wParam == 0x1b {
+                ShowWindow(self.window, SW_HIDE);
+                return true;
+            }
+            let Some(native) = &self.native else {
+                return false;
+            };
+            let mut handled = 0;
+            (native.table::<Native2>().pretranslate)(native.raw(), message, &mut handled) >= 0
+                && handled != 0
+        }
+    }
+    fn resize(&self) {
+        unsafe {
+            let mut rect: RECT = std::mem::zeroed();
+            GetClientRect(self.window, &mut rect);
+            SetWindowPos(
+                self.island,
+                null_mut(),
+                0,
+                0,
+                rect.right,
+                rect.bottom,
+                SWP_NOZORDER | SWP_SHOWWINDOW,
+            );
+        }
+    }
+}
+impl Drop for Preview {
+    fn drop(&mut self) {
+        self.input.take();
+        self.clock.take();
+        unsafe {
+            let focus = RemovePropW(self.window, wide(FOCUS_PROPERTY).as_ptr());
+            if !focus.is_null() {
+                let _ = Object::owned(focus);
+            }
+        }
+        self.focus.take();
+        self.native.take();
+        if let Some(source) = self.source.take() {
+            close(&source);
+        }
+        unsafe {
+            if !self.window.is_null() {
+                DestroyWindow(self.window);
+            }
+            UnregisterClassW(self.class.as_ptr(), GetModuleHandleW(null()));
+        }
+        if let Some(manager) = self.manager.take() {
+            close(&manager);
+        }
+    }
+}
+pub(crate) fn self_test(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, String> {
+    let preview = Preview::create(owner.clone(), frame, false)?;
+    let control = preview.focus.as_ref().ok_or("预览焦点对象缺失")?;
+    let root = crate::xaml::root_content(control)?.query(&IID_IUIElement)?;
+    unsafe {
+        let table = root.table::<IUIElement_Vtbl>();
+        check(
+            (table.Measure)(
+                root.raw(),
+                Size {
+                    Width: 520.,
+                    Height: 130.,
+                },
+            ),
+            "Measure isolated island",
+        )?;
+        check(
+            (table.Arrange)(
+                root.raw(),
+                Rect {
+                    X: 0.,
+                    Y: 0.,
+                    Width: 520.,
+                    Height: 130.,
+                },
+            ),
+            "Arrange isolated island",
+        )?;
+        check(
+            (table.UpdateLayout)(root.raw()),
+            "UpdateLayout isolated island",
+        )?;
+    }
+    let checks = crate::input::self_test(control, preview.island, owner)?;
+    drop(preview);
+    Ok(checks)
+}
+unsafe extern "system" fn procedure(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    unsafe {
+        if msg == WM_SETFOCUS || msg == WM_ACTIVATE && (w & 0xffff) != WA_INACTIVE as usize {
+            PostMessageW(hwnd, WM_FOCUS_CLOCK, 0, 0);
+        }
+        if msg == WM_FOCUS_CLOCK {
+            let pointer = GetPropW(hwnd, wide(FOCUS_PROPERTY).as_ptr());
+            if !pointer.is_null()
+                && GetForegroundWindow() == hwnd
+                && let Ok(control) = Object::query_borrowed(pointer, &IID_IControl)
+            {
+                SetFocus(GetWindow(hwnd, GW_CHILD));
+                if let Ok(ui) = control.query(&IID_IUIElement) {
+                    let _ = (ui.table::<IUIElement_Vtbl>().UpdateLayout)(ui.raw());
+                }
+                let mut focused = false;
+                let _ = (control.table::<IControl_Vtbl>().Focus)(
+                    control.raw(),
+                    FocusState::Keyboard,
+                    &mut focused,
+                );
+            }
+            return 0;
+        }
+        if msg == WM_NCDESTROY {
+            let pointer = RemovePropW(hwnd, wide(FOCUS_PROPERTY).as_ptr());
+            if !pointer.is_null() {
+                let _ = Object::owned(pointer);
+            }
+        }
+        if msg == WM_CLOSE {
+            ShowWindow(hwnd, SW_HIDE);
+            return 0;
+        }
+        if msg == WM_SIZE {
+            let child = GetWindow(hwnd, GW_CHILD);
+            if !child.is_null() {
+                let mut rect: RECT = std::mem::zeroed();
+                GetClientRect(hwnd, &mut rect);
+                SetWindowPos(
+                    child,
+                    null_mut(),
+                    0,
+                    0,
+                    rect.right,
+                    rect.bottom,
+                    SWP_NOZORDER,
+                );
+            }
+            return 0;
+        }
+        if msg == WM_DPICHANGED {
+            let rect = &*(l as *const RECT);
+            SetWindowPos(
+                hwnd,
+                null_mut(),
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                SWP_NOZORDER,
+            );
+            return 0;
+        }
+        DefWindowProcW(hwnd, msg, w, l)
+    }
+}
+
+/// In-process ABI: all functions must be called on the creating STA, with the
+/// module retained until Destroy. Opaque handles never cross a process.
+/// # Safety
+/// All input/output buffers are valid for their supplied lengths. Call on an STA.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn LiteTrayPreviewCreate(
+    bytes: *const u8,
+    length: usize,
+    island: *mut u64,
+    error: *mut u8,
+    capacity: usize,
+) -> *mut c_void {
+    unsafe {
+        if bytes.is_null() || island.is_null() || length > litetray_adapter_protocol::MAX_REQUEST {
+            return null_mut();
+        }
+        let result = (|| {
+            let value: serde_json::Value =
+                serde_json::from_slice(std::slice::from_raw_parts(bytes, length))
+                    .map_err(|e| e.to_string())?;
+            let owner =
+                serde_json::from_value(value["owner"].clone()).map_err(|e| e.to_string())?;
+            let frame =
+                serde_json::from_value(value["frame"].clone()).map_err(|e| e.to_string())?;
+            Preview::create(owner, frame, true)
+        })();
+        match result {
+            Ok(preview) => {
+                *island = preview.island as u64;
+                Box::into_raw(Box::new(preview)).cast()
+            }
+            Err(message) => {
+                if !error.is_null() && capacity > 0 {
+                    let n = message.len().min(capacity - 1);
+                    std::ptr::copy_nonoverlapping(message.as_ptr(), error, n);
+                    *error.add(n) = 0;
+                }
+                null_mut()
+            }
+        }
+    }
+}
+/// # Safety
+/// `handle` is the live handle returned by Create; bytes reference `length` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn LiteTrayPreviewUpdate(
+    handle: *mut c_void,
+    bytes: *const u8,
+    length: usize,
+) -> i32 {
+    unsafe {
+        if handle.is_null() || bytes.is_null() || length > litetray_adapter_protocol::MAX_REQUEST {
+            return 0;
+        }
+        let result = serde_json::from_slice(std::slice::from_raw_parts(bytes, length))
+            .map_err(|e| e.to_string())
+            .and_then(|f| (&mut *handle.cast::<Preview>()).update(f));
+        result.is_ok() as i32
+    }
+}
+/// # Safety
+/// `handle` is the live Create handle, used on the owning UI thread, and `message` is a valid MSG.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn LiteTrayPreviewMessage(
+    handle: *mut c_void,
+    message: *const MSG,
+) -> i32 {
+    unsafe {
+        if handle.is_null() {
+            return 0;
+        }
+        let p = &*handle.cast::<Preview>();
+        if message.is_null() {
+            p.visible() as i32
+        } else {
+            p.pretranslate(&*message) as i32
+        }
+    }
+}
+/// # Safety
+/// `handle` is the live Create handle, used on the owning UI thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn LiteTrayPreviewShow(handle: *mut c_void) {
+    unsafe {
+        if !handle.is_null() {
+            (&*handle.cast::<Preview>()).show();
+        }
+    }
+}
+/// # Safety
+/// Destroy the Create handle exactly once on its owning STA, before unloading this module.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn LiteTrayPreviewDestroy(handle: *mut c_void) {
+    unsafe {
+        if !handle.is_null() {
+            drop(Box::from_raw(handle.cast::<Preview>()));
+        }
+    }
+}
