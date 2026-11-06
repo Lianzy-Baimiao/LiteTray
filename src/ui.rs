@@ -2,8 +2,8 @@ use chrono::{Local, TimeZone, Utc};
 use litetray::{
     clock,
     config::{self, Appearance, ClickAction, Config, MonitorScope, Provider},
-    http, migration,
-    platform::{clock_preview, credentials, diagnostics, lunar, startup, wide},
+    http, migration, monitors,
+    platform::{clock_preview, credentials, diagnostics, displays, lunar, startup, wide},
     popup,
     update::{self, UpdateStatus},
     weather,
@@ -98,6 +98,8 @@ struct App {
     update: Option<UpdateStatus>,
     migration_source: Option<Vec<u8>>,
     migration: Option<migration::Report>,
+    monitor_snapshot: monitors::Snapshot,
+    monitor_rows: Vec<monitors::Choice>,
     tx: mpsc::Sender<Event>,
     rx: mpsc::Receiver<Event>,
     weather_busy: bool,
@@ -208,6 +210,8 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             update: None,
             migration_source: None,
             migration: None,
+            monitor_snapshot: displays::collect(),
+            monitor_rows: Vec::new(),
             tx,
             rx,
             weather_busy: false,
@@ -701,42 +705,47 @@ impl App {
                         460,
                     );
                     self.label(
-                        "显示器设备名（指定显示器模式下用逗号分隔）",
+                        "指定屏幕 · 单击或空格切换，可多选",
                         224,
-                        282,
-                        width - 260,
-                        24,
+                        278,
+                        width - 410,
+                        25,
                     );
-                    self.control(
-                        "EDIT",
-                        &c.tray.selected_devices.join(","),
+                    self.button("刷新显示器", 307, width - 170, 270, 134);
+                    self.monitor_rows =
+                        monitors::choices(&self.monitor_snapshot, &c.tray.selected_devices);
+                    let list = self.control(
+                        "LISTBOX",
+                        "",
                         305,
-                        WS_TABSTOP | ES_AUTOHSCROLL as u32,
+                        WS_TABSTOP
+                            | WS_BORDER
+                            | WS_VSCROLL
+                            | LBS_NOTIFY as u32
+                            | LBS_MULTIPLESEL as u32,
                         224,
                         310,
                         width - 260,
-                        30,
+                        136,
                     );
-                    let d = diagnostics::collect();
-                    let text = d
-                        .monitors
-                        .iter()
-                        .map(|m| {
-                            format!(
-                                "{}{}  {} × {}",
-                                m.device,
-                                if m.primary { " · 主屏" } else { "" },
-                                m.rect[2] - m.rect[0],
-                                m.rect[3] - m.rect[1]
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\r\n");
-                    self.label(&text, 224, 360, width - 260, 100);
+                    for (index, row) in self.monitor_rows.iter().enumerate() {
+                        SendMessageW(list, LB_ADDSTRING, 0, wide(&row.label).as_ptr() as isize);
+                        SendMessageW(list, LB_SETSEL, usize::from(row.selected), index as isize);
+                    }
+                    self.control(
+                        "STATIC",
+                        &self.monitor_summary(),
+                        306,
+                        SS_LEFT as u32,
+                        224,
+                        455,
+                        width - 260,
+                        64,
+                    );
                     self.label(
                         "任务栏适配：尚未接管。配置不会禁用现有 Windhawk 模块。",
                         224,
-                        482,
+                        527,
                         width - 260,
                         52,
                     );
@@ -968,13 +977,14 @@ impl App {
                 c.tray.show_icons = self.checked(302);
                 c.tray.show_control_center = self.checked(303);
                 c.tray.copied_taskbars_only = self.checked(304);
-                c.tray.selected_devices = self
-                    .text(305)
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-                    .collect();
+                let selected = (0..self.monitor_rows.len())
+                    .map(|i| unsafe { SendMessageW(self.field(305), LB_GETSEL, i, 0) > 0 })
+                    .collect::<Vec<_>>();
+                c.tray.selected_devices = monitors::collect_choices(
+                    &self.monitor_rows,
+                    &selected,
+                    &c.tray.selected_devices,
+                )?;
             }
             3 => {
                 c.weather.enabled = self.checked(400);
@@ -1004,6 +1014,46 @@ impl App {
         // Full validation belongs to Save; adding a keyed provider is possible before entering its Host.
         self.draft = c;
         Ok(())
+    }
+    fn monitor_summary(&self) -> String {
+        let result = monitors::resolve(&self.draft.tray, &self.monitor_snapshot);
+        let mut text = format!(
+            "当前范围匹配 {} 个桌面区域。选择按设备保存，不受 DISPLAY 编号变化影响。",
+            result.devices.len()
+        );
+        if !result.pending.is_empty() {
+            text.push_str(&format!(
+                "\r\n{} 项尚未匹配；未连接的选择会保留。",
+                result.pending.len()
+            ));
+        }
+        if let Some(warning) = result.warnings.first() {
+            text.push_str(&format!("\r\n{warning}"));
+        }
+        text
+    }
+    unsafe fn refresh_displays(&mut self) {
+        unsafe {
+            if self.page == 2 {
+                // An unidentified row cannot be persisted. Clear only those
+                // temporary selections so Refresh can recover a missing ID.
+                for (index, row) in self.monitor_rows.iter().enumerate() {
+                    if row.id.is_none() {
+                        SendMessageW(self.field(305), LB_SETSEL, 0, index as isize);
+                    }
+                }
+            }
+            if self.page == 2
+                && let Err(error) = self.collect_page()
+            {
+                self.set_status(error);
+                return;
+            }
+            self.monitor_snapshot = displays::collect();
+            if self.page == 2 {
+                self.render();
+            }
+        }
     }
     unsafe fn save(&mut self) -> Result<(), String> {
         unsafe {
@@ -1498,6 +1548,7 @@ impl App {
                 return false;
             }
             match id {
+                307 => self.refresh_displays(),
                 SAVE => {
                     if let Err(e) = self.save() {
                         self.set_status(format!("保存失败：{e}"));
@@ -1637,9 +1688,10 @@ impl App {
                 }
                 504 => {
                     let path = config::data_dir().join("diagnostics.json");
-                    let result = serde_json::to_vec_pretty(&diagnostics::collect())
-                        .map_err(|e| e.to_string())
-                        .and_then(|data| config::atomic_write(&path, &data));
+                    let result =
+                        serde_json::to_vec_pretty(&diagnostics::collect_for(&self.saved.tray))
+                            .map_err(|e| e.to_string())
+                            .and_then(|data| config::atomic_write(&path, &data));
                     match result {
                         Ok(()) => self.set_status(format!("诊断已保存：{}", path.display())),
                         Err(e) => self.set_status(e),
@@ -1766,6 +1818,18 @@ unsafe fn choose_migration_file(owner: HWND) -> Result<Option<std::path::PathBuf
 
 unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     unsafe {
+        if msg == WM_DISPLAYCHANGE
+            || msg == WM_DEVICECHANGE
+                && matches!(
+                    w as u32,
+                    DBT_DEVNODES_CHANGED | DBT_DEVICEARRIVAL | DBT_DEVICEREMOVECOMPLETE
+                )
+        {
+            // Debounce bursts; a modal settings borrow leaves this timer alive
+            // so the next dispatch can refresh without dropping draft choices.
+            SetTimer(hwnd, 2, 500, None);
+            return 0;
+        }
         if msg == WM_TIMER && w == 1 {
             let preview = PREVIEW.with(|p| p.borrow().clone());
             if let Some(preview) = preview {
@@ -1839,6 +1903,13 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 }
                 WM_COMMAND => {
                     let id = (w & 0xffff) as u16;
+                    if app.page == 2 && (id == 301 || id == 305) && (w >> 16) == 1 {
+                        match app.collect_page() {
+                            Ok(()) => set_text(app.field(306), &app.monitor_summary()),
+                            Err(error) => app.set_status(error),
+                        }
+                        return Some(0);
+                    }
                     if (w >> 16) == BN_CLICKED as usize {
                         quit = app.command(id);
                     }
@@ -1847,6 +1918,11 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 WM_CLOSE => {
                     ShowWindow(hwnd, SW_HIDE);
                     app.schedule_tick();
+                    Some(0)
+                }
+                WM_TIMER if w == 2 => {
+                    KillTimer(hwnd, 2);
+                    app.refresh_displays();
                     Some(0)
                 }
                 WM_TIMER => {

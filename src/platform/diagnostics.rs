@@ -1,15 +1,7 @@
 use serde::Serialize;
-use windows_sys::Win32::{
-    Foundation::*, Graphics::Gdi::*, System::LibraryLoader::*, UI::WindowsAndMessaging::*,
-};
+use windows_sys::Win32::{Foundation::*, System::LibraryLoader::*, UI::WindowsAndMessaging::*};
 
-#[derive(Debug, Clone, Serialize)]
-pub struct Monitor {
-    pub device: String,
-    pub primary: bool,
-    pub rect: [i32; 4],
-    pub work: [i32; 4],
-}
+pub use crate::monitors::Display as Monitor;
 #[derive(Debug, Clone, Serialize)]
 pub struct Taskbar {
     pub class: String,
@@ -17,12 +9,15 @@ pub struct Taskbar {
     pub process_id: u32,
     pub thread_id: u32,
     pub rect: [i32; 4],
+    pub display_device: Option<String>,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct Diagnostics {
     pub build: u32,
     pub family: String,
     pub monitors: Vec<Monitor>,
+    pub monitor_warnings: Vec<String>,
+    pub monitor_selection: Option<crate::monitors::Selection>,
     pub taskbars: Vec<Taskbar>,
     pub adapter_status: String,
 }
@@ -32,14 +27,8 @@ fn rectangle(r: RECT) -> [i32; 4] {
 pub fn collect() -> Diagnostics {
     unsafe {
         let build = windows_build();
-        let mut monitors = Vec::new();
+        let monitors = super::displays::collect();
         let mut taskbars = Vec::new();
-        EnumDisplayMonitors(
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            Some(monitor_callback),
-            &mut monitors as *mut _ as isize,
-        );
         EnumWindows(Some(window_callback), &mut taskbars as *mut _ as isize);
         Diagnostics {
             build,
@@ -51,37 +40,24 @@ pub fn collect() -> Diagnostics {
                 "未知或未支持的 Windows"
             }
             .into(),
-            monitors,
+            monitors: monitors.displays,
+            monitor_warnings: monitors.warnings,
+            monitor_selection: None,
             taskbars,
             adapter_status: "独立原生程序已就绪；任务栏接管适配尚未启用".into(),
         }
     }
 }
-unsafe extern "system" fn monitor_callback(
-    monitor: HMONITOR,
-    _: HDC,
-    _: *mut RECT,
-    data: LPARAM,
-) -> i32 {
-    unsafe {
-        let list = &mut *(data as *mut Vec<Monitor>);
-        let mut info: MONITORINFOEXW = std::mem::zeroed();
-        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
-        if GetMonitorInfoW(monitor, (&mut info as *mut MONITORINFOEXW).cast()) != 0 {
-            let end = info
-                .szDevice
-                .iter()
-                .position(|&c| c == 0)
-                .unwrap_or(info.szDevice.len());
-            list.push(Monitor {
-                device: String::from_utf16_lossy(&info.szDevice[..end]),
-                primary: info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
-                rect: rectangle(info.monitorInfo.rcMonitor),
-                work: rectangle(info.monitorInfo.rcWork),
-            });
-        }
-        1
-    }
+pub fn collect_for(tray: &crate::config::TrayConfig) -> Diagnostics {
+    let mut result = collect();
+    result.monitor_selection = Some(crate::monitors::resolve(
+        tray,
+        &crate::monitors::Snapshot {
+            displays: result.monitors.clone(),
+            warnings: result.monitor_warnings.clone(),
+        },
+    ));
+    result
 }
 unsafe extern "system" fn window_callback(hwnd: HWND, data: LPARAM) -> i32 {
     unsafe {
@@ -99,6 +75,7 @@ unsafe extern "system" fn window_callback(hwnd: HWND, data: LPARAM) -> i32 {
                 process_id,
                 thread_id,
                 rect: rectangle(r),
+                display_device: super::displays::device_for_window(hwnd),
             });
         }
         1

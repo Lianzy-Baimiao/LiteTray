@@ -245,6 +245,7 @@ impl Config {
         if self.tray.scope == MonitorScope::Selected && self.tray.selected_devices.is_empty() {
             return Err("请选择至少一个显示器".into());
         }
+        crate::monitors::validate_preferences(&self.tray.selected_devices)?;
         Ok(())
     }
 }

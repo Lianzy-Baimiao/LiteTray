@@ -107,8 +107,9 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         Some("--diagnose") => {
-            let text = serde_json::to_string_pretty(&platform::diagnostics::collect())
-                .map_err(|e| e.to_string())?;
+            let text =
+                serde_json::to_string_pretty(&platform::diagnostics::collect_for(&config.tray))
+                    .map_err(|e| e.to_string())?;
             if let Some(path) = arguments.get(1) {
                 std::fs::write(path, &text).map_err(|e| e.to_string())?;
             }
