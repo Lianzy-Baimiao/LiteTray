@@ -39,6 +39,7 @@ fn on_isolated_desktop(check: impl FnOnce() + Send + 'static) {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
         return;
     }
     isolated_desktop_check(check);
@@ -586,6 +587,566 @@ pub(super) unsafe fn assert_external_foreground() {
     }
 }
 #[test]
+fn settings_clock_navigation_stays_responsive() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-navigation-latency-unused.json"),
+        );
+        app.page = 1;
+        app.render();
+        ShowWindow(app.hwnd, SW_SHOWNOACTIVATE);
+        UpdateWindow(app.hwnd);
+        let cold_start = Instant::now();
+        app.command(NAV + 7);
+        RedrawWindow(
+            app.hwnd,
+            null(),
+            null_mut(),
+            RDW_UPDATENOW | RDW_ALLCHILDREN,
+        );
+        let cold = cold_start.elapsed().as_micros();
+        app.command(NAV + 1);
+        let mut samples = vec![];
+        for index in 0..16 {
+            let start = Instant::now();
+            app.command(NAV + if index % 2 == 0 { 7 } else { 1 });
+            RedrawWindow(
+                app.hwnd,
+                null(),
+                null_mut(),
+                RDW_UPDATENOW | RDW_ALLCHILDREN,
+            );
+            samples.push(start.elapsed().as_micros());
+        }
+        samples.sort_unstable();
+        let p95 = samples[15];
+        let median = samples[8];
+        let fonts = widgets::fonts().len();
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+        RoUninitialize();
+        eprintln!(
+            "clock/settings navigation: fonts={fonts}, cold={cold}us, median={median}us, p95={p95}us"
+        );
+        assert!(
+            cold < 100_000,
+            "first clock page switch blocked UI for {cold}us"
+        );
+        assert!(
+            p95 < 50_000,
+            "clock page switching blocked UI for {p95}us (median {median}us, fonts {fonts})"
+        );
+    });
+}
+
+#[test]
+fn settings_pages_fit_the_minimum_window_without_outer_scrollbars() {
+    unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-settings-fit-unused.json"),
+        );
+        SetWindowPos(
+            app.hwnd,
+            null_mut(),
+            0,
+            0,
+            app.scale(1060),
+            app.scale(820),
+            SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
+        );
+        let mut failures = vec![];
+        for page in [1, 2, 3, 4, 5, 6, 7] {
+            app.page = page;
+            app.render();
+            let mut bounds: RECT = std::mem::zeroed();
+            GetClientRect(app.page_host, &mut bounds);
+            if GetWindowLongW(app.page_host, GWL_STYLE) as u32 & WS_VSCROLL != 0 {
+                failures.push(format!(
+                    "{}: outer scrollbar, viewport={}",
+                    PAGES[page], bounds.bottom
+                ));
+            }
+            let mut child = GetWindow(app.page_host, GW_CHILD);
+            while !child.is_null() {
+                if GetWindowLongW(child, GWL_STYLE) as u32 & WS_VISIBLE != 0 {
+                    let mut r: RECT = std::mem::zeroed();
+                    GetWindowRect(child, &mut r);
+                    MapWindowPoints(null_mut(), app.page_host, &mut r as *mut _ as *mut POINT, 2);
+                    if r.bottom > bounds.bottom || r.top < 0 || r.left < 0 || r.right > bounds.right
+                    {
+                        failures.push(format!(
+                            "{}: control {} [{},{},{},{}] outside {}x{}",
+                            PAGES[page],
+                            GetDlgCtrlID(child),
+                            r.left,
+                            r.top,
+                            r.right,
+                            r.bottom,
+                            bounds.right,
+                            bounds.bottom
+                        ));
+                    }
+                }
+                child = GetWindow(child, GW_HWNDNEXT);
+            }
+        }
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+}
+
+#[test]
+fn ui_audit_text_and_geometry_across_pages_and_timer_tabs() {
+    on_isolated_desktop(|| unsafe {
+        let mut failures = vec![];
+        for context in [
+            DPI_AWARENESS_CONTEXT_UNAWARE,
+            DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        ] {
+            let previous = SetThreadDpiAwarenessContext(context);
+            for dark in [false, true] {
+                let mut app = app_for_check(
+                    dark,
+                    96,
+                    &std::env::temp_dir().join("litetray-deep-ui-unused.json"),
+                );
+                app.draft.clock.top_color = "#AABBCC".into();
+                app.draft.clock.bottom_color = "#112233".into();
+                for (width, height) in [(1060, 820), (1120, 920)] {
+                    SetWindowPos(
+                        app.hwnd,
+                        null_mut(),
+                        0,
+                        0,
+                        app.scale(width),
+                        app.scale(height),
+                        SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
+                    );
+                    for (page, name) in PAGES.iter().enumerate() {
+                        app.page = page;
+                        app.render();
+                        let tag = format!("{} {width}x{height} dpi={} dark={dark}", name, app.dpi);
+                        if GetWindowLongW(app.page_host, GWL_STYLE) as u32 & WS_VSCROLL != 0 {
+                            failures.push(format!("{tag}: unnecessary outer scrollbar"));
+                        }
+                        audit_native_layout(app.hwnd, &tag, &mut failures);
+                        if page >= 8 {
+                            for tab in 0..if page == 9 { 4 } else { 6 } {
+                                let view = app.field(agenda::ID);
+                                SendMessageW(
+                                    view,
+                                    WM_COMMAND,
+                                    if page == 9 { 4300 } else { 4200 } + tab,
+                                    0,
+                                );
+                                audit_native_layout(
+                                    app.hwnd,
+                                    &format!("{tag} tab={tab}"),
+                                    &mut failures,
+                                );
+                            }
+                        }
+                    }
+                    app.prewarm_panels();
+                    for &popup in &app.panel_cache {
+                        let calendar = GetDlgItem(popup, dashboard::ID as i32);
+                        let tag = format!("flyout dpi={} dark={dark}", GetDpiForWindow(popup));
+                        audit_native_layout(popup, &tag, &mut failures);
+                        SendMessageW(calendar, WM_COMMAND, 1103, 0);
+                        let editor = GetDlgItem(calendar, quick_agenda::ID as i32);
+                        for kind in 0..6 {
+                            SendMessageW(editor, WM_COMMAND, 4600 + kind, 0);
+                            audit_native_layout(
+                                popup,
+                                &format!("{tag} editor kind={kind}"),
+                                &mut failures,
+                            );
+                        }
+                    }
+                    app.close_panel();
+                }
+                DestroyWindow(app.hwnd);
+                app.release_resources();
+            }
+            SetThreadDpiAwarenessContext(previous);
+        }
+        failures.sort();
+        failures.dedup();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    });
+}
+
+unsafe fn audit_native_layout(parent: HWND, tag: &str, failures: &mut Vec<String>) {
+    unsafe {
+        let mut bounds: RECT = std::mem::zeroed();
+        GetClientRect(parent, &mut bounds);
+        let mut siblings: Vec<(i32, String, RECT)> = vec![];
+        let mut parent_class = [0u16; 128];
+        let parent_len = GetClassNameW(parent, parent_class.as_mut_ptr(), 128) as usize;
+        let parent_class = String::from_utf16_lossy(&parent_class[..parent_len]);
+        let mut child = GetWindow(parent, GW_CHILD);
+        while !child.is_null() {
+            let style = GetWindowLongW(child, GWL_STYLE) as u32;
+            if style & WS_VISIBLE != 0 {
+                let mut r: RECT = std::mem::zeroed();
+                GetWindowRect(child, &mut r);
+                MapWindowPoints(null_mut(), parent, &mut r as *mut _ as *mut POINT, 2);
+                let mut class = [0u16; 128];
+                let len = GetClassNameW(child, class.as_mut_ptr(), 128) as usize;
+                let class = String::from_utf16_lossy(&class[..len]);
+                let text = window_text(child);
+                let id = GetDlgCtrlID(child);
+                if !class.starts_with("LiteTray.") {
+                    for (other_id, other_text, other_rect) in &siblings {
+                        let overlap_w = r.right.min(other_rect.right) - r.left.max(other_rect.left);
+                        let overlap_h = r.bottom.min(other_rect.bottom) - r.top.max(other_rect.top);
+                        let empty_overlay = (id == 4000 && matches!(*other_id, 4005 | 4131))
+                            || (*other_id == 4000 && matches!(id, 4005 | 4131));
+                        if overlap_w > 2 && overlap_h > 2 && !empty_overlay {
+                            failures.push(format!("{tag}: overlap {id} '{text}' / {other_id} '{other_text}' {overlap_w}x{overlap_h}"));
+                        }
+                    }
+                    siblings.push((id, text.clone(), r));
+                }
+                let preview = id == widgets::PREVIEW as i32;
+                if r.left < -1
+                    || r.top < -1
+                    || r.right > bounds.right + 1
+                    || r.bottom > bounds.bottom + 1
+                {
+                    failures.push(format!(
+                        "{tag}: {class}/{id} [{},{},{},{}] outside {}x{}",
+                        r.left, r.top, r.right, r.bottom, bounds.right, bounds.bottom
+                    ));
+                }
+                // Owner-drawn calendar buttons use accessible names that are
+                // longer than their SVG/date glyphs. Measure normal controls.
+                let custom_calendar = parent_class == "LiteTray.Dashboard.2"
+                    || parent_class == "LiteTray.QuickAgenda.1" && id == 4622;
+                let is_static = class.eq_ignore_ascii_case("static") && !preview;
+                let is_button = class.eq_ignore_ascii_case("button") && !custom_calendar;
+                let is_combo = class.eq_ignore_ascii_case("combobox");
+                let color_edit = class.eq_ignore_ascii_case("edit") && matches!(id, 801 | 802);
+                if (is_static || is_button || is_combo || color_edit) && !text.is_empty() {
+                    let dc = GetDC(child);
+                    let font = SendMessageW(child, WM_GETFONT, 0, 0) as HGDIOBJ;
+                    let old = SelectObject(dc, font);
+                    let mut client: RECT = std::mem::zeroed();
+                    GetClientRect(child, &mut client);
+                    let scale = GetDpiForWindow(child).max(96) as i32;
+                    let padding =
+                        if parent_class == "LiteTray.QuickAgenda.1" && (4600..4606).contains(&id) {
+                            8
+                        } else if is_combo {
+                            40
+                        } else if color_edit {
+                            20
+                        } else if is_button {
+                            if (100..110).contains(&id) { 58 } else { 20 }
+                        } else {
+                            0
+                        };
+                    let available = client.right - padding * scale / 96;
+                    let mut measured = design::rect(0, 0, available.max(1), 0);
+                    let mut value = wide(&text);
+                    DrawTextW(
+                        dc,
+                        value.as_mut_ptr(),
+                        (value.len() - 1) as i32,
+                        &mut measured,
+                        DT_CALCRECT
+                            | DT_NOPREFIX
+                            | if is_static {
+                                DT_WORDBREAK
+                            } else {
+                                DT_SINGLELINE
+                            },
+                    );
+                    SelectObject(dc, old);
+                    ReleaseDC(child, dc);
+                    if measured.bottom > client.bottom + 1
+                        || (!is_static && measured.right > available + 1)
+                    {
+                        failures.push(format!(
+                            "{tag}: clipped {class}/{id} '{text}': text {}x{}, available {}x{}",
+                            measured.right, measured.bottom, available, client.bottom
+                        ));
+                    }
+                }
+                if class.starts_with("LiteTray.") {
+                    audit_native_layout(child, tag, failures);
+                }
+            }
+            child = GetWindow(child, GW_HWNDNEXT);
+        }
+    }
+}
+
+#[test]
+fn ui_audit_maximum_clock_font_is_not_clipped_in_preview() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-large-clock-ui-unused.json"),
+        );
+        app.page = 7;
+        app.draft.clock.top_style.font_size = Some(32);
+        app.draft.clock.bottom_style.font_size = Some(32);
+        app.render();
+        let (available, heights) = widgets::preview_line_heights(app.field(widgets::PREVIEW));
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+        assert!(
+            heights.iter().all(|&height| height <= available),
+            "large clock preview clips text: line heights={heights:?}, available={available}"
+        );
+    });
+}
+
+#[test]
+fn ui_audit_long_content_stays_inside_fields_and_messages_remain_readable() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-long-content-unused.json"),
+        );
+        SetWindowPos(
+            app.hwnd,
+            null_mut(),
+            0,
+            0,
+            app.scale(1060),
+            app.scale(820),
+            SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
+        );
+        app.page = 7;
+        app.render();
+        let note = "包含多行文字的悬停提示\r\n".repeat(30);
+        set_text(app.field(804), &note);
+        assert_ne!(
+            GetWindowLongW(app.field(804), GWL_STYLE) as u32 & WS_VSCROLL,
+            0
+        );
+        app.command(NAV + 5);
+        app.update=Some(UpdateStatus::RepositoryUnavailable("暂时无法公开访问此仓库，请核对仓库名称。开发中的私有仓库会返回此状态；转为公开后即可直接检查更新，无需密钥。".into()));
+        app.render();
+        let mut failures = vec![];
+        audit_native_layout(app.hwnd, "long update message", &mut failures);
+        app.command(NAV + 7);
+        assert_eq!(app.text(804), note);
+        assert_eq!(
+            GetWindowLongW(app.page_host, GWL_STYLE) as u32 & WS_VSCROLL,
+            0
+        );
+        app.command(NAV + 8);
+        let view = app.field(agenda::ID);
+        let field = GetDlgItem(view, 4016);
+        set_text(field, &"很长的日程备注\r\n".repeat(100));
+        assert_ne!(GetWindowLongW(field, GWL_STYLE) as u32 & WS_VSCROLL, 0);
+        assert_eq!(
+            GetWindowLongW(app.page_host, GWL_STYLE) as u32 & WS_VSCROLL,
+            0
+        );
+        audit_native_layout(app.hwnd, "long agenda note", &mut failures);
+        app.command(NAV + 3);
+        app.draft.weather.providers = Provider::ALL.to_vec();
+        app.render();
+        let providers = app.field(404);
+        SendMessageW(providers, LB_SETCURSEL, 4, 0);
+        assert_eq!(SendMessageW(providers, LB_GETCURSEL, 0, 0), 4);
+        assert_eq!(SendMessageW(providers, LB_GETCOUNT, 0, 0), 5);
+        assert_eq!(
+            GetWindowLongW(app.page_host, GWL_STYLE) as u32 & WS_VSCROLL,
+            0
+        );
+        audit_native_layout(app.hwnd, "five weather providers", &mut failures);
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    });
+}
+
+#[test]
+fn ui_audit_font_dropdown_fits_installed_names() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-font-width-unused.json"),
+        );
+        app.page = 7;
+        app.render();
+        let mut failures = vec![];
+        for id in [806, 809] {
+            let field = app.field(id);
+            let width = SendMessageW(field, CB_GETDROPPEDWIDTH, 0, 0) as i32;
+            let dc = GetDC(field);
+            let old = SelectObject(dc, SendMessageW(field, WM_GETFONT, 0, 0) as HGDIOBJ);
+            for name in widgets::fonts() {
+                let name_w = wide(name);
+                let mut extent: SIZE = std::mem::zeroed();
+                GetTextExtentPoint32W(dc, name_w.as_ptr(), (name_w.len() - 1) as i32, &mut extent);
+                if extent.cx + app.scale(32) > width {
+                    failures.push(format!(
+                        "font {name}: needs {}, dropdown={width}",
+                        extent.cx + app.scale(32)
+                    ));
+                }
+            }
+            SelectObject(dc, old);
+            ReleaseDC(field, dc);
+        }
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    });
+}
+
+#[test]
+fn ui_audit_keyboard_tabs_only_visit_active_page_and_native_choices_work() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-keyboard-ui-unused.json"),
+        );
+        app.page = 1;
+        app.render();
+        app.command(NAV + 7);
+        app.command(NAV + 1);
+        ShowWindow(app.hwnd, SW_SHOWNOACTIVATE);
+        for page in [7, 1, 3, 5, 8, 9, 7, 1] {
+            app.command(NAV + page);
+            let mut visited = std::collections::HashSet::new();
+            let mut next = GetNextDlgTabItem(app.hwnd, null_mut(), 0);
+            while !next.is_null() && visited.insert(next as usize) {
+                assert_ne!(IsWindowVisible(next), 0, "Tab reached hidden page {page}");
+                assert_ne!(
+                    IsWindowEnabled(next),
+                    0,
+                    "Tab reached disabled control {page}"
+                );
+                assert!(
+                    !app.settings_cache
+                        .iter()
+                        .any(|cache| IsChild(cache.window, next) != 0),
+                    "Tab reached cached inactive controls"
+                );
+                next = GetNextDlgTabItem(app.hwnd, next, 0);
+            }
+            assert!(!visited.is_empty());
+            for (&id, &field) in &app.fields {
+                if IsWindowVisible(field) != 0
+                    && IsWindowEnabled(field) != 0
+                    && GetWindowLongW(field, GWL_STYLE) as u32 & WS_TABSTOP != 0
+                {
+                    assert!(
+                        visited.contains(&(field as usize)),
+                        "visible control {id} on page {page} missing from Tab order"
+                    );
+                }
+            }
+        }
+        let font = app.field(205);
+        let selected = SendMessageW(font, CB_GETCURSEL, 0, 0);
+        SendMessageW(font, WM_KEYDOWN, VK_HOME as usize, 0);
+        SendMessageW(font, WM_KEYDOWN, VK_DOWN as usize, 0);
+        assert_eq!(SendMessageW(font, CB_GETCURSEL, 0, 0), 1);
+        SendMessageW(font, CB_SETCURSEL, selected as usize, 0);
+        SendMessageW(font, CB_SHOWDROPDOWN, 1, 0);
+        let mut info: COMBOBOXINFO = std::mem::zeroed();
+        info.cbSize = size_of::<COMBOBOXINFO>() as u32;
+        assert_ne!(GetComboBoxInfo(font, &mut info), 0);
+        assert_ne!(IsWindowVisible(info.hwndList), 0);
+        assert!(SendMessageW(font, CB_GETCOUNT, 0, 0) > 1);
+        SendMessageW(font, CB_SHOWDROPDOWN, 0, 0);
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+        RoUninitialize();
+    });
+}
+
+#[test]
+fn settings_cached_pages_preserve_edits_and_invalidate_after_presets_theme_and_resize() {
+    unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-cached-settings-unused.json"),
+        );
+        app.page = 1;
+        app.render();
+        app.command(NAV + 7);
+        let style = app.page_host;
+        app.command(NAV + 1);
+        let clock = app.page_host;
+        app.command(NAV + 7);
+        assert_eq!(
+            app.page_host, style,
+            "unchanged style page must reuse native controls"
+        );
+        app.command(NAV + 1);
+        assert_eq!(
+            app.page_host, clock,
+            "unchanged clock page must reuse native controls"
+        );
+        set_text(app.field(201), "%time% · 保留草稿");
+        app.command(NAV + 7);
+        set_text(app.field(804), "悬停说明\r\n第二行");
+        app.command(NAV + 1);
+        assert_eq!(app.text(201), "%time% · 保留草稿");
+        app.command(NAV + 7);
+        assert_eq!(app.text(804), "悬停说明\r\n第二行");
+        app.command(NAV + 5);
+        app.command(NAV + 7);
+        assert_eq!(app.text(804), "悬停说明\r\n第二行");
+        app.command(settings::PRESET + 1);
+        app.command(NAV + 1);
+        assert_eq!(app.text(201), settings::PRESETS[1].1);
+        assert_eq!(app.text(202), settings::PRESETS[1].2);
+        app.command(NAV + 7);
+        app.command(NAV + 1);
+        assert!(!app.settings_cache.is_empty());
+        app.saved.appearance = Appearance::Dark;
+        app.draft.appearance = Appearance::Dark;
+        app.recreate_resources();
+        assert!(
+            app.settings_cache.is_empty(),
+            "theme changes must discard old native resources"
+        );
+        app.render();
+        app.command(NAV + 7);
+        assert!(!GetPropW(app.field(806), wide("LiteTray.ControlDark").as_ptr()).is_null());
+        SetWindowPos(
+            app.hwnd,
+            null_mut(),
+            0,
+            0,
+            app.scale(1060),
+            app.scale(820),
+            SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
+        );
+        app.render();
+        assert!(
+            app.settings_cache.is_empty(),
+            "resize must invalidate other page layouts"
+        );
+        app.command(NAV + 1);
+        assert_eq!(app.text(201), settings::PRESETS[1].1);
+        assert!(app.settings_cache.len() <= 2);
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+    }
+}
+
+#[test]
 fn settings_switches_preserve_chrome_drafts_and_native_font_choices() {
     unsafe {
         let mut app = app_for_check(
@@ -723,6 +1284,8 @@ unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path) -> App {
             hwnd,
             page_host: null_mut(),
             shell_layout: None,
+            settings_key: None,
+            settings_cache: vec![],
             organizer: store,
             agenda_state: [None, None],
             holidays: Rc::new(RefCell::new(holidays::Catalog::default())),
@@ -847,6 +1410,16 @@ fn render_settings_artifacts() {
         for dark in [false, true] {
             let mut app = app_for_check(dark, 120, &output.join("unused-agenda.json"));
             for page in 0..PAGES.len() {
+                let (width, height) = (1060, 820);
+                SetWindowPos(
+                    app.hwnd,
+                    null_mut(),
+                    0,
+                    0,
+                    app.scale(width),
+                    app.scale(height),
+                    SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
+                );
                 app.page = page;
                 app.render();
                 write_window(

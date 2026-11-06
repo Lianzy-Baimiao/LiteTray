@@ -17,7 +17,7 @@ pub(super) unsafe fn create(parent: HWND, bounds: RECT) -> HWND {
             WS_EX_CONTROLPARENT | WS_EX_COMPOSITED,
             class.as_ptr(),
             wide("页面内容").as_ptr(),
-            WS_CHILD | WS_CLIPCHILDREN | WS_VSCROLL,
+            WS_CHILD | WS_CLIPCHILDREN,
             bounds.left,
             bounds.top,
             bounds.right - bounds.left,
@@ -53,18 +53,21 @@ pub(super) unsafe fn finish(hwnd: HWND) {
             let mut r: RECT = std::mem::zeroed();
             GetWindowRect(child, &mut r);
             MapWindowPoints(null_mut(), hwnd, &mut r as *mut RECT as *mut POINT, 2);
-            bottom = bottom.max(r.bottom);
+            if GetWindowLongW(child, GWL_STYLE) as u32 & WS_VISIBLE != 0 {
+                bottom = bottom.max(r.bottom);
+            }
             child = GetWindow(child, GW_HWNDNEXT);
         }
         let info = SCROLLINFO {
             cbSize: size_of::<SCROLLINFO>() as u32,
             fMask: SIF_RANGE | SIF_PAGE,
             nMin: 0,
-            nMax: bottom + (20 * GetDpiForWindow(hwnd).max(96) / 96) as i32,
+            nMax: (bottom + (20 * GetDpiForWindow(hwnd).max(96) / 96) as i32 - 1).max(0),
             nPage: client.bottom.max(1) as u32,
             ..std::mem::zeroed()
         };
         SetScrollInfo(hwnd, SB_VERT, &info, 1);
+        ShowScrollBar(hwnd, SB_VERT, i32::from(info.nMax >= client.bottom));
     }
 }
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {

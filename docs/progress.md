@@ -317,3 +317,15 @@ Release 复现了父级已附加但时钟尚未完成布局的竞争；等待条
 证据：local/settings-hidden-startup-before.log、settings-hidden-startup-minimized.log、settings-hidden-startup-fixed.log、settings-hidden-startup-tests.log、settings-hidden-startup-clippy.log、settings-hidden-startup-build.log；实际包对照脚本 local/Check-HiddenStartupPackage.ps1，结果 local/hidden-startup-packages/5.4.1-before.json 与 5.4.2-after.json。
 
 03:35 已切换至 5.4.2，正式宿主 PID 42440 → 44300，保留原目录 dist/LiteTray-ui54-inline；旧 EXE 备份 local/LiteTray-ui541-before-hidden-startup.exe，完整包 dist/LiteTray-ui542-hidden-startup。EXE SHA256 E85C86E4D6909F831AF5539F62F3C8CE0B8CE85F47B9412ABA63E835CA3C3154。两份任务栏／QQ DLL 哈希保持不变，Explorer 34284、文件管理器 Explorer 12816、QQ 20412 启动时间均未变化。正式窗口标题确认为 5.4.2；设置、日历保持隐藏，打开计数为 0，保留给用户的真实第一次点击。只读任务栏检查主副屏 error/geometry_error 均为空，托盘输入仍 active=true。部署与现场记录见 local/settings-hidden-startup-deployment.json、settings-hidden-startup-live-before.json、settings-hidden-startup-live-after.json、settings-hidden-startup-taskbar.json。
+
+## 2026-11-07 开发版 5.5：设置性能与全界面检查
+
+收到“时钟显示／时钟样式切换卡顿、设置页多余滚动条和留白”及“深度检查整个 UI”的反馈。先用回归复现：两页导航中位 133ms，时钟显示、样式、天气、多屏托盘、关于在最小窗口中超出视口。定位到原生下拉框逐项插入／重绘及重复创建整页，批量填充并按配置、布局缓存两页。保持设置草稿，预设、主题、缩放更新会正确失效。
+
+紧凑重排设置；发现并修复大窗口日历额外留白造成的滚动范围、天气标题与启用复选框的控件重叠，以及 32 号字体预览高度超出行高。宽视口中的日历保持比例并居中，天气凭据增加输入提示。正常窗口内十页无外层滚动条，超长备注和列表在控件内部滚动。
+
+新增 8 项回归，含 100%／125% DPI、两种窗口尺寸、明暗主题、十页、六类日程、四个计时 Tab、弹层六类编辑、真实字体尺寸／文字截断／控件重叠、Tab 路径、字体下拉、长内容、32 号预览、缓存状态和导航绘制性能。完整测试 136 项通过，4 项原有忽略；另外执行原生离屏渲染并查看明暗截图，Clippy 通过。测试新建非输入桌面，没有操作用户的键盘鼠标或切换输入桌面。
+
+实际 5.4.2 与 5.5 发布 EXE 逐页检查：旧版 6 页产生滚动条，新版十页均无；时钟两页来回切换含重绘中位 128.47ms → 13.56ms，多数 11–16ms，单次最大 75.41ms，首次创建仍较慢（本轮时钟 149.79ms、样式 81.97ms）。隐藏启动首次打开继续通过。完整范围、边界与证据见 docs/ui-audit-5.5.md。
+
+04:08 已在原 dist/LiteTray-ui54-inline 目录切换到 5.5，宿主 PID 44300 → 43316；正式窗口标题已确认。旧 EXE 保留 local/LiteTray-ui542-before-ui55.exe。新版 SHA256 6F777B44EA8890A409DBDA2DE481ADCCFB00BEA27E8414994AE7580A8583E409，与实际发布包检查一致。任务栏与 QQ DLL 未变化，Explorer 34284、文件管理器 Explorer 12816、QQ 20412 的进程及启动时间保持不变。主副屏只读检查 error/geometry_error 均为空，托盘输入 active=true。正式设置／日历保持隐藏，未向主屏注入输入。部署记录 local/ui55-deployment.json、ui55-live-windows.json、ui55-taskbar.json。

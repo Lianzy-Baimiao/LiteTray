@@ -2,6 +2,28 @@
 //! page is prepared while hidden, then swapped into the content viewport.
 use super::*;
 
+#[derive(PartialEq, Eq)]
+pub(super) struct PageKey {
+    pub page: usize,
+    layout: (i32, i32, u32),
+    clock: Vec<u8>,
+}
+impl PageKey {
+    pub fn new(page: usize, layout: (i32, i32, u32), config: &Config) -> Option<Self> {
+        matches!(page, 1 | 7).then(|| Self {
+            page,
+            layout,
+            clock: serde_json::to_vec(&config.clock).expect("clock settings are serializable"),
+        })
+    }
+}
+pub(super) struct CachedPage {
+    pub key: PageKey,
+    pub window: HWND,
+    pub children: Vec<HWND>,
+    pub fields: HashMap<u16, HWND>,
+}
+
 pub(super) const PRESET: u16 = 830;
 pub(super) const PRESETS: [(&str, &str, &str); 4] = [
     ("Windows 简洁", "%time%", "%date%"),
@@ -27,35 +49,36 @@ impl App {
                 124,
                 total / 2,
             );
-            self.section("托盘图标", 224, 205, total);
+            self.section("托盘图标", 224, 184, total);
             self.check(
                 "将主屏托盘图标复制到副屏",
                 c.tray.enabled && c.tray.show_icons,
                 308,
                 224,
-                248,
+                220,
                 total,
             );
-            self.label("包含应用图标、隐藏图标入口和系统图标。\r\n顺序、显隐与宽度跟随主屏，按实际内容排列。",224,289,total,58);
-            self.section("你的显示器", 224, 390, total - 180);
-            self.button("刷新显示器", 307, 224 + total - 154, 382, 154);
+            self.label("包含应用图标、隐藏图标入口和系统图标。\r\n顺序、显隐与宽度跟随主屏，按实际内容排列。",224,260,total,44);
+            self.section("你的显示器", 224, 322, total - 180);
+            self.button("刷新显示器", 307, 224 + total - 154, 316, 154);
             self.label(
                 "指定屏幕时可多选；单击一行或按空格切换。",
                 224,
-                431,
+                364,
                 total,
                 24,
             );
             self.monitor_rows = monitors::choices(&self.monitor_snapshot, &c.tray.selected_devices);
+            let list_height = self.monitor_rows.len().clamp(2, 4) as i32 * 32 + 4;
             let list = self.control(
                 "LISTBOX",
                 "",
                 305,
                 WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY as u32 | LBS_MULTIPLESEL as u32,
                 224,
-                473,
+                396,
                 total,
-                128,
+                list_height,
             );
             for (index, row) in self.monitor_rows.iter().enumerate() {
                 SendMessageW(list, LB_ADDSTRING, 0, wide(&row.label).as_ptr() as isize);
@@ -67,9 +90,9 @@ impl App {
                 306,
                 SS_LEFT as u32,
                 224,
-                620,
+                408 + list_height,
                 total,
-                58,
+                44,
             );
         }
     }
@@ -97,17 +120,17 @@ impl App {
                 total,
                 26,
             );
-            self.section("启动与后台运行", 224, 264, total);
+            self.section("启动与后台运行", 224, 232, total);
             self.check(
                 "登录 Windows 时启动 LiteTray",
                 c.start_with_windows,
                 502,
                 224,
-                307,
+                274,
                 total,
             );
-            self.label("关闭设置窗口后继续运行，日程、闹钟与计时仍会提醒。\r\n退出 LiteTray 后停止提醒；已保存的数据留在本机。",224,351,total,62);
-            self.section("数据与维护", 224, 462, total);
+            self.label("关闭设置窗口后继续运行，日程、闹钟与计时仍会提醒。\r\n退出 LiteTray 后停止提醒；已保存的数据留在本机。",224,318,total,44);
+            self.section("数据与维护", 224, 394, total);
             let button = (total - 32) / 3;
             for (i, (name, id)) in [
                 ("打开配置目录", 503),
@@ -117,7 +140,7 @@ impl App {
             .into_iter()
             .enumerate()
             {
-                self.button(name, id, 224 + i as i32 * (button + 16), 512, button);
+                self.button(name, id, 224 + i as i32 * (button + 16), 436, button);
             }
         }
     }
@@ -126,7 +149,7 @@ impl App {
             let total = width - 260;
             let half = (total - 24) / 2;
             let quarter = (half - 16) / 2;
-            self.section("城市与刷新", 224, 88, total);
+            self.section("城市与刷新", 224, 88, total - 180);
             self.check(
                 "启用天气",
                 c.weather.enabled,
@@ -135,13 +158,13 @@ impl App {
                 84,
                 160,
             );
-            self.edit("城市名称", &c.weather.city, 401, 224, 136, half);
+            self.edit("城市名称", &c.weather.city, 401, 224, 124, half);
             self.edit(
                 "纬度",
                 &c.weather.latitude.to_string(),
                 402,
                 248 + half,
-                136,
+                124,
                 quarter,
             );
             self.edit(
@@ -149,7 +172,7 @@ impl App {
                 &c.weather.longitude.to_string(),
                 403,
                 264 + half + quarter,
-                136,
+                124,
                 quarter,
             );
             self.edit(
@@ -157,7 +180,7 @@ impl App {
                 &c.weather.refresh_minutes.to_string(),
                 414,
                 224,
-                208,
+                192,
                 half,
             );
             self.edit(
@@ -165,14 +188,14 @@ impl App {
                 &c.weather.timeout_seconds.to_string(),
                 415,
                 248 + half,
-                208,
+                192,
                 half,
             );
-            self.section("天气来源", 224, 300, total);
+            self.section("天气来源", 224, 264, total);
             self.label(
                 "上方优先；连接失败或数据过期时自动切换到下一个来源。",
                 224,
-                339,
+                296,
                 total,
                 25,
             );
@@ -182,9 +205,9 @@ impl App {
                 404,
                 WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY as u32,
                 224,
-                380,
+                332,
                 half,
-                132,
+                96,
             );
             for provider in &c.weather.providers {
                 SendMessageW(
@@ -200,7 +223,7 @@ impl App {
                 0,
                 405,
                 248 + half,
-                380,
+                332,
                 half,
             );
             for (i, (name, id)) in [("添加", 406), ("移除", 407), ("上移", 408), ("下移", 409)]
@@ -210,33 +233,54 @@ impl App {
                 self.button(
                     name,
                     id,
-                    248 + half + (i % 2) as i32 * (quarter + 16),
-                    426 + (i / 2) as i32 * 48,
-                    quarter,
+                    248 + half + i as i32 * (half + 8) / 4,
+                    382,
+                    (half - 24) / 4,
                 );
             }
-            self.section("可选服务凭据", 224, 555, total);
-            self.label("Open-Meteo、MET Norway 与 wttr.in 可直接使用。\r\n仅使用和风天气或 OpenWeather 时需要对应服务的 API Key。",224,590,total,56);
-            self.combo(&["和风天气", "OpenWeather"], 0, 410, 224, 660, 180);
+            self.section("可选服务凭据", 224, 446, total);
+            self.label(
+                "Open-Meteo、MET Norway、wttr.in 无需密钥；以下凭据按需填写。",
+                224,
+                480,
+                total,
+                24,
+            );
+            self.combo(&["和风天气", "OpenWeather"], 0, 410, 224, 516, 180);
             self.control(
                 "EDIT",
                 "",
                 411,
                 WS_TABSTOP | ES_AUTOHSCROLL as u32 | ES_PASSWORD as u32,
                 420,
-                660,
+                516,
                 total - 376,
                 30,
             );
-            self.button("保存", 412, 224 + total - 164, 658, 76);
-            self.button("删除", 413, 224 + total - 76, 658, 76);
-            self.edit(
-                "和风 API Host · 使用其他来源时留空",
+            SendMessageW(
+                self.field(411),
+                EM_SETCUEBANNER,
+                0,
+                wide("API Key（输入后保存）").as_ptr() as isize,
+            );
+            self.button("保存", 412, 224 + total - 164, 514, 76);
+            self.button("删除", 413, 224 + total - 76, 514, 76);
+            self.label("和风 API Host", 224, 568, 180, 24);
+            self.control(
+                "EDIT",
                 &c.weather.qweather_host,
                 416,
-                224,
-                720,
-                total,
+                WS_TABSTOP | ES_AUTOHSCROLL as u32,
+                420,
+                562,
+                total - 196,
+                30,
+            );
+            SendMessageW(
+                self.field(416),
+                EM_SETCUEBANNER,
+                0,
+                wide("使用其他天气来源时留空").as_ptr() as isize,
             );
         }
     }
@@ -265,7 +309,7 @@ impl App {
             EnableWindow(self.field(702), self.migration.is_some() as i32);
             EnableWindow(self.field(703), self.migration.is_some() as i32);
             self.section("转换结果", 224, 260, total);
-            let text=self.migration.as_ref().map(migration::Report::text).unwrap_or_else(||"尚未选择文件。\r\n\r\n使用 tools/Export-WindhawkProfile.ps1 导出设置，然后在这里导入。\r\n检查转换结果后点击“采用到草稿”，保存设置后生效。".into());
+            let text=self.migration.as_ref().map(migration::Report::text).unwrap_or_else(||"尚未选择文件。\r\n\r\n从 Windhawk 导出设置为 JSON 文件，再在这里导入。\r\n检查转换结果后点击“采用到草稿”，保存设置后生效。".into());
             let report = self.control(
                 "EDIT",
                 "",
@@ -296,7 +340,7 @@ impl App {
                 224,
                 84,
                 width - 260,
-                90,
+                72,
             );
             widgets::preview(hwnd, &c.clock, self.dark(), self.dpi);
         }
@@ -308,7 +352,7 @@ impl App {
                     name,
                     PRESET + index as u16,
                     224 + index as i32 * (total + 8) / 4,
-                    188,
+                    168,
                     (total - 24) / 4,
                 );
                 if c.clock.top_line == *top && c.clock.bottom_line == *bottom {
@@ -389,21 +433,20 @@ impl App {
             let half = (total - 24) / 2;
             self.clock_sample(c, width);
             self.preset_choices(c, total);
-            self.section("显示内容", 224, 242, total);
-            self.edit("第一行", &c.clock.top_line, 201, 224, 278, half);
-            self.edit("第二行", &c.clock.bottom_line, 202, 248 + half, 278, half);
+            self.section("显示内容", 224, 214, total);
+            self.edit("第一行", &c.clock.top_line, 201, 224, 250, half);
+            self.edit("第二行", &c.clock.bottom_line, 202, 248 + half, 250, half);
             self.label(
                 "变量：%time% 时间   %date% 日期   %weekday% 星期   %weather% 天气",
                 224,
-                346,
+                312,
                 total,
                 24,
             );
-            self.section("文字与交互", 224, 374, total);
-            self.label("字体", 224, 412, half, 24);
-            self.font_picker(Some(&c.clock.font_family), 205, 224, 438, half, false);
-            self.label("字号", 248 + half, 412, 96, 24);
-            self.size_picker(Some(c.clock.font_size), 206, 248 + half, 438, 96, false);
+            self.label("默认字体", 224, 348, half, 24);
+            self.font_picker(Some(&c.clock.font_family), 205, 224, 374, half, false);
+            self.label("字号", 248 + half, 348, 96, 24);
+            self.size_picker(Some(c.clock.font_size), 206, 248 + half, 374, 96, false);
             self.edit(
                 "宽度 · 留空自动",
                 &if c.clock.width == 0 {
@@ -413,24 +456,24 @@ impl App {
                 },
                 207,
                 364 + half,
-                412,
+                348,
                 half - 116,
             );
-            self.check("显示秒", c.clock.show_seconds, 203, 224, 482, 160);
-            self.check("日历显示农历", c.clock.show_lunar, 204, 410, 482, 220);
-            self.label("点击时钟后打开", 224, 524, half, 24);
+            self.check("显示秒", c.clock.show_seconds, 203, 224, 416, 160);
+            self.check("日历显示农历", c.clock.show_lunar, 204, 410, 416, 220);
+            self.label("点击时钟", 224, 464, 96, 24);
             self.combo(
                 &["日历与天气", "系统日历"],
                 usize::from(c.clock.click_action == ClickAction::SystemCalendar),
                 208,
-                224,
-                550,
-                half,
+                332,
+                458,
+                half - 108,
             );
-            self.button("预览原生时钟", 209, 248 + half, 549, half);
-            self.button("启用任务栏时钟", 212, 224, 600, half);
-            self.button("停用并恢复系统时钟", 213, 248 + half, 600, half);
-            self.control("STATIC", "", 210, SS_LEFT as u32, 224, 644, total, 52);
+            self.button("预览原生时钟", 209, 248 + half, 458, half);
+            self.button("启用任务栏时钟", 212, 224, 502, half);
+            self.button("停用并恢复系统时钟", 213, 248 + half, 502, half);
+            self.control("STATIC", "", 210, SS_LEFT as u32, 224, 548, total, 44);
         }
     }
     pub(super) unsafe fn style_settings(&mut self, c: &Config, width: i32) {
@@ -464,73 +507,73 @@ impl App {
                     248 + half,
                 ),
             ] {
-                self.section(title, x, 245, half);
-                self.label("字体", x, 282, half - 100, 24);
+                self.section(title, x, 218, half);
+                self.label("字体", x, 252, half - 100, 22);
                 self.font_picker(
                     line.font_family.as_deref(),
                     font_id,
                     x,
-                    308,
+                    278,
                     half - 100,
                     true,
                 );
-                self.label("字号", x + half - 84, 282, 84, 24);
-                self.size_picker(line.font_size, font_id + 1, x + half - 84, 308, 84, true);
-                self.edit("文字颜色", color, color_id, x, 346, half - 232);
+                self.label("字号", x + half - 84, 252, 84, 22);
+                self.size_picker(line.font_size, font_id + 1, x + half - 84, 278, 84, true);
+                self.edit("文字颜色", color, color_id, x, 318, half - 232);
                 self.button(
                     "选色",
                     if color_id == 801 { 812 } else { 813 },
                     x + half - 224,
-                    370,
+                    342,
                     56,
                 );
-                self.label("对齐方式", x + half - 150, 346, 150, 24);
+                self.label("对齐方式", x + half - 150, 318, 150, 22);
                 self.combo(
                     &["沿用公共对齐", "保留原样", "左对齐", "居中", "右对齐"],
                     line.alignment.map(|a| align(a) + 1).unwrap_or(0),
                     font_id + 2,
                     x + half - 150,
-                    372,
+                    344,
                     150,
                 );
             }
-            self.label("公共对齐", 224, 416, half, 24);
+            self.label("公共对齐", 224, 392, 96, 24);
             self.combo(
                 &["保留原样", "左对齐", "居中", "右对齐"],
                 align(c.clock.alignment),
                 803,
-                224,
-                443,
-                half,
+                332,
+                386,
+                half - 108,
             );
             self.label(
                 "独立设置每一行；选择“沿用”可跟随公共字体与字号。",
                 248 + half,
-                422,
+                386,
                 half,
-                52,
+                40,
             );
-            self.section("鼠标悬停提示", 224, 494, total);
+            self.section("鼠标悬停提示", 224, 436, total);
             let tip = self.control(
                 "EDIT",
                 &c.clock.tooltip_line.replace('\n', "\r\n"),
                 804,
                 WS_TABSTOP | ES_MULTILINE as u32 | ES_AUTOVSCROLL as u32 | ES_WANTRETURN as u32,
                 224,
-                530,
+                472,
                 total,
-                70,
+                52,
             );
             SendMessageW(tip, EM_SETLIMITTEXT, 1024, 0);
             self.label(
                 "留空使用系统提示。支持显示内容中的全部变量和换行。",
                 224,
-                610,
+                534,
                 total,
                 24,
             );
-            self.button("预览原生时钟", 209, 224, 646, half);
-            self.button("重置样式", 805, 248 + half, 646, half);
+            self.button("预览原生时钟", 209, 224, 566, half);
+            self.button("重置样式", 805, 248 + half, 566, half);
         }
     }
     pub(super) unsafe fn about_settings(&mut self, c: &Config, width: i32) {
@@ -545,9 +588,9 @@ impl App {
                 224,
                 130,
                 total,
-                68,
+                50,
             );
-            self.section("应用更新", 224, 232, total);
+            self.section("应用更新", 224, 204, total);
             self.control(
                 "STATIC",
                 &self
@@ -558,19 +601,19 @@ impl App {
                 608,
                 SS_LEFT as u32,
                 224,
-                276,
+                244,
                 total,
-                68,
+                56,
             );
-            self.button("检查更新", UPDATE, 224, 360, 160);
-            self.button("查看版本", OPEN_RELEASE, 402, 360, 150);
-            self.button("项目主页", 607, 570, 360, 140);
+            self.button("检查更新", UPDATE, 224, 312, 160);
+            self.button("查看版本", OPEN_RELEASE, 402, 312, 150);
+            self.button("项目主页", 607, 570, 312, 140);
             self.check(
                 "启动时检查更新",
                 c.updates.check_on_startup,
                 603,
                 224,
-                430,
+                364,
                 280,
             );
             self.check(
@@ -578,11 +621,11 @@ impl App {
                 c.updates.include_prerelease,
                 602,
                 522,
-                430,
+                364,
                 240,
             );
-            self.edit("更新仓库", &c.updates.repository, 601, 224, 493, total);
-            self.label("公开仓库直接检查，无需密钥或登录。\r\n开发期间仓库尚未公开时，会显示暂不可访问；公开后自动恢复。",224,574,total,60);
+            self.edit("更新仓库", &c.updates.repository, 601, 224, 416, total);
+            self.label("公开仓库直接检查，无需密钥或登录。\r\n开发期间仓库尚未公开时，会显示暂不可访问；公开后自动恢复。",224,488,total,44);
         }
     }
 }

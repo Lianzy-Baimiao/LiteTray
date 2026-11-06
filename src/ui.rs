@@ -44,7 +44,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.4.2";
+const UI_REVISION: &str = "开发版 5.5";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -105,6 +105,8 @@ struct App {
     hwnd: HWND,
     page_host: HWND,
     shell_layout: Option<(i32, i32, u32)>,
+    settings_key: Option<settings::PageKey>,
+    settings_cache: Vec<settings::CachedPage>,
     organizer: Rc<RefCell<organizer::Store>>,
     holidays: Rc<RefCell<holidays::Catalog>>,
     holiday_queue: std::collections::BTreeSet<i32>,
@@ -272,6 +274,8 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             hwnd,
             page_host: null_mut(),
             shell_layout: None,
+            settings_key: None,
+            settings_cache: vec![],
             organizer: Rc::new(RefCell::new(organizer::Store::open(
                 &config::data_dir().join("agenda.json"),
             ))),
@@ -467,6 +471,10 @@ impl App {
     }
     unsafe fn release_resources(&mut self) {
         unsafe {
+            for page in self.settings_cache.drain(..) {
+                DestroyWindow(page.window);
+            }
+            self.settings_key = None;
             PALETTE.with(|p| p.set(None));
             for object in [
                 self.font,
@@ -725,10 +733,20 @@ impl App {
                 w,
                 220,
             );
+            // Native comboboxes redraw and recalculate for every inserted row,
+            // even while their parent page is being prepared offscreen.
+            SendMessageW(hwnd, WM_SETREDRAW, 0, 0);
+            let bytes = items
+                .iter()
+                .map(|item| (item.encode_utf16().count() + 1) * 2)
+                .sum::<usize>();
+            SendMessageW(hwnd, CB_INITSTORAGE, items.len(), bytes as isize);
             for item in items {
                 SendMessageW(hwnd, CB_ADDSTRING, 0, wide(item).as_ptr() as isize);
             }
             SendMessageW(hwnd, CB_SETCURSEL, index, 0);
+            SendMessageW(hwnd, WM_SETREDRAW, 1, 0);
+            InvalidateRect(hwnd, null(), 0);
         }
     }
     fn field(&self, id: u16) -> HWND {
@@ -789,31 +807,66 @@ impl App {
             let layout = (rect.right, rect.bottom, self.dpi);
             let rebuild_shell = self.shell_layout != Some(layout);
             let old_page = self.page_host;
+            let old_key = self.settings_key.take();
+            let next_key = settings::PageKey::new(self.page, layout, &self.draft);
+            if rebuild_shell {
+                for page in self.settings_cache.drain(..) {
+                    DestroyWindow(page.window);
+                }
+            }
+            let cached = next_key
+                .as_ref()
+                .and_then(|key| self.settings_cache.iter().position(|page| &page.key == key))
+                .map(|index| self.settings_cache.remove(index));
+            // Keep at most one inactive instance of each expensive clock page.
+            self.settings_cache.retain(|page| {
+                if page.key.page == self.page {
+                    DestroyWindow(page.window);
+                    false
+                } else {
+                    true
+                }
+            });
+            let mut old_children = vec![];
+            let mut old_fields = HashMap::new();
             // Keep the old page painted while constructing the replacement
             // under a hidden parent. Navigation/header/footer survive switches.
             self.children.retain(|&child| {
                 let content = child == old_page || IsChild(old_page, child) != 0;
+                if content {
+                    old_children.push(child);
+                }
                 if rebuild_shell && !content {
                     DestroyWindow(child);
                 }
                 !content && !rebuild_shell
             });
-            self.fields.retain(|_, child| {
+            self.fields.retain(|&id, child| {
+                if *child == old_page || IsChild(old_page, *child) != 0 {
+                    old_fields.insert(id, *child);
+                }
                 !rebuild_shell
                     && IsWindow(*child) != 0
                     && *child != old_page
                     && IsChild(old_page, *child) == 0
             });
-            self.page_host = page::create(
-                self.hwnd,
-                design::rect(
-                    self.scale(248),
-                    self.scale(124),
-                    rect.right - self.scale(276),
-                    rect.bottom - self.scale(220),
-                ),
-            );
-            self.children.push(self.page_host);
+            let reused = cached.is_some();
+            if let Some(cached) = cached {
+                self.page_host = cached.window;
+                self.children.extend(cached.children);
+                self.fields.extend(cached.fields);
+            } else {
+                self.page_host = page::create(
+                    self.hwnd,
+                    design::rect(
+                        self.scale(248),
+                        self.scale(124),
+                        rect.right - self.scale(276),
+                        rect.bottom - self.scale(220),
+                    ),
+                );
+                self.children.push(self.page_host);
+            }
             if rebuild_shell {
                 let brand = self.label("LiteTray", 22, 24, 170, 38);
                 SendMessageW(brand, WM_SETFONT, self.title_font as usize, 1);
@@ -874,52 +927,53 @@ impl App {
             ];
             set_text(self.field(902), descriptions[self.page]);
             let c = self.draft.clone();
-            match self.page {
-                0 => {
-                    let view = dashboard::create(
-                        self.page_host,
-                        design::rect(
-                            self.scale(8),
-                            self.scale(8),
-                            self.scale(width - 236),
-                            self.scale((height - 238).min(680)),
-                        ),
-                        self.dark(),
-                        false,
-                    );
-                    self.children.push(view);
-                    self.fields.insert(dashboard::ID, view);
-                    dashboard::bind_store(view, self.organizer.clone());
-                    dashboard::bind_holidays(view, self.holidays.clone());
-                    if let Some(calendar) = self.calendar {
-                        dashboard::restore_selection(view, calendar);
+            if !reused {
+                match self.page {
+                    0 => {
+                        let mut bounds: RECT = std::mem::zeroed();
+                        GetClientRect(self.page_host, &mut bounds);
+                        InflateRect(&mut bounds, -self.scale(8), -self.scale(8));
+                        // The calendar keeps the flyout's proportions. Center
+                        // that surface in a wider settings viewport.
+                        let width = (bounds.right - bounds.left)
+                            .min((bounds.bottom - bounds.top) * popup::WIDTH / popup::HEIGHT);
+                        bounds.left += (bounds.right - bounds.left - width) / 2;
+                        bounds.right = bounds.left + width;
+                        let view = dashboard::create(self.page_host, bounds, self.dark(), false);
+                        self.children.push(view);
+                        self.fields.insert(dashboard::ID, view);
+                        dashboard::bind_store(view, self.organizer.clone());
+                        dashboard::bind_holidays(view, self.holidays.clone());
+                        if let Some(calendar) = self.calendar {
+                            dashboard::restore_selection(view, calendar);
+                        }
                     }
+                    1 => self.clock_settings(&c, width),
+                    2 => self.tray_settings(&c, width),
+                    3 => self.weather_settings(&c, width),
+                    4 => self.general_settings(&c, width),
+                    5 => self.about_settings(&c, width),
+                    6 => self.migration_settings(width, height),
+                    7 => self.style_settings(&c, width),
+                    8 | 9 => {
+                        let timers = self.page == 9;
+                        ShowScrollBar(self.page_host, SB_VERT, 0);
+                        let mut bounds: RECT = std::mem::zeroed();
+                        GetClientRect(self.page_host, &mut bounds);
+                        let view = agenda::create(
+                            self.page_host,
+                            bounds,
+                            self.dark(),
+                            self.organizer.clone(),
+                            timers,
+                            self.agenda_scope,
+                            self.agenda_state[timers as usize].as_ref(),
+                        );
+                        self.children.push(view);
+                        self.fields.insert(agenda::ID, view);
+                    }
+                    _ => {}
                 }
-                1 => self.clock_settings(&c, width),
-                2 => self.tray_settings(&c, width),
-                3 => self.weather_settings(&c, width),
-                4 => self.general_settings(&c, width),
-                5 => self.about_settings(&c, width),
-                6 => self.migration_settings(width, height),
-                7 => self.style_settings(&c, width),
-                8 | 9 => {
-                    let timers = self.page == 9;
-                    ShowScrollBar(self.page_host, SB_VERT, 0);
-                    let mut bounds: RECT = std::mem::zeroed();
-                    GetClientRect(self.page_host, &mut bounds);
-                    let view = agenda::create(
-                        self.page_host,
-                        bounds,
-                        self.dark(),
-                        self.organizer.clone(),
-                        timers,
-                        self.agenda_scope,
-                        self.agenda_state[timers as usize].as_ref(),
-                    );
-                    self.children.push(view);
-                    self.fields.insert(agenda::ID, view);
-                }
-                _ => {}
             }
             set_text(
                 self.field(STATUS),
@@ -943,14 +997,25 @@ impl App {
                 self.field(SAVE),
                 if self.page < 8 { SW_SHOWNA } else { SW_HIDE },
             );
-            if self.page < 8 {
+            if (1..8).contains(&self.page) && !reused {
                 page::finish(self.page_host);
             }
             self.update_views();
             ShowWindow(self.page_host, SW_SHOWNA);
             if !old_page.is_null() {
-                DestroyWindow(old_page);
+                if let Some(key) = old_key.filter(|key| key.page != self.page && !rebuild_shell) {
+                    ShowWindow(old_page, SW_HIDE);
+                    self.settings_cache.push(settings::CachedPage {
+                        key,
+                        window: old_page,
+                        children: old_children,
+                        fields: old_fields,
+                    });
+                } else {
+                    DestroyWindow(old_page);
+                }
             }
+            self.settings_key = next_key;
             RedrawWindow(
                 self.hwnd,
                 null(),

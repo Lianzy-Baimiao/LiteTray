@@ -187,7 +187,7 @@ impl Drop for PreviewData {
 }
 pub(super) unsafe fn preview(hwnd: HWND, config: &config::ClockConfig, dark: bool, dpi: u32) {
     unsafe {
-        let data = Box::new(PreviewData {
+        let mut data = Box::new(PreviewData {
             clock: config.clone(),
             dark,
             dpi,
@@ -213,6 +213,45 @@ pub(super) unsafe fn preview(hwnd: HWND, config: &config::ClockConfig, dark: boo
                 ),
             ],
         });
+        // Fit both lines by the same ratio so large configured fonts remain
+        // legible in the compact sample without clipping their ascenders.
+        let dc = GetDC(hwnd);
+        let mut heights = [
+            (config.top_style.font_size.unwrap_or(config.font_size) * dpi / 96) as i32,
+            (config.bottom_style.font_size.unwrap_or(config.font_size) * dpi / 96) as i32,
+        ];
+        let families = [
+            config
+                .top_style
+                .font_family
+                .as_deref()
+                .unwrap_or(&config.font_family),
+            config
+                .bottom_style
+                .font_family
+                .as_deref()
+                .unwrap_or(&config.font_family),
+        ];
+        let available = (28 * dpi / 96) as i32;
+        for _ in 0..3 {
+            let mut largest = 0;
+            for font in &data.fonts[1..] {
+                let old = SelectObject(dc, *font);
+                let mut metrics: TEXTMETRICW = std::mem::zeroed();
+                GetTextMetricsW(dc, &mut metrics);
+                SelectObject(dc, old);
+                largest = largest.max(metrics.tmHeight);
+            }
+            if largest <= available {
+                break;
+            }
+            for index in 0..2 {
+                heights[index] = (heights[index] * available / largest).max(1);
+                let replacement = make_font(heights[index], 400, families[index]);
+                DeleteObject(std::mem::replace(&mut data.fonts[index + 1], replacement));
+            }
+        }
+        ReleaseDC(hwnd, dc);
         SetWindowSubclass(hwnd, Some(preview_proc), 17, Box::into_raw(data) as usize);
     }
 }
@@ -230,6 +269,27 @@ pub(super) unsafe fn update_preview(hwnd: HWND, config: &config::ClockConfig) {
         preview(hwnd, config, dark, dpi);
         drop(previous);
         InvalidateRect(hwnd, null(), 0);
+    }
+}
+#[cfg(test)]
+pub(super) unsafe fn preview_line_heights(hwnd: HWND) -> (i32, [i32; 2]) {
+    unsafe {
+        let mut data = 0;
+        assert_ne!(
+            GetWindowSubclass(hwnd, Some(preview_proc), 17, &mut data),
+            0
+        );
+        let data = &*(data as *const PreviewData);
+        let dc = GetDC(hwnd);
+        let heights = [1, 2].map(|line| {
+            let old = SelectObject(dc, data.fonts[line]);
+            let mut metrics: TEXTMETRICW = std::mem::zeroed();
+            GetTextMetricsW(dc, &mut metrics);
+            SelectObject(dc, old);
+            metrics.tmHeight
+        });
+        ReleaseDC(hwnd, dc);
+        ((28 * data.dpi / 96) as i32, heights)
     }
 }
 unsafe extern "system" fn preview_proc(
@@ -261,7 +321,7 @@ unsafe extern "system" fn preview_proc(
             design::text(
                 dc,
                 "任务栏时钟预览",
-                design::rect(s(18), s(17), s(190), s(23)),
+                design::rect(s(18), s(10), s(190), s(23)),
                 data.fonts[0],
                 t.muted,
                 DT_LEFT | DT_SINGLELINE,
@@ -269,7 +329,7 @@ unsafe extern "system" fn preview_proc(
             design::text(
                 dc,
                 "示例天气 · 保存后应用",
-                design::rect(s(18), s(45), s(220), s(22)),
+                design::rect(s(18), s(38), s(220), s(22)),
                 data.fonts[0],
                 t.muted,
                 DT_LEFT | DT_SINGLELINE,
@@ -292,7 +352,7 @@ unsafe extern "system" fn preview_proc(
                 litetray_adapter_protocol::clock::Alignment::Center => DT_CENTER,
                 _ => DT_RIGHT,
             };
-            let area = design::rect(s(250), s(18), r.right - s(274), s(28));
+            let area = design::rect(s(250), s(8), r.right - s(274), s(28));
             design::text(
                 dc,
                 &frame.text.top,
@@ -304,7 +364,7 @@ unsafe extern "system" fn preview_proc(
             design::text(
                 dc,
                 &frame.text.bottom,
-                design::rect(area.left, s(44), area.right - area.left, s(28)),
+                design::rect(area.left, s(36), area.right - area.left, s(28)),
                 data.fonts[2],
                 color(&data.clock.bottom_color),
                 alignment(&data.clock.bottom_style) | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
