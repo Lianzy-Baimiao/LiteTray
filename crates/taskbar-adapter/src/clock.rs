@@ -405,6 +405,23 @@ pub(crate) fn self_test() -> Result<serde_json::Value, String> {
             "rollback leaves no pending writes",
         )?;
         drop(lease);
+        let mut lease = ClockLease::capture(&time, &date, &container)?;
+        lease.apply("already active", "already active", 13., "Segoe UI", 280.)?;
+        require(
+            lease
+                .write(&[&temporary, &temporary, &size, &size, &invalid])
+                .is_err(),
+            "active setter failure",
+        )?;
+        require(
+            text(&time)? == "Restored binding updates"
+                && text(&date)? == "Original date"
+                && font(&date)? == 15.
+                && width(&container)?.is_nan()
+                && lease.clean(),
+            "active failure restores previous owned values",
+        )?;
+        drop(lease);
         let mut checks = vec![
             "binding_capture",
             "local_value_capture",
@@ -421,6 +438,7 @@ pub(crate) fn self_test() -> Result<serde_json::Value, String> {
             "native_setter_failure",
             "partial_failure_rollback",
             "no_pending_writes",
+            "active_native_setter_failure_restores_previous_values",
         ];
         checks.extend(crate::lifecycle_checks::run()?);
         Ok(

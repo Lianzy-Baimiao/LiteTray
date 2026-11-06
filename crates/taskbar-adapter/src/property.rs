@@ -97,25 +97,33 @@ impl Property {
         if !self.owns_current()? {
             return Err("XAML 属性已被其他组件修改".into());
         }
-        self.written = value.map(|v| v.query(&IID_IUnknown)).transpose()?;
+        let attempted = value.map(|v| v.query(&IID_IUnknown)).transpose()?;
+        let previous = std::mem::replace(&mut self.written, attempted);
+        let was_dirty = self.dirty;
         // A failed native setter may have produced side effects, so include it
         // in rollback even when HRESULT indicates a failure.
         self.dirty = true;
         unsafe {
-            check(
+            let result = check(
                 (self.target.table::<IDependencyObject_Vtbl>().SetValue)(
                     self.target.raw(),
                     self.property.raw(),
                     value.map_or(null_mut(), Object::raw),
                 ),
                 "SetValue",
-            )?;
+            );
             // Never adopt a reentrant writer's value as our own. Boxed text
             // and numbers may be canonicalized by XAML, so compare by value.
             if !self.owns_current()? {
+                // A rejected update may leave our previous successful value
+                // in place. Keep ownership of that value for group rollback;
+                // otherwise an active clock could be left partially modified.
+                self.written = previous;
+                self.dirty = was_dirty;
+                result?;
                 return Err("XAML setter 返回时属性已被其他组件接管".into());
             }
-            Ok(())
+            result
         }
     }
     fn read_local(&self) -> Result<Option<Object>, String> {
