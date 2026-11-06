@@ -302,34 +302,31 @@ fn migrate_clock(
             if family.is_empty() {
                 return inactive("来源使用系统字体，当前 LiteTray 字体保留");
             }
-            let time = setting(settings, "TimeStyle.FontFamily").unwrap_or("");
-            let date = setting(settings, "DateStyle.FontFamily").unwrap_or("");
-            if time != date {
-                return review("来源两行字体不同；当前共享字体，保留原设置");
+            if let Err(error) = litetray_adapter_protocol::clock::validate_font_family(family) {
+                return review(&error);
             }
-            if family.len() > 128 {
-                return review("字体名称过长");
-            }
-            config.clock.font_family = family.into();
-            imported("已转换两行共享字体")
+            let line = if key.starts_with("TimeStyle") {
+                &mut config.clock.top_style
+            } else {
+                &mut config.clock.bottom_style
+            };
+            line.font_family = Some(family.into());
+            imported("已转换此行字体；未安装字体由 Windows 回退显示")
         }
         "TimeStyle.FontSize" | "DateStyle.FontSize" => {
             if value.as_u64() == Some(0) {
                 return inactive("来源未指定字号，当前字号保留");
             }
-            let time = settings
-                .get("TimeStyle.FontSize")
-                .and_then(|v| number(v, 8, 32));
-            let date = settings
-                .get("DateStyle.FontSize")
-                .and_then(|v| number(v, 8, 32));
-            match (time, date) {
-                (Some(t), Some(d)) if t == d => {
-                    config.clock.font_size = t;
-                    imported("已转换两行共享字号")
-                }
-                _ => review("来源字号不同或超出 8–32 范围，保留当前字号"),
-            }
+            let Some(size) = number(value, 8, 32) else {
+                return review("字号超出 8–32 范围或不是整数，保留当前字号");
+            };
+            let line = if key.starts_with("TimeStyle") {
+                &mut config.clock.top_style
+            } else {
+                &mut config.clock.bottom_style
+            };
+            line.font_size = Some(size);
+            imported("已转换此行字号")
         }
         "TimeStyle.TextColor" | "DateStyle.TextColor" => {
             let Some(color) = string(value) else {
@@ -353,18 +350,19 @@ fn migrate_clock(
             if value.as_str() == Some("") {
                 return inactive("来源未指定对齐，当前设置保留");
             }
-            let time = setting(settings, "TimeStyle.TextAlignment");
-            let date = setting(settings, "DateStyle.TextAlignment");
-            if time != date {
-                return review("来源两行对齐不同；当前共用对齐方式，保留原设置");
-            }
-            config.clock.alignment = match time {
+            let alignment = match string(value) {
                 Some("Left") => Alignment::Left,
                 Some("Center") => Alignment::Center,
                 Some("Right") => Alignment::Right,
                 _ => return review("暂不支持此对齐方式，保留原设置"),
             };
-            imported("已转换两行文字对齐方式")
+            let line = if key.starts_with("TimeStyle") {
+                &mut config.clock.top_style
+            } else {
+                &mut config.clock.bottom_style
+            };
+            line.alignment = Some(alignment);
+            imported("已转换此行文字对齐方式")
         }
         "DateFormat" | "TimeFormat" | "WeekdayFormat" => {
             let used = match key {
@@ -611,24 +609,121 @@ mod tests {
     use super::*;
     use chrono::{Local, TimeZone};
     #[test]
-    fn imports_independent_colors_but_preserves_unsupported_alignment() {
+    fn imports_independent_colors_and_alignment() {
         let mut base = Config::default();
         base.clock.bottom_color = "#112233".into();
         let report=preview(&profile(serde_json::json!({"TimeStyle.TextColor":"#FF0000","DateStyle.TextColor":"Red\"/>","TimeStyle.TextAlignment":"Right","DateStyle.TextAlignment":"Right"}),serde_json::json!({})),&base).unwrap();
         assert_eq!(report.candidate.clock.top_color, "#FF0000");
         assert_eq!(report.candidate.clock.bottom_color, "#112233");
         assert_eq!(
-            report.candidate.clock.alignment,
-            litetray_adapter_protocol::clock::Alignment::Right
+            report.candidate.clock.top_style.alignment,
+            Some(litetray_adapter_protocol::clock::Alignment::Right)
         );
         let report=preview(&profile(serde_json::json!({"TimeStyle.TextAlignment":"Left","DateStyle.TextAlignment":"Right"}),serde_json::json!({})),&base).unwrap();
         assert_eq!(report.candidate.clock.alignment, base.clock.alignment);
-        assert!(
-            report
-                .entries
-                .iter()
-                .all(|e| e.status == Status::NeedsReview)
+        assert_eq!(
+            report.candidate.clock.top_style.alignment,
+            Some(litetray_adapter_protocol::clock::Alignment::Left)
         );
+        assert_eq!(
+            report.candidate.clock.bottom_style.alignment,
+            Some(litetray_adapter_protocol::clock::Alignment::Right)
+        );
+        assert!(report.entries.iter().all(|e| e.status == Status::Imported));
+    }
+    #[test]
+    fn imports_distinct_fonts_and_sizes_without_changing_common_defaults() {
+        let base = Config::default();
+        let report = preview(
+            &profile(
+                serde_json::json!({
+                    "TimeStyle.FontFamily":"Consolas", "TimeStyle.FontSize":20,
+                    "DateStyle.FontFamily":"Segoe UI", "DateStyle.FontSize":10
+                }),
+                serde_json::json!({}),
+            ),
+            &base,
+        )
+        .unwrap();
+        assert_eq!(
+            report.candidate.clock.top_style.font_family.as_deref(),
+            Some("Consolas")
+        );
+        assert_eq!(
+            report.candidate.clock.bottom_style.font_family.as_deref(),
+            Some("Segoe UI")
+        );
+        assert_eq!(report.candidate.clock.top_style.font_size, Some(20));
+        assert_eq!(report.candidate.clock.bottom_style.font_size, Some(10));
+        assert_eq!(report.candidate.clock.font_family, base.clock.font_family);
+        assert_eq!(report.candidate.clock.font_size, base.clock.font_size);
+        assert!(report.entries.iter().all(|e| e.status == Status::Imported));
+        report.candidate.validate().unwrap();
+    }
+    #[test]
+    fn partial_line_migration_preserves_invalid_empty_and_absent_fields() {
+        use litetray_adapter_protocol::clock::{Alignment, LineStyle};
+        let mut base = Config::default();
+        base.clock.top_style = LineStyle {
+            font_family: Some("Consolas".into()),
+            font_size: Some(18),
+            alignment: Some(Alignment::Right),
+        };
+        base.clock.bottom_style = LineStyle {
+            font_family: Some("Arial".into()),
+            font_size: Some(14),
+            alignment: Some(Alignment::Left),
+        };
+        let report = preview(
+            &profile(
+                serde_json::json!({
+                    "TimeStyle.FontFamily":"   ", "TimeStyle.FontSize":0,
+                    "DateStyle.FontFamily":"", "DateStyle.FontSize":9,
+                    "DateStyle.TextAlignment":"Justify"
+                }),
+                serde_json::json!({}),
+            ),
+            &base,
+        )
+        .unwrap();
+        assert_eq!(report.candidate.clock.top_style, base.clock.top_style);
+        let mut expected = base.clock.bottom_style.clone();
+        expected.font_size = Some(9);
+        assert_eq!(report.candidate.clock.bottom_style, expected);
+        for (key, status) in [
+            ("TimeStyle.FontFamily", Status::NeedsReview),
+            ("TimeStyle.FontSize", Status::Inactive),
+            ("DateStyle.FontFamily", Status::Inactive),
+            ("DateStyle.FontSize", Status::Imported),
+            ("DateStyle.TextAlignment", Status::NeedsReview),
+        ] {
+            assert_eq!(
+                report
+                    .entries
+                    .iter()
+                    .find(|e| e.setting == key)
+                    .unwrap()
+                    .status,
+                status
+            );
+        }
+        for invalid in [
+            serde_json::json!(7),
+            serde_json::json!(33),
+            serde_json::json!(12.5),
+            serde_json::json!("12"),
+        ] {
+            let report = preview(
+                &profile(
+                    serde_json::json!({"TimeStyle.FontSize":invalid}),
+                    serde_json::json!({}),
+                ),
+                &base,
+            )
+            .unwrap();
+            assert_eq!(report.candidate.clock.top_style, base.clock.top_style);
+            assert_eq!(report.entries[0].status, Status::NeedsReview);
+        }
     }
     fn profile(settings: Value, tray: Value) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({"schemaVersion":1,"modules":{CLOCK:{"version":"1.8.1","enabled":true,"settings":settings},TRAY:{"version":"1.3.0","enabled":true,"settings":tray}}})).unwrap()

@@ -229,6 +229,16 @@ pub struct IDesktopWindowXamlSource_Vtbl {
         unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
     NavigateFocus: usize,
 }
+pub const IID_IFontFamily: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0x92467e64_d66a_4cf4_9322_3d23b3c0c361);
+#[repr(C)]
+pub struct IFontFamily_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    pub Source: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut windows_sys::core::HSTRING,
+    ) -> windows_sys::core::HRESULT,
+}
 pub const IID_IFontFamilyFactory: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0xd5603377_3dae_4dcd_af09_f9498e9ec659);
 #[repr(C)]

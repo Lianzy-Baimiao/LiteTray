@@ -491,6 +491,8 @@ pub(crate) fn run() -> Result<serde_json::Value, String> {
             top_color: Some("#79C0FF".into()),
             bottom_color: Some("#FFCC88".into()),
             alignment: litetray_adapter_protocol::clock::Alignment::Center,
+            top_style: Default::default(),
+            bottom_style: Default::default(),
         },
     };
     let events = Rc::new(RefCell::new(Vec::new()));

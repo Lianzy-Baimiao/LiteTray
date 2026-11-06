@@ -36,6 +36,7 @@ fn main() {
         "Windows.UI.Xaml.Data.IBindingExpression",
         "Windows.UI.Xaml.Data.IBindingExpressionBase",
         "Windows.UI.Xaml.Media.IFontFamilyFactory",
+        "Windows.UI.Xaml.Media.IFontFamily",
         "Windows.UI.Xaml.Hosting.IWindowsXamlManagerStatics",
         "Windows.Foundation.IPropertyValueStatics",
         "Windows.Foundation.IPropertyValue",

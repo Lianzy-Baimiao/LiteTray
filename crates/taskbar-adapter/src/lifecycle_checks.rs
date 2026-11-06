@@ -92,6 +92,8 @@ fn frame() -> Frame {
             top_color: None,
             bottom_color: None,
             alignment: Default::default(),
+            top_style: Default::default(),
+            bottom_style: Default::default(),
         },
     }
 }

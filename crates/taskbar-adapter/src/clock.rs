@@ -125,12 +125,17 @@ impl ClockLease {
         let result = (|| {
             let prepared = self.decorations.prepare(frame)?;
             if style_changed {
-                self.apply(
+                let style = &frame.style;
+                self.apply_lines(
                     &frame.text.top,
                     &frame.text.bottom,
-                    frame.style.font_size as f64,
-                    &frame.style.font_family,
-                    frame.style.width as f64,
+                    [&style.top_style, &style.bottom_style].map(|line| {
+                        (
+                            line.font_size.unwrap_or(style.font_size) as f64,
+                            line.font_family.as_deref().unwrap_or(&style.font_family),
+                        )
+                    }),
+                    style.width as f64,
                 )?;
             } else {
                 self.tick(&frame.text.top, &frame.text.bottom)?;
@@ -153,12 +158,23 @@ impl ClockLease {
         family: &str,
         width: f64,
     ) -> Result<(), String> {
-        if !(8.0..=32.0).contains(&size)
-            || !(80.0..=600.0).contains(&width)
-            || family.trim().is_empty()
-            || family.len() > 128
+        self.apply_lines(top, bottom, [(size, family); 2], width)
+    }
+    fn apply_lines(
+        &mut self,
+        top: &str,
+        bottom: &str,
+        fonts: [(f64, &str); 2],
+        width: f64,
+    ) -> Result<(), String> {
+        if fonts.iter().any(|(size, family)| {
+            !(8.0..=32.0).contains(size)
+                || litetray_adapter_protocol::clock::validate_font_family(family).is_err()
+        }) || !(80.0..=600.0).contains(&width)
             || top.len() > 4096
             || bottom.len() > 4096
+            || top.contains('\0')
+            || bottom.contains('\0')
         {
             return Err("时钟显示参数无效".into());
         }
@@ -166,16 +182,18 @@ impl ClockLease {
         // clock untouched and keeps the original rollback snapshot.
         let top_value = boxed_text(top)?;
         let bottom_value = boxed_text(bottom)?;
-        let size = boxed_number(size)?;
-        let family = font_family(family)?;
+        let top_size = boxed_number(fonts[0].0)?;
+        let bottom_size = boxed_number(fonts[1].0)?;
+        let top_family = font_family(fonts[0].1)?;
+        let bottom_family = font_family(fonts[1].1)?;
         let width = boxed_number(width)?;
         self.write(&[
             &top_value,
             &bottom_value,
-            &size,
-            &size,
-            &family,
-            &family,
+            &top_size,
+            &bottom_size,
+            &top_family,
+            &bottom_family,
             &width,
         ])?;
         self.live = true;
@@ -420,11 +438,12 @@ pub(crate) fn self_test() -> Result<serde_json::Value, String> {
         // The transaction must restore both text values and both font sizes.
         let mut lease = ClockLease::capture(&time, &date, &container)?;
         let temporary = boxed_text("partial write")?;
-        let size = boxed_number(18.)?;
+        let top_size = boxed_number(18.)?;
+        let bottom_size = boxed_number(10.)?;
         let invalid = boxed_number(4.)?;
         require(
             lease
-                .write(&[&temporary, &temporary, &size, &size, &invalid])
+                .write(&[&temporary, &temporary, &top_size, &bottom_size, &invalid])
                 .is_err(),
             "native setter failure",
         )?;
@@ -441,10 +460,15 @@ pub(crate) fn self_test() -> Result<serde_json::Value, String> {
         )?;
         drop(lease);
         let mut lease = ClockLease::capture(&time, &date, &container)?;
-        lease.apply("already active", "already active", 13., "Segoe UI", 280.)?;
+        lease.apply_lines(
+            "already active",
+            "already active",
+            [(13., "Consolas"), (9., "Arial")],
+            280.,
+        )?;
         require(
             lease
-                .write(&[&temporary, &temporary, &size, &size, &invalid])
+                .write(&[&temporary, &temporary, &top_size, &bottom_size, &invalid])
                 .is_err(),
             "active setter failure",
         )?;

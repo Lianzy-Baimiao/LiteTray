@@ -6,7 +6,9 @@ use crate::{
     xaml::{Object, check, factory},
     xaml_abi::*,
 };
-use litetray_adapter_protocol::clock::{Alignment, Frame, Owner, Style, Text};
+use litetray_adapter_protocol::clock::{
+    Alignment, Change, Command, Frame, LineStyle, Owner, Style, Text,
+};
 use std::ptr::null_mut;
 fn require(value: bool, label: &str) -> Result<(), String> {
     if value {
@@ -107,6 +109,8 @@ pub(crate) fn run() -> Result<Vec<&'static str>, String> {
             top_color: Some("#FF0000".into()),
             bottom_color: Some("#8000FF00".into()),
             alignment: Alignment::Right,
+            top_style: Default::default(),
+            bottom_style: Default::default(),
         },
     };
     let mut lease = ClockLease::capture(&time, &date, &container)?;
@@ -292,5 +296,175 @@ pub(crate) fn run() -> Result<Vec<&'static str>, String> {
         "unset alignment remains unset",
     )?;
     checks.push("clock_style_unset_alignment_restored");
+    checks.extend(line_styles()?);
+    Ok(checks)
+}
+
+fn font_object(node: &Object) -> Result<Object, String> {
+    let statics = factory("Windows.UI.Xaml.Controls.TextBlock", &IID_ITextBlockStatics)?;
+    let prop = unsafe {
+        property(
+            &statics,
+            statics.table::<ITextBlockStatics_Vtbl>().FontFamilyProperty,
+        )?
+    };
+    read(node, &prop)?.ok_or("missing font family".into())
+}
+fn font(node: &Object) -> Result<(String, f64), String> {
+    let family = font_object(node)?.query(&IID_IFontFamily)?;
+    let node = node.query(&IID_ITextBlock)?;
+    unsafe {
+        let source = family.string(family.table::<IFontFamily_Vtbl>().Source, 128)?;
+        let mut size = 0.;
+        check(
+            (node.table::<ITextBlock_Vtbl>().FontSize)(node.raw(), &mut size),
+            "Read font size",
+        )?;
+        Ok((source, size))
+    }
+}
+fn line_styles() -> Result<Vec<&'static str>, String> {
+    let time = load(
+        r#"<TextBlock xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Text="Original time" FontFamily="{Binding FontFamily}" FontSize="{Binding FontSize}" TextAlignment="{Binding TextAlignment}"/>"#,
+    )?;
+    let date = load(
+        r#"<TextBlock xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Text="Original date" FontFamily="Times New Roman" FontSize="16" TextAlignment="Right"/>"#,
+    )?;
+    let container =
+        load(r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"/>"#)?;
+    let source = load(
+        r#"<TextBlock xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" FontFamily="Segoe UI" FontSize="11" TextAlignment="Left"/>"#,
+    )?;
+    context(&time, &source)?;
+    require(
+        font(&time)? == ("Segoe UI".into(), 11.),
+        "initial font bindings",
+    )?;
+    let owner = Owner {
+        nonce: 778,
+        process_id: unsafe { windows_sys::Win32::System::Threading::GetCurrentProcessId() },
+        receiver: 1,
+    };
+    let mut session = crate::session::Session::new(
+        owner.clone(),
+        vec![crate::session::Target {
+            id: 1,
+            clock: ClockLease::capture(&time, &date, &container)?,
+        }],
+        100,
+    )?;
+    let mut frame = Frame {
+        text: Text {
+            top: "12:30".into(),
+            bottom: "天气".into(),
+            tooltip: None,
+        },
+        style: Style {
+            font_family: "Courier New".into(),
+            font_size: 12,
+            width: 280,
+            top_color: None,
+            bottom_color: None,
+            alignment: Alignment::Right,
+            top_style: LineStyle {
+                font_family: Some("Consolas".into()),
+                font_size: Some(18),
+                alignment: Some(Alignment::Center),
+            },
+            bottom_style: LineStyle {
+                font_family: Some("Georgia".into()),
+                font_size: Some(10),
+                alignment: Some(Alignment::Left),
+            },
+        },
+    };
+    session.start(frame.clone(), 100)?;
+    require(
+        font(&time)? == ("Consolas".into(), 18.)
+            && font(&date)? == ("Georgia".into(), 10.)
+            && alignment(&time)? == TextAlignment::Center.0
+            && alignment(&date)? == TextAlignment::Left.0,
+        "independent fonts sizes and alignment",
+    )?;
+    let mut checks = vec!["clock_line_styles_distinct_native_properties"];
+    let send = |session: &mut crate::session::Session, sequence, change| {
+        let command = Command {
+            version: litetray_adapter_protocol::VERSION,
+            owner: owner.clone(),
+            sequence,
+            change,
+        };
+        session.receive(
+            &serde_json::to_vec(&command).map_err(|e| e.to_string())?,
+            100 + sequence,
+        )
+    };
+    let before = [font_object(&time)?, font_object(&date)?];
+    frame.text.top = "12:31".into();
+    send(
+        &mut session,
+        1,
+        Change::Tick {
+            text: frame.text.clone(),
+        },
+    )?;
+    require(
+        text(&time)? == "12:31"
+            && same_object(&before[0], &font_object(&time)?)?
+            && same_object(&before[1], &font_object(&date)?)?,
+        "tick preserves line fonts",
+    )?;
+    checks.push("clock_line_styles_tick_preserves_font_objects");
+    frame.style.top_style = LineStyle {
+        alignment: Some(Alignment::Native),
+        ..Default::default()
+    };
+    frame.style.bottom_style = LineStyle::default();
+    // Only per-line fields changed; Session must detect this as a style update.
+    send(
+        &mut session,
+        2,
+        Change::Update {
+            frame: frame.clone(),
+        },
+    )?;
+    require(
+        font(&time)? == ("Courier New".into(), 12.)
+            && font(&date)? == ("Courier New".into(), 12.)
+            && alignment(&time)? == TextAlignment::Left.0
+            && alignment(&date)? == TextAlignment::Right.0,
+        "cleared line values inherit common and explicit native restores binding",
+    )?;
+    checks.push("clock_line_styles_update_inheritance_and_native_alignment");
+    let next = load(
+        r#"<TextBlock xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" FontFamily="Arial" FontSize="15" TextAlignment="Center"/>"#,
+    )?;
+    context(&time, &next)?;
+    let mut invalid = frame.clone();
+    invalid.style.bottom_style.font_size = Some(33);
+    require(
+        send(&mut session, 3, Change::Update { frame: invalid }).is_err()
+            && session.state() == crate::session::State::Active
+            && font(&time)? == ("Courier New".into(), 12.)
+            && font(&date)? == ("Courier New".into(), 12.)
+            && alignment(&time)? == TextAlignment::Center.0,
+        "invalid single line does not mutate active frame or detach native alignment",
+    )?;
+    checks.push("clock_line_styles_invalid_update_keeps_active_frame");
+    send(&mut session, 3, Change::Stop)?;
+    require(
+        session.state() == crate::session::State::Closed
+            && font(&time)? == ("Arial".into(), 15.)
+            && font(&date)? == ("Times New Roman".into(), 16.)
+            && text(&time)? == "Original time"
+            && text(&date)? == "Original date",
+        "stop restores current binding values and original local fonts",
+    )?;
+    context(&time, &source)?;
+    require(
+        font(&time)? == ("Segoe UI".into(), 11.) && alignment(&time)? == TextAlignment::Left.0,
+        "font and alignment bindings remain reactive after stop",
+    )?;
+    checks.push("clock_line_styles_stop_restores_reactive_bindings_and_local_fonts");
     Ok(checks)
 }

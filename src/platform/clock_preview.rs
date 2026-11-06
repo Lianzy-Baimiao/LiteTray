@@ -118,6 +118,8 @@ pub fn frame(config: &ClockConfig, weather: &str) -> Frame {
             top_color: (!config.top_color.is_empty()).then(|| config.top_color.clone()),
             bottom_color: (!config.bottom_color.is_empty()).then(|| config.bottom_color.clone()),
             alignment: config.alignment,
+            top_style: config.top_style.clone(),
+            bottom_style: config.bottom_style.clone(),
         },
     }
 }
@@ -131,6 +133,11 @@ mod frame_tests {
             top_color: "#123456".into(),
             bottom_color: "#80112233".into(),
             alignment: litetray_adapter_protocol::clock::Alignment::Center,
+            top_style: litetray_adapter_protocol::clock::LineStyle {
+                font_family: Some("Consolas".into()),
+                font_size: Some(18),
+                alignment: Some(litetray_adapter_protocol::clock::Alignment::Native),
+            },
             ..ClockConfig::default()
         };
         let frame = frame(&config, "Humidity 80% <literal> %time%");
@@ -145,6 +152,8 @@ mod frame_tests {
         );
         assert_eq!(frame.style.top_color, Some("#123456".into()));
         assert_eq!(frame.style.bottom_color, Some("#80112233".into()));
+        assert_eq!(frame.style.top_style, config.top_style);
+        assert_eq!(frame.style.bottom_style, Default::default());
         assert_eq!(
             frame.style.alignment,
             litetray_adapter_protocol::clock::Alignment::Center

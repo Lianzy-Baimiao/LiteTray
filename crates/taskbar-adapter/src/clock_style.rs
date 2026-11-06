@@ -56,7 +56,7 @@ pub(crate) struct Decorations {
 struct Applied {
     top: Option<String>,
     bottom: Option<String>,
-    alignment: Alignment,
+    alignment: [Alignment; 2],
     tooltip: Option<String>,
 }
 pub(crate) struct Prepared {
@@ -106,7 +106,18 @@ impl Decorations {
         let next = Applied {
             top: frame.style.top_color.clone(),
             bottom: frame.style.bottom_color.clone(),
-            alignment: frame.style.alignment,
+            alignment: [
+                frame
+                    .style
+                    .top_style
+                    .alignment
+                    .unwrap_or(frame.style.alignment),
+                frame
+                    .style
+                    .bottom_style
+                    .alignment
+                    .unwrap_or(frame.style.alignment),
+            ],
             tooltip: frame.text.tooltip.clone(),
         };
         if self.last.as_ref() == Some(&next) {
@@ -118,8 +129,8 @@ impl Decorations {
             [
                 old.top != next.top,
                 old.bottom != next.bottom,
-                old.alignment != next.alignment,
-                old.alignment != next.alignment,
+                old.alignment[0] != next.alignment[0],
+                old.alignment[1] != next.alignment[1],
                 old.tooltip != next.tooltip,
             ]
         } else {
@@ -133,7 +144,7 @@ impl Decorations {
             let value = match i {
                 0 => frame.style.top_color.as_deref().map(brush).transpose()?,
                 1 => frame.style.bottom_color.as_deref().map(brush).transpose()?,
-                2 | 3 => alignment_box(frame.style.alignment, &self.values[i].property)?,
+                2 | 3 => alignment_box(next.alignment[i - 2], &self.values[i].property)?,
                 _ => frame.text.tooltip.as_deref().map(boxed_text).transpose()?,
             };
             pending.push((i, value));

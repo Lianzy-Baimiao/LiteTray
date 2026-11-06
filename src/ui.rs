@@ -1,3 +1,6 @@
+mod calendar;
+mod dashboard;
+mod design;
 use chrono::{Local, TimeZone, Utc};
 use litetray::{
     clock,
@@ -38,15 +41,11 @@ const WM_PREVIEW_CLOCK: u32 = WM_APP + 6;
 const NAV: u16 = 100;
 const SAVE: u16 = 20;
 const STATUS: u16 = 900;
-const CLOCK_PREVIEW: u16 = 901;
-const WEATHER_VIEW: u16 = 902;
-const LUNAR_VIEW: u16 = 903;
 const REFRESH: u16 = 30;
 const UPDATE: u16 = 31;
 const OPEN_RELEASE: u16 = 32;
 const EXIT: u16 = 33;
 const CALENDAR: u16 = 34;
-const MONTHCAL: u16 = 35;
 const PAGES: [&str; 8] = [
     "日历与天气",
     "时钟显示",
@@ -65,6 +64,7 @@ thread_local! {static PREVIEW:RefCell<Option<Rc<clock_preview::Preview>>>=const{
 struct Palette {
     background: HBRUSH,
     edit: HBRUSH,
+    surface: HBRUSH,
     bg: u32,
     edit_bg: u32,
     text: u32,
@@ -80,18 +80,18 @@ enum Event {
 struct App {
     hwnd: HWND,
     panel: HWND,
-    panel_font: HFONT,
     preview: Option<Rc<clock_preview::Preview>>,
     pending_activation: Option<litetray_adapter_protocol::activation::Activation>,
     children: Vec<HWND>,
     fields: HashMap<u16, HWND>,
     font: HFONT,
     title_font: HFONT,
-    clock_font: HFONT,
     background: HBRUSH,
     edit_background: HBRUSH,
+    surface_background: HBRUSH,
     dpi: u32,
     page: usize,
+    calendar: Option<calendar::Calendar>,
     draft: Config,
     saved: Config,
     status: String,
@@ -187,26 +187,31 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             CloseHandle(mutex);
             return Err("创建设置窗口失败".into());
         }
+        SetPropW(
+            hwnd,
+            wide("LiteTray.SettingsSurface").as_ptr(),
+            1usize as HANDLE,
+        );
         let dpi = GetDpiForWindow(hwnd).max(96);
         let (tx, rx) = mpsc::channel();
         let mut app = App {
             hwnd,
             panel: null_mut(),
-            panel_font: null_mut(),
             preview: None,
             pending_activation: None,
             children: vec![],
             fields: HashMap::new(),
             font: null_mut(),
             title_font: null_mut(),
-            clock_font: null_mut(),
             background: null_mut(),
             edit_background: null_mut(),
+            surface_background: null_mut(),
             dpi,
             page: 0,
+            calendar: None,
             saved: config.clone(),
             draft: config,
-            status: "欢迎使用 LiteTray。任务栏适配正在开发，现有系统托盘保持可用。".into(),
+            status: "开发预览 · 任务栏接管尚未启用".into(),
             weather: None,
             update: None,
             migration_source: None,
@@ -228,8 +233,8 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             null_mut(),
             0,
             0,
-            app.scale(920),
-            app.scale(720),
+            app.scale(1100),
+            app.scale(840),
             SWP_NOMOVE | SWP_NOZORDER,
         );
         app.weather = weather::load_cache(
@@ -306,34 +311,22 @@ impl App {
         }
     }
     fn bg_color(&self) -> u32 {
-        if self.dark() {
-            rgb(32, 32, 32)
-        } else {
-            rgb(249, 249, 249)
-        }
+        design::Theme::new(self.dark()).bg
     }
     fn edit_color(&self) -> u32 {
-        if self.dark() {
-            rgb(43, 43, 43)
-        } else {
-            rgb(255, 255, 255)
-        }
+        design::Theme::new(self.dark()).field
     }
     fn text_color(&self) -> u32 {
-        if self.dark() {
-            rgb(242, 242, 242)
-        } else {
-            rgb(28, 28, 28)
-        }
+        design::Theme::new(self.dark()).text
     }
     unsafe fn recreate_resources(&mut self) {
         unsafe {
             self.release_resources();
-            self.font = make_font(self.scale(15), 400, "Segoe UI");
-            self.title_font = make_font(self.scale(25), 600, "Segoe UI");
-            self.clock_font = make_font(self.scale(29), 400, "Segoe UI");
+            self.font = make_font(self.scale(14), 400, "Microsoft YaHei UI");
+            self.title_font = make_font(self.scale(28), 600, "Microsoft YaHei UI");
             self.background = CreateSolidBrush(self.bg_color());
             self.edit_background = CreateSolidBrush(self.edit_color());
+            self.surface_background = CreateSolidBrush(design::Theme::new(self.dark()).surface);
             self.publish_palette();
             let dark = self.dark() as i32;
             if self.build >= 17763 {
@@ -351,6 +344,7 @@ impl App {
             p.set(Some(Palette {
                 background: self.background,
                 edit: self.edit_background,
+                surface: self.surface_background,
                 bg: self.bg_color(),
                 edit_bg: self.edit_color(),
                 text: self.text_color(),
@@ -366,9 +360,9 @@ impl App {
             for object in [
                 self.font,
                 self.title_font,
-                self.clock_font,
                 self.background,
                 self.edit_background,
+                self.surface_background,
             ] {
                 if !object.is_null() {
                     DeleteObject(object);
@@ -376,9 +370,9 @@ impl App {
             }
             self.font = null_mut();
             self.title_font = null_mut();
-            self.clock_font = null_mut();
             self.background = null_mut();
             self.edit_background = null_mut();
+            self.surface_background = null_mut();
         }
     }
     unsafe fn close_panel(&mut self) {
@@ -386,10 +380,6 @@ impl App {
             if !self.panel.is_null() {
                 DestroyWindow(self.panel);
                 self.panel = null_mut();
-            }
-            if !self.panel_font.is_null() {
-                DeleteObject(self.panel_font);
-                self.panel_font = null_mut();
             }
         }
     }
@@ -409,11 +399,20 @@ impl App {
         h: i32,
     ) -> HWND {
         unsafe {
+            let content = x >= 224 && y >= 80 && id != STATUS && id != SAVE;
+            let x = if x >= 224 { x + 42 } else { x };
+            let y = if content { y + 86 } else { y };
             let hwnd = CreateWindowExW(
-                if class == "EDIT" { WS_EX_CLIENTEDGE } else { 0 },
+                0,
                 wide(class).as_ptr(),
                 wide(text).as_ptr(),
-                WS_CHILD | WS_VISIBLE | style,
+                WS_CHILD
+                    | WS_VISIBLE
+                    | (if class == "EDIT" {
+                        style & !WS_BORDER
+                    } else {
+                        style
+                    }),
                 self.scale(x),
                 self.scale(y),
                 self.scale(w),
@@ -424,11 +423,35 @@ impl App {
                 null(),
             );
             SendMessageW(hwnd, WM_SETFONT, self.font as usize, 1);
+            if content {
+                SetPropW(hwnd, wide("LiteTray.Surface").as_ptr(), 1usize as HANDLE);
+            }
+            if class == "EDIT" {
+                SetPropW(hwnd, wide("LiteTray.Field").as_ptr(), 1usize as HANDLE);
+                SendMessageW(
+                    hwnd,
+                    EM_SETMARGINS,
+                    (EC_LEFTMARGIN | EC_RIGHTMARGIN) as usize,
+                    (10 << 16) | 10,
+                );
+            }
+            if class == "COMBOBOX" {
+                SetWindowTheme(
+                    hwnd,
+                    wide(if self.dark() {
+                        "DarkMode_CFD"
+                    } else {
+                        "Explorer"
+                    })
+                    .as_ptr(),
+                    null(),
+                );
+            }
             if class == "BUTTON" && style & 0xf == BS_AUTOCHECKBOX as u32 {
                 SetWindowTheme(hwnd, wide("").as_ptr(), wide("").as_ptr());
             }
-            if class == "SysMonthCal32" {
-                theme_calendar(hwnd, self.font);
+            if class == "BUTTON" && style & 0xf == BS_OWNERDRAW as u32 {
+                SetWindowSubclass(hwnd, Some(design::hover_proc), 2, 0);
             }
             if class == "EDIT" {
                 SendMessageW(hwnd, EM_SETLIMITTEXT, 2048, 0);
@@ -532,82 +555,65 @@ impl App {
     unsafe fn render(&mut self) {
         unsafe {
             self.publish_palette();
+            if let Some(calendar) = dashboard::selection(self.field(dashboard::ID)) {
+                self.calendar = Some(calendar);
+            }
             for child in self.children.drain(..) {
                 DestroyWindow(child);
             }
             self.fields.clear();
             let mut rect = std::mem::zeroed();
             GetClientRect(self.hwnd, &mut rect);
-            let width = rect.right * 96 / self.dpi as i32;
+            let width = rect.right * 96 / self.dpi as i32 - 42;
             let height = rect.bottom * 96 / self.dpi as i32;
             let brand = self.label("LiteTray", 22, 24, 170, 38);
             SendMessageW(brand, WM_SETFONT, self.title_font as usize, 1);
-            self.label("轻托盘 · Rust 原生", 24, 66, 170, 25);
+            self.label("你的任务栏，恰到好处", 26, 72, 194, 25);
             for (row, i) in [0, 1, 7, 2, 3, 4, 5, 6].into_iter().enumerate() {
-                self.button(PAGES[i], NAV + i as u16, 20, 112 + row as i32 * 46, 168);
+                self.button(PAGES[i], NAV + i as u16, 16, 144 + row as i32 * 48, 210);
             }
             self.label(
                 &format!(
-                    "v{}\r\nWindows build {}",
-                    env!("CARGO_PKG_VERSION"),
-                    self.build
+                    "开发预览  v{}\r\n轻量 · 原生 · 自定义",
+                    env!("CARGO_PKG_VERSION")
                 ),
                 24,
                 height - 90,
                 165,
                 50,
             );
-            let heading = self.label(PAGES[self.page], 224, 26, width - 250, 38);
+            let heading = self.label(PAGES[self.page], 224, 30, width - 250, 42);
             SendMessageW(heading, WM_SETFONT, self.title_font as usize, 1);
+            let descriptions = [
+                "让日期、天气和每一刻，都清晰可见。",
+                "定义任务栏里的两行文字，让信息一眼可见。",
+                "选择显示器，以及每块屏幕上的托盘内容。",
+                "选择可靠的天气来源，保持数据新鲜。",
+                "按你的习惯设置外观与启动方式。",
+                "关于 LiteTray，以及应用更新。",
+                "带上熟悉的设置，开始使用 LiteTray。",
+                "调整每一行的字体、颜色和对齐方式。",
+            ];
+            self.label(descriptions[self.page], 224, 78, width - 260, 26);
             let c = self.draft.clone();
             match self.page {
                 0 => {
-                    self.control(
-                        "STATIC",
-                        "",
-                        CLOCK_PREVIEW,
-                        SS_LEFT as u32,
-                        224,
-                        82,
-                        width - 250,
-                        42,
+                    let view = dashboard::create(
+                        self.hwnd,
+                        design::rect(
+                            self.scale(258),
+                            self.scale(124),
+                            self.scale(width - 248),
+                            self.scale((height - 228).min(610)),
+                        ),
+                        self.dark(),
+                        false,
                     );
-                    SendMessageW(
-                        self.field(CLOCK_PREVIEW),
-                        WM_SETFONT,
-                        self.clock_font as usize,
-                        1,
-                    );
-                    self.label(
-                        "本地日历与天气 · 点击托盘图标也可展开",
-                        224,
-                        128,
-                        width - 250,
-                        26,
-                    );
-                    self.control(
-                        "SysMonthCal32",
-                        "",
-                        MONTHCAL,
-                        WS_TABSTOP | MCS_NOTODAYCIRCLE,
-                        224,
-                        174,
-                        300,
-                        245,
-                    );
-                    self.control("STATIC", "", LUNAR_VIEW, SS_LEFT as u32, 224, 432, 310, 48);
-                    self.control(
-                        "STATIC",
-                        "",
-                        WEATHER_VIEW,
-                        SS_LEFT as u32,
-                        548,
-                        174,
-                        (width - 575).max(230),
-                        300,
-                    );
-                    self.button("刷新天气", REFRESH, 548, 483, 112);
-                    self.button("展开面板", CALENDAR, 674, 483, 112);
+                    self.children.push(view);
+                    self.fields.insert(dashboard::ID, view);
+                    if let Some(calendar) = self.calendar {
+                        dashboard::restore_selection(view, calendar);
+                    }
                 }
                 1 => {
                     self.edit("第一行模板", &c.clock.top_line, 201, 224, 84, width - 260);
@@ -937,31 +943,80 @@ impl App {
                         224,
                         186,
                         width - 260,
-                        (height - 290).max(220),
+                        (height - 408).max(220),
                     );
                     SendMessageW(report_control, EM_SETLIMITTEXT, 2 * 1024 * 1024, 0);
                     SetWindowTextW(report_control, wide(&text).as_ptr());
                 }
                 7 => {
                     use litetray_adapter_protocol::clock::Alignment;
-                    self.edit("第一行颜色", &c.clock.top_color, 801, 224, 90, 270);
-                    self.edit("第二行颜色", &c.clock.bottom_color, 802, 520, 90, 270);
-                    self.label("留空使用原生颜色。格式：#RRGGBB 或 #AARRGGBB（含透明度）。\r\n例如 #79C0FF；设置只作用于时钟文字。",224,165,width-260,56);
-                    self.label("两行文字对齐", 224, 235, 300, 25);
+                    let alignment_index = |alignment| match alignment {
+                        Alignment::Native => 0,
+                        Alignment::Left => 1,
+                        Alignment::Center => 2,
+                        Alignment::Right => 3,
+                    };
+                    let column = (width - 284) / 2;
+                    for (title, line, color, color_id, font_id, x) in [
+                        (
+                            "第一行",
+                            &c.clock.top_style,
+                            &c.clock.top_color,
+                            801,
+                            806,
+                            224,
+                        ),
+                        (
+                            "第二行",
+                            &c.clock.bottom_style,
+                            &c.clock.bottom_color,
+                            802,
+                            809,
+                            248 + column,
+                        ),
+                    ] {
+                        self.label(title, x, 84, column, 24);
+                        self.edit(
+                            "字体",
+                            line.font_family.as_deref().unwrap_or(""),
+                            font_id,
+                            x,
+                            115,
+                            column - 88,
+                        );
+                        self.edit(
+                            "字号",
+                            &line
+                                .font_size
+                                .map(|size| size.to_string())
+                                .unwrap_or_default(),
+                            font_id + 1,
+                            x + column - 72,
+                            115,
+                            72,
+                        );
+                        self.edit("颜色", color, color_id, x, 180, column - 164);
+                        self.label("对齐", x + column - 148, 180, 148, 22);
+                        self.combo(
+                            &["沿用公共对齐", "保留原样", "左对齐", "居中", "右对齐"],
+                            line.alignment.map(|a| alignment_index(a) + 1).unwrap_or(0),
+                            font_id + 2,
+                            x + column - 148,
+                            205,
+                            148,
+                        );
+                    }
+                    self.label("字体、字号留空时沿用“时钟显示”页；字号范围 8–32。\r\n颜色留空使用原生颜色；支持 #RRGGBB 或 #AARRGGBB。",224,248,width-260,50);
+                    self.label("公共文字对齐", 224, 309, 190, 25);
                     self.combo(
                         &["保留原样", "左对齐", "居中", "右对齐"],
-                        match c.clock.alignment {
-                            Alignment::Native => 0,
-                            Alignment::Left => 1,
-                            Alignment::Center => 2,
-                            Alignment::Right => 3,
-                        },
+                        alignment_index(c.clock.alignment),
                         803,
-                        224,
-                        266,
-                        330,
+                        420,
+                        305,
+                        235,
                     );
-                    self.label("悬停提示模板 · 留空保留原生提示", 224, 326, width - 260, 25);
+                    self.label("悬停提示模板 · 留空保留原生提示", 224, 354, width - 260, 25);
                     let tip = self.control(
                         "EDIT",
                         &c.clock.tooltip_line.replace('\n', "\r\n"),
@@ -973,14 +1028,14 @@ impl App {
                             | ES_AUTOVSCROLL as u32
                             | ES_WANTRETURN as u32,
                         224,
-                        360,
+                        388,
                         width - 260,
-                        82,
+                        76,
                     );
                     SendMessageW(tip, EM_SETLIMITTEXT, 1024, 0);
-                    self.label("可使用 %date% %time% %weekday% %weather%，支持换行。\r\n在原生预览时钟上停留鼠标可查看提示。",224,454,width-260,48);
-                    self.button("应用草稿到原生预览", 209, 224, 518, 250);
-                    self.button("重置本页为原样", 805, 492, 518, 185);
+                    self.label("支持 %date% %time% %weekday% %weather% 和换行。\r\n在原生预览时钟上停留鼠标可查看提示。",224,474,width-260,44);
+                    self.button("应用草稿到原生预览", 209, 224, 530, 250);
+                    self.button("重置本页", 805, 492, 530, 185);
                 }
                 _ => {}
             }
@@ -994,11 +1049,18 @@ impl App {
                 width - 415,
                 64,
             );
-            self.button("保存设置", SAVE, width - 155, height - 68, 125);
+            self.button(
+                if self.page == 0 {
+                    "设置时钟"
+                } else {
+                    "保存设置"
+                },
+                if self.page == 0 { 42 } else { SAVE },
+                width - 155,
+                height - 68,
+                125,
+            );
             self.update_views();
-            if self.page == 0 {
-                update_selected_date(self.hwnd, self.draft.clock.show_lunar);
-            }
             InvalidateRect(self.hwnd, null(), 1);
         }
     }
@@ -1072,6 +1134,30 @@ impl App {
                     _ => Alignment::Native,
                 };
                 c.clock.tooltip_line = self.text(804).replace("\r\n", "\n");
+                for (line, id, label) in [
+                    (&mut c.clock.top_style, 806, "第一行"),
+                    (&mut c.clock.bottom_style, 809, "第二行"),
+                ] {
+                    let family = self.text(id).trim().to_owned();
+                    line.font_family = (!family.is_empty()).then_some(family);
+                    let size = self.text(id + 1);
+                    line.font_size = if size.trim().is_empty() {
+                        None
+                    } else {
+                        Some(
+                            size.trim()
+                                .parse()
+                                .map_err(|_| format!("{label}字号应为整数或留空"))?,
+                        )
+                    };
+                    line.alignment = match self.selected(id + 2) {
+                        0 => None,
+                        2 => Some(Alignment::Left),
+                        3 => Some(Alignment::Center),
+                        4 => Some(Alignment::Right),
+                        _ => Some(Alignment::Native),
+                    };
+                }
             }
             _ => {}
         }
@@ -1145,7 +1231,6 @@ impl App {
     }
     unsafe fn update_views(&mut self) {
         unsafe {
-            let now = Local::now();
             let summary = self
                 .weather
                 .as_ref()
@@ -1153,11 +1238,12 @@ impl App {
                 .map(|w| w.summary())
                 .unwrap_or_else(|| "天气暂无数据".into());
             if self.page == 0 {
-                set_text(
-                    self.field(CLOCK_PREVIEW),
-                    &clock::format(&self.draft.clock.top_line, &self.draft.clock, now, &summary),
+                dashboard::update(
+                    self.field(dashboard::ID),
+                    &self.saved,
+                    &self.weather,
+                    self.weather_busy,
                 );
-                set_text(self.field(WEATHER_VIEW), &self.weather_text());
             }
             if let Some(preview) = &self.preview {
                 let _ = preview.update(&clock_preview::frame(&self.draft.clock, &summary));
@@ -1173,71 +1259,14 @@ impl App {
                 EnableWindow(self.field(211), i32::from(self.preview.is_some()));
             }
             if !self.panel.is_null() {
-                let weather = GetDlgItem(self.panel, WEATHER_VIEW as i32);
-                set_text(weather, &self.weather_text());
-                let title = GetDlgItem(self.panel, CLOCK_PREVIEW as i32);
-                set_text(
-                    title,
-                    &format!(
-                        "{}    {}",
-                        now.format("%Y年%m月%d日"),
-                        now.format(if self.saved.clock.show_seconds {
-                            "%H:%M:%S"
-                        } else {
-                            "%H:%M"
-                        })
-                    ),
+                dashboard::update(
+                    GetDlgItem(self.panel, dashboard::ID as i32),
+                    &self.saved,
+                    &self.weather,
+                    self.weather_busy,
                 );
             }
         }
-    }
-    fn weather_text(&self) -> String {
-        if !self.saved.weather.enabled {
-            return "天气已关闭".into();
-        }
-        let Some(result) = &self.weather else {
-            return "正在获取天气…\r\n可在天气来源中配置城市和备用来源".into();
-        };
-        let Some(w) = &result.weather else {
-            return format!(
-                "天气暂不可用\r\n\r\n{}",
-                result
-                    .attempts
-                    .iter()
-                    .map(|a| format!("{}：{}", a.provider.label(), a.error))
-                    .collect::<Vec<_>>()
-                    .join("\r\n")
-            );
-        };
-        let mut lines = vec![
-            w.city.clone(),
-            format!("{:.1}°C  {}", w.temperature_c, w.description),
-        ];
-        if let Some(t) = w.feels_like_c {
-            lines.push(format!("体感 {t:.0}°C"));
-        }
-        if let Some(h) = w.humidity_percent {
-            lines.push(format!("湿度 {h:.0}%"));
-        }
-        if let Some(wind) = w.wind_kmh {
-            lines.push(format!("风速 {wind:.0} km/h"));
-        }
-        lines.push(String::new());
-        for day in &w.days {
-            lines.push(format!(
-                "{}  {}  {:.0}° / {:.0}°",
-                day.date.get(5..).unwrap_or(&day.date),
-                day.description,
-                day.low_c,
-                day.high_c
-            ));
-        }
-        lines.push(String::new());
-        lines.push(result.status());
-        if let Some(e) = &result.cache_error {
-            lines.push(format!("缓存保存失败：{e}"));
-        }
-        lines.join("\r\n")
     }
     unsafe fn start_weather(&mut self, force: bool) {
         unsafe {
@@ -1501,7 +1530,6 @@ impl App {
                 (i64::from(value) * i64::from(dpi) * i64::from(placement.scale_percent) / 9600)
                     .max(1) as i32
             };
-            self.panel_font = make_font(scale(15), 400, "Segoe UI");
             let width = placement.rect.right - placement.rect.left;
             let height = placement.rect.bottom - placement.rect.top;
             let x = placement.rect.left;
@@ -1515,89 +1543,11 @@ impl App {
                 height,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
-            let control =
-                |class: &str, text: &str, id: u16, style: u32, x: i32, y: i32, w: i32, h: i32| {
-                    let style = if class == "BUTTON" {
-                        (style & !0xf) | BS_OWNERDRAW as u32
-                    } else {
-                        style
-                    };
-                    let c = CreateWindowExW(
-                        0,
-                        wide(class).as_ptr(),
-                        wide(text).as_ptr(),
-                        WS_CHILD | WS_VISIBLE | style,
-                        scale(x),
-                        scale(y),
-                        scale(w),
-                        scale(h),
-                        hwnd,
-                        id as usize as HMENU,
-                        GetModuleHandleW(null()),
-                        null(),
-                    );
-                    SendMessageW(c, WM_SETFONT, self.panel_font as usize, 1);
-                    if class == "SysMonthCal32" {
-                        theme_calendar(c, self.panel_font);
-                    }
-                    c
-                };
-            control("STATIC", "", CLOCK_PREVIEW, 0, 20, 18, 540, 34);
-            control(
-                "BUTTON",
-                "设置",
-                40,
-                WS_TABSTOP | BS_PUSHBUTTON as u32,
-                574,
-                15,
-                78,
-                32,
-            );
-            control(
-                "SysMonthCal32",
-                "",
-                MONTHCAL,
-                WS_TABSTOP | MCS_NOTODAYCIRCLE,
-                20,
-                72,
-                305,
-                260,
-            );
-            let lunar = if self.saved.clock.show_lunar {
-                lunar::describe(Local::now()).unwrap_or_default()
-            } else {
-                String::new()
-            };
-            control("STATIC", &lunar, LUNAR_VIEW, 0, 22, 354, 300, 30);
-            control(
-                "STATIC",
-                &self.weather_text(),
-                WEATHER_VIEW,
-                0,
-                352,
-                75,
-                300,
-                300,
-            );
-            control(
-                "BUTTON",
-                "刷新天气",
-                REFRESH,
-                WS_TABSTOP | BS_PUSHBUTTON as u32,
-                352,
-                390,
-                115,
-                32,
-            );
-            control(
-                "BUTTON",
-                "关闭",
-                41,
-                WS_TABSTOP | BS_PUSHBUTTON as u32,
-                545,
-                390,
-                105,
-                32,
+            dashboard::create(
+                hwnd,
+                design::rect(scale(20), scale(12), scale(760), scale(520)),
+                self.dark(),
+                true,
             );
             let rounded = 2_i32;
             if self.build >= 22000 {
@@ -1606,7 +1556,7 @@ impl App {
             self.update_views();
             ShowWindow(hwnd, SW_SHOW);
             SetForegroundWindow(hwnd);
-            SetFocus(GetDlgItem(hwnd, MONTHCAL as i32));
+            SetFocus(GetDlgItem(GetDlgItem(hwnd, dashboard::ID as i32), 1102));
             self.schedule_tick();
         }
     }
@@ -1622,12 +1572,18 @@ impl App {
                 return false;
             }
             match id {
+                42 => {
+                    self.page = 1;
+                    self.render();
+                }
                 805 => {
                     self.draft.clock.top_color.clear();
                     self.draft.clock.bottom_color.clear();
                     self.draft.clock.alignment = Default::default();
                     self.draft.clock.tooltip_line.clear();
-                    self.status = "本页已恢复原样，点击保存设置后保留".into();
+                    self.draft.clock.top_style = Default::default();
+                    self.draft.clock.bottom_style = Default::default();
+                    self.status = "本页已重置；字体和字号沿用公共设置，点击保存后保留".into();
                     self.render();
                 }
                 307 => self.refresh_displays(),
@@ -1937,8 +1893,8 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             let info = &mut *(l as *mut MINMAXINFO);
             let dpi = GetDpiForWindow(hwnd).max(96) as i32;
             info.ptMinTrackSize = POINT {
-                x: 880 * dpi / 96,
-                y: 700 * dpi / 96,
+                x: 1060 * dpi / 96,
+                y: 820 * dpi / 96,
             };
             return 0;
         }
@@ -2103,10 +2059,6 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     SetBkColor(w as HDC, app.edit_color());
                     Some(app.edit_background as isize)
                 }
-                WM_NOTIFY => {
-                    calendar_selection(hwnd, l, app.draft.clock.show_lunar);
-                    Some(0)
-                }
                 _ => None,
             }
         });
@@ -2172,60 +2124,10 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM)
                     SetBkColor(w as HDC, app.bg_color());
                     Some(app.background as isize)
                 }
-                WM_NOTIFY => {
-                    calendar_selection(hwnd, l, app.saved.clock.show_lunar);
-                    Some(0)
-                }
                 _ => None,
             }
         });
         handled.unwrap_or_else(|| DefWindowProcW(hwnd, msg, w, l))
-    }
-}
-unsafe fn calendar_selection(hwnd: HWND, l: LPARAM, show_lunar: bool) {
-    unsafe {
-        if l == 0 {
-            return;
-        }
-        let hdr = &*(l as *const NMHDR);
-        if hdr.idFrom != MONTHCAL as usize || hdr.code != MCN_SELCHANGE {
-            return;
-        }
-        update_selected_date(hwnd, show_lunar);
-    }
-}
-unsafe fn update_selected_date(hwnd: HWND, show_lunar: bool) {
-    unsafe {
-        let calendar = GetDlgItem(hwnd, MONTHCAL as i32);
-        if calendar.is_null() {
-            return;
-        }
-        let mut date: SYSTEMTIME = std::mem::zeroed();
-        if SendMessageW(calendar, MCM_GETCURSEL, 0, &mut date as *mut _ as isize) != 0 {
-            let text = Local
-                .with_ymd_and_hms(
-                    date.wYear as i32,
-                    date.wMonth as u32,
-                    date.wDay as u32,
-                    12,
-                    0,
-                    0,
-                )
-                .single()
-                .map(|d| {
-                    format!(
-                        "{} {}",
-                        d.format("%Y年%m月%d日"),
-                        if show_lunar {
-                            lunar::describe(d).unwrap_or_default()
-                        } else {
-                            String::new()
-                        }
-                    )
-                })
-                .unwrap_or_default();
-            set_text(GetDlgItem(hwnd, LUNAR_VIEW as i32), &text);
-        }
     }
 }
 unsafe fn set_text(hwnd: HWND, text: &str) {
@@ -2235,56 +2137,76 @@ unsafe fn set_text(hwnd: HWND, text: &str) {
         }
     }
 }
-unsafe fn theme_calendar(hwnd: HWND, font: HFONT) {
-    unsafe {
-        SetWindowTheme(hwnd, wide("").as_ptr(), wide("").as_ptr());
-        SendMessageW(hwnd, WM_SETFONT, font as usize, 1);
-        if let Some(p) = PALETTE.with(Cell::get) {
-            // The classic month calendar reuses TITLEBK for weekday text.
-            // A near-background title color therefore makes weekdays vanish.
-            for (slot, color) in [
-                (MCSC_BACKGROUND, p.bg),
-                (MCSC_MONTHBK, p.bg),
-                (MCSC_TEXT, p.text),
-                (
-                    MCSC_TITLEBK,
-                    if p.dark {
-                        rgb(92, 155, 225)
-                    } else {
-                        rgb(0, 95, 168)
-                    },
-                ),
-                (MCSC_TITLETEXT, rgb(255, 255, 255)),
-                (
-                    MCSC_TRAILINGTEXT,
-                    if p.dark {
-                        rgb(155, 155, 155)
-                    } else {
-                        rgb(105, 105, 105)
-                    },
-                ),
-            ] {
-                SendMessageW(hwnd, MCM_SETCOLOR, slot as usize, color as isize);
-            }
-        }
-    }
-}
 // Painting can re-enter synchronously while a page is being built. Keep its
 // immutable data outside the mutably borrowed application state.
 unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LRESULT> {
     unsafe {
         let p = PALETTE.with(Cell::get)?;
         match msg {
-            WM_ERASEBKGND => {
-                let mut rect = std::mem::zeroed();
-                GetClientRect(hwnd, &mut rect);
-                FillRect(w as HDC, &rect, p.background);
-                Some(1)
+            WM_ERASEBKGND => Some(1),
+            WM_PAINT => {
+                let mut ps: PAINTSTRUCT = std::mem::zeroed();
+                let dc = BeginPaint(hwnd, &mut ps);
+                let mut r: RECT = std::mem::zeroed();
+                GetClientRect(hwnd, &mut r);
+                let t = design::Theme::new(p.dark);
+                design::fill(dc, r, t.bg);
+                if !GetPropW(hwnd, wide("LiteTray.SettingsSurface").as_ptr()).is_null() {
+                    let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+                    let s = |n: i32| n * dpi / 96;
+                    design::fill(dc, design::rect(s(240), 0, s(1), r.bottom), t.border);
+                    if p.active != NAV {
+                        design::rounded(
+                            dc,
+                            design::rect(s(250), s(146), r.right - s(276), r.bottom - s(246)),
+                            t.surface,
+                            t.border,
+                            s(16),
+                        );
+                    }
+                    design::fill(
+                        dc,
+                        design::rect(s(258), r.bottom - s(96), r.right - s(284), s(1)),
+                        t.border,
+                    );
+                    let mut child = GetWindow(hwnd, GW_CHILD);
+                    while !child.is_null() {
+                        if !GetPropW(child, wide("LiteTray.Field").as_ptr()).is_null() {
+                            let mut bounds: RECT = std::mem::zeroed();
+                            GetWindowRect(child, &mut bounds);
+                            MapWindowPoints(
+                                null_mut(),
+                                hwnd,
+                                &mut bounds as *mut RECT as *mut POINT,
+                                2,
+                            );
+                            InflateRect(&mut bounds, s(2), s(2));
+                            design::rounded(dc, bounds, t.field, t.border, s(8));
+                            if GetFocus() == child {
+                                design::fill(
+                                    dc,
+                                    design::rect(
+                                        bounds.left + s(3),
+                                        bounds.bottom - s(2),
+                                        bounds.right - bounds.left - s(6),
+                                        s(2),
+                                    ),
+                                    t.accent,
+                                );
+                            }
+                        }
+                        child = GetWindow(child, GW_HWNDNEXT);
+                    }
+                }
+                EndPaint(hwnd, &ps);
+                Some(0)
             }
             WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
+                let t = design::Theme::new(p.dark);
+                let surface = !GetPropW(l as HWND, wide("LiteTray.Surface").as_ptr()).is_null();
                 SetTextColor(w as HDC, p.text);
-                SetBkColor(w as HDC, p.bg);
-                Some(p.background as isize)
+                SetBkColor(w as HDC, if surface { t.surface } else { p.bg });
+                Some(if surface { p.surface } else { p.background } as isize)
             }
             WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
                 SetTextColor(w as HDC, p.text);
@@ -2296,68 +2218,82 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                 if item.CtlType != ODT_BUTTON {
                     return None;
                 }
+                let t = design::Theme::new(p.dark);
+                let nav = (NAV as u32..NAV as u32 + PAGES.len() as u32).contains(&item.CtlID);
                 let selected = item.CtlID == p.active as u32;
+                let primary = item.CtlID == SAVE as u32 || item.CtlID == 42;
                 let pressed = item.itemState & ODS_SELECTED != 0;
-                let fill = if selected {
-                    if p.dark {
-                        rgb(47, 65, 86)
-                    } else {
-                        rgb(226, 237, 250)
-                    }
-                } else if pressed {
-                    if p.dark {
-                        rgb(65, 65, 65)
-                    } else {
-                        rgb(222, 222, 222)
-                    }
+                let hover = !GetPropW(item.hwndItem, wide("LiteTray.Hover").as_ptr()).is_null();
+                let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+                let s = |n: i32| n * dpi / 96;
+                let on_surface =
+                    !GetPropW(item.hwndItem, wide("LiteTray.Surface").as_ptr()).is_null();
+                let base = if on_surface { t.surface } else { t.bg };
+                design::fill(item.hDC, item.rcItem, base);
+                let color = if primary {
+                    t.accent
+                } else if selected || pressed || hover {
+                    t.tint
+                } else if nav {
+                    t.bg
                 } else {
-                    p.edit_bg
+                    t.surface
                 };
-                FillRect(item.hDC, &item.rcItem, p.background);
-                let brush = CreateSolidBrush(fill);
-                let border = CreatePen(
-                    PS_SOLID,
-                    1,
-                    if p.dark {
-                        rgb(75, 75, 75)
-                    } else {
-                        rgb(205, 205, 205)
-                    },
-                );
-                let old_brush = SelectObject(item.hDC, brush);
-                let old_pen = SelectObject(item.hDC, border);
-                RoundRect(
-                    item.hDC,
-                    item.rcItem.left,
-                    item.rcItem.top,
-                    item.rcItem.right,
-                    item.rcItem.bottom,
-                    8,
-                    8,
-                );
-                SelectObject(item.hDC, old_brush);
-                SelectObject(item.hDC, old_pen);
-                DeleteObject(brush);
-                DeleteObject(border);
-                let font = SendMessageW(item.hwndItem, WM_GETFONT, 0, 0) as HFONT;
-                let old_font = SelectObject(item.hDC, font);
-                SetBkMode(item.hDC, TRANSPARENT as i32);
-                SetTextColor(item.hDC, p.text);
+                let border = if nav || primary { color } else { t.border };
+                design::rounded(item.hDC, item.rcItem, color, border, s(10));
                 let mut rect = item.rcItem;
-                let mut text = wide(&window_text(item.hwndItem));
-                DrawTextW(
+                if nav {
+                    let icons = [
+                        "\u{e787}", "\u{e823}", "\u{e7f4}", "\u{e753}", "\u{e713}", "\u{e946}",
+                        "\u{e8b5}", "\u{e790}",
+                    ];
+                    let icon_font = make_font(s(17), 400, "Segoe MDL2 Assets");
+                    design::text(
+                        item.hDC,
+                        icons[(item.CtlID - NAV as u32) as usize],
+                        design::rect(s(17), 0, s(26), rect.bottom),
+                        icon_font,
+                        if selected { t.accent } else { t.muted },
+                        DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+                    );
+                    DeleteObject(icon_font);
+                    rect.left += s(52);
+                    if selected {
+                        design::rounded(
+                            item.hDC,
+                            design::rect(s(1), s(9), s(3), rect.bottom - s(18)),
+                            t.accent,
+                            t.accent,
+                            s(3),
+                        );
+                    }
+                }
+                let font = SendMessageW(item.hwndItem, WM_GETFONT, 0, 0) as HFONT;
+                design::text(
                     item.hDC,
-                    text.as_mut_ptr(),
-                    -1,
-                    &mut rect,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+                    &window_text(item.hwndItem),
+                    rect,
+                    font,
+                    if item.itemState & ODS_DISABLED != 0 {
+                        t.muted
+                    } else if primary {
+                        t.on_accent
+                    } else if selected {
+                        t.accent
+                    } else {
+                        t.text
+                    },
+                    if nav {
+                        DT_LEFT | DT_VCENTER | DT_SINGLELINE
+                    } else {
+                        DT_CENTER | DT_VCENTER | DT_SINGLELINE
+                    },
                 );
                 if item.itemState & ODS_FOCUS != 0 {
                     let mut focus = item.rcItem;
-                    InflateRect(&mut focus, -4, -4);
+                    InflateRect(&mut focus, -s(3), -s(3));
                     DrawFocusRect(item.hDC, &focus);
                 }
-                SelectObject(item.hDC, old_font);
                 Some(1)
             }
             _ => None,

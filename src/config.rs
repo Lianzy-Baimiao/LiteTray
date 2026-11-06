@@ -56,6 +56,8 @@ pub struct ClockConfig {
     pub bottom_color: String,
     pub alignment: litetray_adapter_protocol::clock::Alignment,
     pub tooltip_line: String,
+    pub top_style: litetray_adapter_protocol::clock::LineStyle,
+    pub bottom_style: litetray_adapter_protocol::clock::LineStyle,
 }
 impl Default for ClockConfig {
     fn default() -> Self {
@@ -72,6 +74,8 @@ impl Default for ClockConfig {
             bottom_color: String::new(),
             alignment: Default::default(),
             tooltip_line: String::new(),
+            top_style: Default::default(),
+            bottom_style: Default::default(),
         }
     }
 }
@@ -237,6 +241,9 @@ impl Config {
         if !(8..=32).contains(&self.clock.font_size) || !(80..=600).contains(&self.clock.width) {
             return Err("时钟字号或宽度超出范围".into());
         }
+        litetray_adapter_protocol::clock::validate_font_family(&self.clock.font_family)?;
+        self.clock.top_style.validate()?;
+        self.clock.bottom_style.validate()?;
         if self.clock.top_line.len() > 1024
             || self.clock.bottom_line.len() > 1024
             || self.clock.tooltip_line.len() > 1024
@@ -368,14 +375,27 @@ mod tests {
     fn clock_style_roundtrip_defaults_and_validation() {
         let mut c: Config = serde_json::from_str(r#"{"clock":{"top_line":"%time%"}}"#).unwrap();
         assert!(c.clock.top_color.is_empty() && c.clock.tooltip_line.is_empty());
+        assert_eq!(c.clock.top_style, Default::default());
+        assert_eq!(c.clock.bottom_style, Default::default());
         c.clock.top_color = "#00FFff".into();
         c.clock.bottom_color = "#80443322".into();
         c.clock.tooltip_line = "%date%\n%weather%".into();
         c.clock.alignment = litetray_adapter_protocol::clock::Alignment::Right;
+        c.clock.top_style = litetray_adapter_protocol::clock::LineStyle {
+            font_family: Some("Consolas".into()),
+            font_size: Some(20),
+            alignment: Some(litetray_adapter_protocol::clock::Alignment::Native),
+        };
+        c.clock.bottom_style.font_size = Some(10);
         c.validate().unwrap();
         let restored: Config = serde_json::from_slice(&serde_json::to_vec(&c).unwrap()).unwrap();
         assert_eq!(restored.clock.tooltip_line, c.clock.tooltip_line);
         assert_eq!(restored.clock.alignment, c.clock.alignment);
+        assert_eq!(restored.clock.top_style, c.clock.top_style);
+        assert_eq!(restored.clock.bottom_style, c.clock.bottom_style);
+        c.clock.bottom_style.font_size = Some(40);
+        assert!(c.validate().is_err());
+        c.clock.bottom_style.font_size = None;
         c.clock.tooltip_line = "%unsupported%".into();
         assert!(c.validate().is_err());
         c.clock.tooltip_line.clear();

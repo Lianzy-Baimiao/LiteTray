@@ -86,6 +86,37 @@ pub struct Style {
     pub bottom_color: Option<String>,
     #[serde(default)]
     pub alignment: Alignment,
+    #[serde(default)]
+    pub top_style: LineStyle,
+    #[serde(default)]
+    pub bottom_style: LineStyle,
+}
+/// Missing values follow the common style. Explicit Native alignment releases
+/// that line's override even when the common alignment is not Native.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LineStyle {
+    pub font_family: Option<String>,
+    pub font_size: Option<u32>,
+    pub alignment: Option<Alignment>,
+}
+impl LineStyle {
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(family) = &self.font_family {
+            validate_font_family(family)?;
+        }
+        if self.font_size.is_some_and(|size| !(8..=32).contains(&size)) {
+            return Err("单行字号应为 8–32".into());
+        }
+        Ok(())
+    }
+}
+pub fn validate_font_family(value: &str) -> Result<(), String> {
+    if value.trim().is_empty() || value.len() > 128 || value.contains('\0') {
+        Err("字体名称不能为空、超过 128 字节或包含无效字符".into())
+    } else {
+        Ok(())
+    }
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -109,15 +140,13 @@ pub fn validate_color(value: &str) -> Result<(), String> {
 }
 impl Style {
     pub fn validate(&self) -> Result<(), String> {
+        validate_font_family(&self.font_family)?;
+        self.top_style.validate()?;
+        self.bottom_style.validate()?;
         for color in [&self.top_color, &self.bottom_color].into_iter().flatten() {
             validate_color(color)?;
         }
-        if !(8..=32).contains(&self.font_size)
-            || !(80..=600).contains(&self.width)
-            || self.font_family.trim().is_empty()
-            || self.font_family.len() > 128
-            || self.font_family.contains('\0')
-        {
+        if !(8..=32).contains(&self.font_size) || !(80..=600).contains(&self.width) {
             Err("时钟样式参数无效".into())
         } else {
             Ok(())
@@ -228,6 +257,8 @@ mod tests {
         let old: Frame=serde_json::from_str(r#"{"text":{"top":"time","bottom":"date"},"style":{"font_family":"Segoe UI","font_size":12,"width":200}}"#).unwrap();
         old.validate().unwrap();
         assert_eq!(old.style.alignment, Alignment::Native);
+        assert_eq!(old.style.top_style, LineStyle::default());
+        assert_eq!(old.style.bottom_style, LineStyle::default());
         assert!(old.text.tooltip.is_none() && old.style.top_color.is_none());
         for color in ["#ABCDEF", "#80010203", "#abcdef"] {
             validate_color(color).unwrap();
@@ -252,6 +283,37 @@ mod tests {
         let mut json = serde_json::to_value(old).unwrap();
         json["style"]["alignment"] = "justify".into();
         assert!(serde_json::from_value::<Frame>(json).is_err());
+    }
+    #[test]
+    fn line_styles_validate_and_distinguish_inheritance_from_native() {
+        let mut line: LineStyle = serde_json::from_str(
+            r#"{"font_family":"Consolas","font_size":18,"alignment":"native"}"#,
+        )
+        .unwrap();
+        line.validate().unwrap();
+        assert_eq!(line.alignment, Some(Alignment::Native));
+        assert_ne!(line.alignment, LineStyle::default().alignment);
+        assert_eq!(
+            serde_json::from_slice::<LineStyle>(&serde_json::to_vec(&line).unwrap()).unwrap(),
+            line
+        );
+        for size in [0, 7, 33, u32::MAX] {
+            line.font_size = Some(size);
+            assert!(line.validate().is_err());
+        }
+        line.font_size = None;
+        for family in [
+            String::new(),
+            "  ".into(),
+            "bad\0name".into(),
+            "字".repeat(43),
+        ] {
+            line.font_family = Some(family);
+            assert!(line.validate().is_err());
+        }
+        assert!(serde_json::from_str::<LineStyle>(r#"{"font_size":12.5}"#).is_err());
+        assert!(serde_json::from_str::<LineStyle>(r#"{"alignment":"justify"}"#).is_err());
+        assert!(serde_json::from_str::<LineStyle>(r#"{"unknown":true}"#).is_err());
     }
     fn owner() -> Owner {
         Owner {
@@ -327,6 +389,8 @@ mod tests {
                 top_color: None,
                 bottom_color: None,
                 alignment: Default::default(),
+                top_style: Default::default(),
+                bottom_style: Default::default(),
             }
             .validate()
             .is_err()
