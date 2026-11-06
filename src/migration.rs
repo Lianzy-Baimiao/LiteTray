@@ -839,8 +839,10 @@ mod tests {
         let mut v: Value =
             serde_json::from_slice(&profile(current(), serde_json::json!({}))).unwrap();
         v["modules"][CLOCK]["enabled"] = false.into();
-        let report = preview(&serde_json::to_vec(&v).unwrap(), &Config::default()).unwrap();
-        assert_eq!(report.candidate.clock.width, 280);
+        let mut base = Config::default();
+        base.clock.width = 185;
+        let report = preview(&serde_json::to_vec(&v).unwrap(), &base).unwrap();
+        assert_eq!(report.candidate.clock.width, base.clock.width);
         assert!(report.entries.iter().all(|e| e.status == Status::Inactive));
     }
     #[test]

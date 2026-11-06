@@ -27,7 +27,7 @@ use windows_sys::Win32::{
 pub const WM_ACTIVATED: u32 = WM_APP + 12;
 #[path = "taskbar_live_checks.rs"]
 mod live_checks;
-pub use live_checks::check_secondary;
+pub use live_checks::{check_secondary, check_secondary_tray};
 pub struct Native {
     main: HWND,
 }
@@ -80,6 +80,9 @@ pub struct Preflight {
     layout: HostLayout,
     routes: Vec<Route>,
     custom_calendar: bool,
+    source: Option<Route>,
+    clocks: bool,
+    mirror_icons: bool,
 }
 pub fn preflight(config: &Config) -> Result<Preflight, String> {
     let system = std::env::var_os("SystemRoot")
@@ -111,8 +114,9 @@ pub fn preflight(config: &Config) -> Result<Preflight, String> {
     };
     let layout = symbols::host_layout(&map, &bytes)?;
     let mut tray = config.tray.clone();
-    tray.clock_enabled = true;
-    tray.enabled = false;
+    tray.enabled = tray.enabled && tray.show_icons;
+    tray.show_control_center = false;
+    tray.copied_taskbars_only = true;
     let snapshot = diagnostics::collect_for(&tray);
     if let Some(error) = snapshot.target_plan_error {
         return Err(error);
@@ -125,6 +129,9 @@ pub fn preflight(config: &Config) -> Result<Preflight, String> {
         layout,
         routes: plan.targets.into_iter().map(|t| t.route).collect(),
         custom_calendar: config.clock.click_action == ClickAction::CalendarWeather,
+        source: plan.source,
+        clocks: config.tray.clock_enabled,
+        mirror_icons: config.tray.enabled && config.tray.show_icons,
     })
 }
 struct Context {
@@ -193,6 +200,9 @@ impl Connection {
                     layout: preflight.layout,
                     routes: preflight.routes,
                     custom_calendar: preflight.custom_calendar,
+                    source: preflight.source,
+                    clocks: preflight.clocks,
+                    mirror_icons: preflight.mirror_icons,
                 },
                 reply: RefCell::new(None),
                 gate: RefCell::new(None),
@@ -322,16 +332,22 @@ impl Connection {
             reply.validate(request)?;
             connection.endpoint.set(reply.endpoint as HWND);
             connection.verify_endpoint()?;
-            *connection.context.gate.borrow_mut() =
-                Some(Gate::new(request.owner.clone(), reply.targets)?);
+            if !reply.targets.is_empty() {
+                *connection.context.gate.borrow_mut() =
+                    Some(Gate::new(request.owner.clone(), reply.targets)?);
+            }
             Ok(connection)
         }
     }
     fn start(&self, frame: Frame) -> Result<(), String> {
         frame.validate()?;
         let _call = self.enter()?;
-        self.command(Change::Start {
-            frame: frame.clone(),
+        self.command(if self.context.request.clocks {
+            Change::Start {
+                frame: frame.clone(),
+            }
+        } else {
+            Change::StartTray
         })?;
         if self.status()? != SessionStatus::Active {
             return Err("任务栏未确认时钟接管成功".into());
@@ -355,8 +371,8 @@ impl Connection {
             }
             let mut name = [0u16; 128];
             let n = GetClassNameW(hwnd, name.as_mut_ptr(), 128).max(0) as usize;
-            if String::from_utf16_lossy(&name[..n])
-                != format!("LiteTray.ClockWatchdog.v1.{}", self.context.tid)
+            if !String::from_utf16_lossy(&name[..n])
+                .starts_with(&format!("LiteTray.ClockWatchdog.v1.{}.", self.context.tid))
             {
                 return Err("任务栏会话窗口类型不匹配".into());
             }
@@ -415,14 +431,18 @@ impl Connection {
         }
         let _call = self.enter()?;
         frame.validate()?;
-        let change = match self.last.borrow().as_ref() {
-            Some(old) if old == &frame => Change::Heartbeat,
-            Some(old) if old.style == frame.style => Change::Tick {
-                text: frame.text.clone(),
-            },
-            _ => Change::Update {
-                frame: frame.clone(),
-            },
+        let change = if !self.context.request.clocks {
+            Change::Heartbeat
+        } else {
+            match self.last.borrow().as_ref() {
+                Some(old) if old == &frame => Change::Heartbeat,
+                Some(old) if old.style == frame.style => Change::Tick {
+                    text: frame.text.clone(),
+                },
+                _ => Change::Update {
+                    frame: frame.clone(),
+                },
+            }
         };
         if let Err(error) = self.command(change) {
             self.context.active.set(false);

@@ -10,7 +10,11 @@
 
 隔离检查先证明直接写 Text 和 held Storyboard 都无法抵抗系统刷新，再在相同真实 TextBlock 用例验证同步回调：120 次系统写入、自定义 Tick、最新值恢复、绑定恢复、重复 Stop、Drop 与回调释放均通过。另通过真实 WM_COPYDATA 验证 Prepared→Start→Active→Stop→Closed 和 sender/nonce 拒绝。通用检查现为 138 项，版本限定自有 Shell 宿主检查另计 6 项。
 
-**这些是自有进程结果。实验 TaskbarHost 获取和 Explorer 内的整个连接仍未实机验证，完整多托盘和自动重连也未完成。** 下文保留普通属性、预览、模型事务的详细机制；普通属性的冲突语义不适用于上述专用原位 Text 观察器。
+以上自检结论与生产验证分别记录。2026-11-06 后续已在真实 Explorer 验证主副屏原位时钟与副屏应用图标生成，见 [实机记录](../../docs/live-clock-acceptance.md)；完整多托盘菜单及系统图标仍未完成。下文保留普通属性、预览、模型事务的详细机制；普通属性的冲突语义不适用于上述专用原位 Text 观察器。
+
+Prepare 新增可缺省的 `source`、`clocks` 和 `mirror_icons`。来源只能是同一线程的主任务栏；只读来源不会因此成为时钟修改目标。应用图标复制目前限于 NotificationAreaIcons 与 NotifyIconStack，不共享输入法/控制中心的菜单模型。Reply 只返回实际启用的时钟输入目标；独立托盘可返回空目标集合，使用 `StartTray` 启动，随后仅发送心跳。副屏依赖属性、模型和来源引用仍受同一恢复事务保护。
+
+宽度 0 表示 Auto，在原生端设置 Width=NaN；所有权比较已有 NaN 判等支持。固定 80–600 宽度保持兼容，Tick 不计算或重设宽度。watchdog 窗口类按所属线程与回调地址区分，防止 Explorer 中尚被固定加载的旧 DLL 与新 DLL 混用窗口过程；主机仍验证端点进程、线程和类型前缀。
 
 `src/xaml_abi.rs` 由 `tools/xaml-bindgen` 从 Windows 自带的 `Windows.UI.Xaml.winmd` 生成。构建使用已签入的定义，不需要开发机的 winmd，CI 也不从运行环境重新生成接口。
 

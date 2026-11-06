@@ -676,8 +676,12 @@ impl App {
                         130,
                     );
                     self.edit(
-                        "时钟宽度（80–600）",
-                        &c.clock.width.to_string(),
+                        "宽度（留空自动）",
+                        &if c.clock.width == 0 {
+                            String::new()
+                        } else {
+                            c.clock.width.to_string()
+                        },
                         207,
                         656,
                         312,
@@ -725,29 +729,31 @@ impl App {
                         340,
                     );
                     self.check(
-                        "显示托盘图标和隐藏图标入口",
-                        c.tray.show_icons,
-                        302,
+                        "复制应用托盘图标和隐藏图标入口",
+                        c.tray.enabled && c.tray.show_icons,
+                        308,
                         224,
                         162,
                         400,
                     );
                     self.check(
-                        "显示网络 / 音量 / 电池控制中心",
+                        "网络 / 音量 / 电池（尚未支持复制）",
                         c.tray.show_control_center,
                         303,
                         224,
                         200,
                         400,
                     );
+                    EnableWindow(self.field(303), 0);
                     self.check(
-                        "组件规则仅影响复制的副屏任务栏",
+                        "图标复制到选中副屏；主屏图标保持原位",
                         c.tray.copied_taskbars_only,
                         304,
                         224,
                         238,
                         460,
                     );
+                    EnableWindow(self.field(304), 0);
                     self.label(
                         "指定屏幕 · 单击或空格切换，可多选",
                         224,
@@ -787,7 +793,7 @@ impl App {
                         64,
                     );
                     self.label(
-                        "显示范围用于原位时钟。多屏托盘图标接管仍在开发。",
+                        "保存后生效。复制原生应用图标；输入法、控制中心与跨屏菜单仍在完善。",
                         224,
                         527,
                         width - 260,
@@ -899,7 +905,7 @@ impl App {
                     self.label("兼容策略：先检测系统能力，再启用对应任务栏适配。\r\nWindows 10 经典任务栏和 Windows 11 XAML 任务栏分别实现。\r\n未知系统版本不使用未验证的内存偏移。",224,389,width-260,100);
                 }
                 5 => {
-                    self.label(&format!("LiteTray 轻托盘  {} · {UI_REVISION}\r\n日历、天气与任务栏时钟\r\n原位时钟连接待实机验收；多屏托盘接管待完成",env!("CARGO_PKG_VERSION")),224,86,width-260,80);
+                    self.label(&format!("LiteTray 轻托盘  {} · {UI_REVISION}\r\n自动宽度时钟、日历天气、应用托盘图标复制\r\n系统图标及跨屏菜单仍在完善",env!("CARGO_PKG_VERSION")),224,86,width-260,80);
                     self.edit(
                         "GitHub 更新仓库（owner/repository）",
                         &c.updates.repository,
@@ -1101,7 +1107,13 @@ impl App {
                 c.clock.show_lunar = self.checked(204);
                 c.clock.font_family = self.text(205);
                 c.clock.font_size = self.text(206).parse().map_err(|_| "字号必须是整数")?;
-                c.clock.width = self.text(207).parse().map_err(|_| "宽度必须是整数")?;
+                c.clock.width = if self.text(207).trim().is_empty() {
+                    0
+                } else {
+                    self.text(207)
+                        .parse()
+                        .map_err(|_| "宽度留空自动，或填写 80–600")?
+                };
                 c.clock.click_action = if self.selected(208) == 0 {
                     ClickAction::CalendarWeather
                 } else {
@@ -1114,9 +1126,8 @@ impl App {
                     1 => MonitorScope::Primary,
                     _ => MonitorScope::Selected,
                 };
-                c.tray.show_icons = self.checked(302);
-                c.tray.show_control_center = self.checked(303);
-                c.tray.copied_taskbars_only = self.checked(304);
+                c.tray.enabled = self.checked(308);
+                c.tray.show_icons = self.checked(308);
                 let selected = (0..self.monitor_rows.len())
                     .map(|i| unsafe { SendMessageW(self.field(305), LB_GETSEL, i, 0) > 0 })
                     .collect::<Vec<_>>();
@@ -1299,7 +1310,7 @@ impl App {
                     );
                     set_text(
                         self.field(212),
-                        if state.enabled {
+                        if self.saved.tray.clock_enabled {
                             "重试连接"
                         } else {
                             "启用并保存（实验）"
@@ -1313,10 +1324,7 @@ impl App {
                                 | litetray::taskbar_service::Status::Busy
                         )),
                     );
-                    EnableWindow(
-                        self.field(213),
-                        i32::from(state.status != litetray::taskbar_service::Status::Disabled),
-                    );
+                    EnableWindow(self.field(213), i32::from(self.saved.tray.clock_enabled));
                 }
             }
             if !self.panel.is_null() {
@@ -1653,15 +1661,19 @@ impl App {
                 }
                 213 => {
                     // Disable first, even when another unsaved field is invalid.
-                    let restored = self.stop_taskbar();
                     let mut saved = self.saved.clone();
                     saved.tray.clock_enabled = false;
+                    let restored = self
+                        .taskbar
+                        .as_ref()
+                        .map(|s| s.configure(saved.clone(), taskbar_now()))
+                        .transpose();
                     match config::save(&config::data_dir().join("config.json"), &saved) {
                         Ok(()) => {
                             self.saved = saved;
                             self.draft.tray.clock_enabled = false;
                             self.set_status(match restored {
-                                Ok(()) => "已停用并恢复系统时钟".into(),
+                                Ok(_) => "已停用自定义时钟；图标复制按已保存设置运行".into(),
                                 Err(error) => format!("已保存停用；当前恢复待确认：{error}"),
                             });
                         }

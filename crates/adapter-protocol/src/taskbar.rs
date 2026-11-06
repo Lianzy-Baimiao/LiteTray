@@ -21,6 +21,15 @@ pub struct Prepare {
     pub layout: HostLayout,
     pub routes: Vec<Route>,
     pub custom_calendar: bool,
+    #[serde(default)]
+    pub source: Option<Route>,
+    #[serde(default = "clocks_default")]
+    pub clocks: bool,
+    #[serde(default)]
+    pub mirror_icons: bool,
+}
+fn clocks_default() -> bool {
+    true
 }
 impl Prepare {
     pub fn plan(&self) -> Result<Plan, String> {
@@ -29,21 +38,51 @@ impl Prepare {
         }
         self.owner.validate()?;
         self.layout.validate()?;
-        Plan::build(
-            &self.routes,
+        let mut routes = self.routes.clone();
+        if let Some(source) = &self.source {
+            if source.secondary || !self.mirror_icons {
+                return Err("托盘来源配置无效".into());
+            }
+            if let Some(existing) = routes.iter().find(|r| r.window == source.window) {
+                if existing != source {
+                    return Err("托盘来源与目标身份冲突".into());
+                }
+            } else {
+                routes.push(source.clone());
+            }
+        }
+        let mut plan = Plan::build(
+            &routes,
             &self
                 .routes
                 .iter()
                 .map(|r| r.device.clone())
                 .collect::<Vec<_>>(),
             Options {
-                clocks: true,
-                tray: false,
-                icons: false,
+                clocks: self.clocks,
+                tray: self.mirror_icons,
+                icons: true,
                 control_center: false,
-                copied_taskbars_only: false,
+                copied_taskbars_only: true,
             },
-        )
+        )?;
+        // Application notification icons and the overflow chevron use the
+        // native notification model. System glyph menus require separate
+        // cross-island menu ownership and are not enabled by this capability.
+        for target in &mut plan.targets {
+            let supported = |role: &crate::topology::Role| {
+                matches!(
+                    role,
+                    crate::topology::Role::HiddenIcons | crate::topology::Role::NotificationIcons
+                )
+            };
+            target.models.retain(supported);
+            target.visibility.retain(|v| supported(&v.role));
+        }
+        if plan.targets.is_empty() {
+            return Err("所选范围没有可启用的组件".into());
+        }
+        Ok(plan)
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, String> {
         if bytes.is_empty() || bytes.len() > MAX_REQUEST {
@@ -74,14 +113,23 @@ impl Reply {
             }
             return Err(error.clone());
         }
-        if self.endpoint == 0 || self.targets.len() != request.routes.len() {
+        let clocks = request
+            .plan()?
+            .targets
+            .iter()
+            .filter(|t| t.clock)
+            .map(|t| t.route.window)
+            .collect::<Vec<_>>();
+        if self.endpoint == 0 || self.targets.len() != clocks.len() {
             return Err("任务栏响应缺少目标或端点".into());
         }
-        crate::activation::Gate::new(self.owner.clone(), self.targets.clone())?;
+        if !clocks.is_empty() {
+            crate::activation::Gate::new(self.owner.clone(), self.targets.clone())?;
+        }
         if self
             .targets
             .iter()
-            .any(|(clock, _)| !request.routes.iter().any(|r| r.window == *clock))
+            .any(|(clock, _)| !clocks.contains(clock))
         {
             return Err("任务栏响应含未请求的时钟".into());
         }
@@ -108,7 +156,48 @@ mod tests {
                 device: "DISPLAY1".into(),
             }],
             custom_calendar: true,
+            clocks: true,
+            mirror_icons: false,
+            source: None,
         }
+    }
+    #[test]
+    fn tray_source_is_read_only_and_only_requested_clock_targets_are_returned() {
+        let mut r = request();
+        let primary = r.routes[0].clone();
+        r.routes[0].window = 25;
+        r.routes[0].device = "DISPLAY2".into();
+        r.routes[0].secondary = true;
+        r.source = Some(primary.clone());
+        r.mirror_icons = true;
+        let plan = r.plan().unwrap();
+        assert_eq!(plan.source, Some(primary));
+        assert_eq!(plan.targets.len(), 1);
+        assert_eq!(
+            plan.targets[0].models,
+            [
+                crate::topology::Role::HiddenIcons,
+                crate::topology::Role::NotificationIcons
+            ]
+        );
+        let reply = Reply {
+            version: VERSION,
+            owner: r.owner.clone(),
+            endpoint: 100,
+            targets: vec![(25, 50)],
+            error: None,
+        };
+        reply.validate(&r).unwrap();
+        r.clocks = false;
+        assert!(reply.validate(&r).is_err());
+        Reply {
+            targets: vec![],
+            ..reply
+        }
+        .validate(&r)
+        .unwrap();
+        r.source.as_mut().unwrap().thread_id += 1;
+        assert!(r.plan().is_err());
     }
     #[test]
     fn preparation_is_bounded_and_rejects_ambiguous_or_cross_thread_targets() {

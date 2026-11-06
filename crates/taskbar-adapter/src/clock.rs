@@ -184,7 +184,7 @@ impl ClockLease {
         if fonts.iter().any(|(size, family)| {
             !(8.0..=32.0).contains(size)
                 || litetray_adapter_protocol::clock::validate_font_family(family).is_err()
-        }) || !(80.0..=600.0).contains(&width)
+        }) || width != 0.0 && !(80.0..=600.0).contains(&width)
             || top.len() > 4096
             || bottom.len() > 4096
             || top.contains('\0')
@@ -200,7 +200,9 @@ impl ClockLease {
         let bottom_size = boxed_number(fonts[1].0)?;
         let top_family = font_family(fonts[0].1)?;
         let bottom_family = font_family(fonts[1].1)?;
-        let width = boxed_number(width)?;
+        // FrameworkElement.Width = NaN is native Auto. Text changes then
+        // invalidate layout themselves; no width polling or text estimates.
+        let width = boxed_number(if width == 0.0 { f64::NAN } else { width })?;
         self.write(&[
             &top_value,
             &bottom_value,
@@ -466,6 +468,11 @@ pub(crate) fn self_test() -> Result<serde_json::Value, String> {
                 && text(&time)? == "12:34:57",
             "invalid settings leave live state intact",
         )?;
+        lease.apply("12:34:57", "天气晴 23°C", 12., "Segoe UI", 0.)?;
+        require(width(&container)?.is_nan(), "automatic native Width")?;
+        lease.tick("12:34:58", "Longer weather text")?;
+        lease.verify_ownership()?;
+        require(width(&container)?.is_nan(), "automatic Width survives tick")?;
         lease.restore()?;
         require(
             text(&date)? == "Original date" && font(&date)? == 15.,
@@ -550,6 +557,7 @@ pub(crate) fn self_test() -> Result<serde_json::Value, String> {
             "style_apply",
             "tick",
             "invalid_settings",
+            "native_auto_width_and_tick_ownership",
             "local_restore",
             "unset_restore",
             "binding_source_update",

@@ -97,7 +97,7 @@ impl<B: Backend> Service<B> {
         Ok(Self {
             backend,
             driver: RefCell::new(Some(Driver {
-                enabled: config.tray.clock_enabled,
+                enabled: config.tray.clock_enabled || config.tray.enabled && config.tray.show_icons,
                 config,
                 weather: "天气暂无数据".into(),
                 revision: 0,
@@ -134,9 +134,12 @@ impl<B: Backend> Service<B> {
         config.validate()?;
         self.with_driver(now, |driver| {
             let changed = driver.config.tray.scope != config.tray.scope
+                || driver.config.tray.enabled != config.tray.enabled
+                || driver.config.tray.clock_enabled != config.tray.clock_enabled
+                || driver.config.tray.show_icons != config.tray.show_icons
                 || driver.config.tray.selected_devices != config.tray.selected_devices
                 || driver.config.clock.click_action != config.clock.click_action;
-            let enable = config.tray.clock_enabled;
+            let enable = config.tray.clock_enabled || config.tray.enabled && config.tray.show_icons;
             driver.config = config;
             if !enable {
                 return driver.stop(now);
@@ -435,6 +438,18 @@ mod tests {
         complete(native, Ok(()));
         service.tick(1, time(0)).unwrap();
         assert_eq!(service.snapshot().status, Status::Running);
+    }
+    #[test]
+    fn tray_can_stay_enabled_when_clock_is_disabled() {
+        let (service, native, mut config) = fixture();
+        config.tray.clock_enabled = false;
+        config.tray.enabled = true;
+        service.configure(config.clone(), 0).unwrap();
+        connect(&service, &native);
+        config.tray.enabled = false;
+        service.configure(config, 10).unwrap();
+        assert_eq!(service.snapshot().status, Status::Disabled);
+        assert_eq!(native.stops.get(), 1);
     }
     #[test]
     fn hidden_host_formats_and_updates_seconds_without_view_calls() {

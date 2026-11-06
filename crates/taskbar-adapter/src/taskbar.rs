@@ -43,7 +43,13 @@ unsafe fn prepare(request: &Prepare) -> Result<Reply, String> {
         ACTIVE.with(|v| v.borrow_mut().take());
         drop(previous);
         let plan = request.plan()?;
-        for route in &request.routes {
+        let mut routes = request.routes.clone();
+        if let Some(source) = &plan.source
+            && !routes.iter().any(|r| r.window == source.window)
+        {
+            routes.push(source.clone());
+        }
+        for route in &routes {
             let hwnd = route.window as HWND;
             let mut pid = 0;
             if GetWindowThreadProcessId(hwnd, &mut pid) != GetCurrentThreadId()
@@ -72,8 +78,7 @@ unsafe fn prepare(request: &Prepare) -> Result<Reply, String> {
                 return Err("任务栏屏幕已变化".into());
             }
         }
-        let sources = request
-            .routes
+        let sources = routes
             .iter()
             .map(|r| crate::taskbar_source::resolve(r.window as HWND, &request.layout))
             .collect::<Result<Vec<_>, _>>()?;
@@ -81,8 +86,7 @@ unsafe fn prepare(request: &Prepare) -> Result<Reply, String> {
             .iter()
             .map(|s| View::discover(&s.root))
             .collect::<Result<Vec<_>, _>>()?;
-        let bound = request
-            .routes
+        let bound = routes
             .iter()
             .zip(&views)
             .zip(&sources)
@@ -145,6 +149,11 @@ unsafe fn prepare(request: &Prepare) -> Result<Reply, String> {
                 .routes
                 .iter()
                 .zip(&bound)
+                .filter(|(r, _)| {
+                    plan.targets
+                        .iter()
+                        .any(|t| t.clock && t.route.window == r.window)
+                })
                 .map(|(r, b)| (r.window, b.input_window()))
                 .collect(),
             error: None,

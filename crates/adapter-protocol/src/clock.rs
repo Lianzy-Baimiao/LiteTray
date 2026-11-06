@@ -79,6 +79,7 @@ impl Text {
 pub struct Style {
     pub font_family: String,
     pub font_size: u32,
+    /// Zero lets the native layout measure the longest line.
     pub width: u32,
     #[serde(default)]
     pub top_color: Option<String>,
@@ -146,7 +147,9 @@ impl Style {
         for color in [&self.top_color, &self.bottom_color].into_iter().flatten() {
             validate_color(color)?;
         }
-        if !(8..=32).contains(&self.font_size) || !(80..=600).contains(&self.width) {
+        if !(8..=32).contains(&self.font_size)
+            || self.width != 0 && !(80..=600).contains(&self.width)
+        {
             Err("时钟样式参数无效".into())
         } else {
             Ok(())
@@ -169,6 +172,7 @@ impl Frame {
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Change {
     Start { frame: Frame },
+    StartTray,
     Update { frame: Frame },
     Tick { text: Text },
     Heartbeat,

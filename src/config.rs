@@ -68,7 +68,7 @@ impl Default for ClockConfig {
             show_lunar: true,
             font_family: "Microsoft YaHei UI".into(),
             font_size: 12,
-            width: 280,
+            width: 0,
             click_action: ClickAction::CalendarWeather,
             top_color: String::new(),
             bottom_color: String::new(),
@@ -238,7 +238,9 @@ impl Config {
         if self.weather.city.trim().is_empty() || self.weather.city.len() > 128 {
             return Err("城市名称无效".into());
         }
-        if !(8..=32).contains(&self.clock.font_size) || !(80..=600).contains(&self.clock.width) {
+        if !(8..=32).contains(&self.clock.font_size)
+            || self.clock.width != 0 && !(80..=600).contains(&self.clock.width)
+        {
             return Err("时钟字号或宽度超出范围".into());
         }
         litetray_adapter_protocol::clock::validate_font_family(&self.clock.font_family)?;

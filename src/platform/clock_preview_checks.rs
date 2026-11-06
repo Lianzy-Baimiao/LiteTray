@@ -131,7 +131,7 @@ pub fn self_test() -> Result<Vec<&'static str>, String> {
     }
     checks.push("host_preview_busy_call_retains_connection");
     let mut invalid = frame.clone();
-    invalid.style.width = 0;
+    invalid.style.width = 1;
     require(service.update(&invalid).is_err(), "invalid draft rejected")?;
     service.heartbeat()?;
     require(

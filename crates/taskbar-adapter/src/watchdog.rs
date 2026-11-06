@@ -124,7 +124,13 @@ impl Watchdog {
             if process.is_null() {
                 return Err("无法监视时钟宿主进程".into());
             }
-            let class = wide(&format!("{CLASS}.{}", GetCurrentThreadId()));
+            // A stopped DLL can remain pinned in Explorer. Distinct builds
+            // must not call one another's registered window procedure.
+            let class = wide(&format!(
+                "{CLASS}.{}.{:x}",
+                GetCurrentThreadId(),
+                procedure as *const () as usize
+            ));
             let mut owner = Self {
                 hwnd: null_mut(),
                 context: Rc::new(Context {

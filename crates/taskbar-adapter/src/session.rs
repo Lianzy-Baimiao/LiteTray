@@ -301,6 +301,14 @@ impl Session {
         if matches!(command.change, Change::Stop) {
             return self.stop();
         }
+        if matches!(command.change, Change::StartTray) {
+            if self.state != State::Prepared {
+                return Err("托盘会话不是待启动状态".into());
+            }
+            self.lease.check(&command, now)?;
+            self.start_tray(now)?;
+            return self.lease.commit(&command, now);
+        }
         if let Change::Start { frame } = &command.change {
             if self.state != State::Prepared {
                 return Err("时钟会话不是待启动状态".into());
@@ -327,7 +335,7 @@ impl Session {
             }
             Change::Heartbeat => {}
             Change::Stop => return self.stop(),
-            Change::Start { .. } => return Err("时钟会话已启动".into()),
+            Change::Start { .. } | Change::StartTray => return Err("任务栏会话已启动".into()),
         }
         self.validate_targets()?;
         self.lease.commit(&command, now)
