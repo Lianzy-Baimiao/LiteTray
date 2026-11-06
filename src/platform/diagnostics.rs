@@ -48,7 +48,7 @@ pub fn collect() -> Diagnostics {
             target_plan: None,
             target_plan_error: None,
             taskbars,
-            adapter_status: "独立原生程序已就绪；任务栏接管适配尚未启用".into(),
+            adapter_status: "任务栏接管尚未实现：当前仅支持独立时钟预览、日历天气和设置".into(),
         }
     }
 }

@@ -30,6 +30,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
+const UI_REVISION: &str = "界面预览 2";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -125,7 +126,26 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
         }
         if GetLastError() == ERROR_ALREADY_EXISTS {
             let other = FindWindowW(wide(&settings_class).as_ptr(), null());
-            if !other.is_null() {
+            let result = (|| {
+                if other.is_null() {
+                    return Err("另一个 LiteTray 实例正在启动或退出，请稍后再试。".into());
+                }
+                // Sharing a profile is a single-instance invariant. A copy in
+                // another directory must not silently impersonate this build.
+                let running = running_executable(other)?;
+                let requested = std::env::current_exe().map_err(|e| e.to_string())?;
+                if !running.eq_ignore_ascii_case(&requested.to_string_lossy()) {
+                    MessageBoxW(
+                        null_mut(),
+                        wide(&format!(
+                            "另一个目录的 LiteTray 正在运行，本次新版尚未启动。\r\n\r\n正在运行：\r\n{running}\r\n\r\n你刚打开：\r\n{}\r\n\r\n请从旧版的“常规设置 → 退出程序”或托盘菜单退出，再重新打开新版。只点窗口右上角关闭会收至托盘。",
+                            requested.display()
+                        )).as_ptr(),
+                        wide("LiteTray · 需要先退出旧版").as_ptr(),
+                        MB_OK | MB_ICONINFORMATION,
+                    );
+                    return Ok(());
+                }
                 PostMessageW(
                     other,
                     if mode == "--clock-preview" {
@@ -138,9 +158,10 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
                     0,
                     0,
                 );
-            }
+                Ok(())
+            })();
             CloseHandle(mutex);
-            return Ok(());
+            return result;
         }
         let _ = RoInitialize(RO_INIT_SINGLETHREADED);
         let controls = INITCOMMONCONTROLSEX {
@@ -172,7 +193,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
         let hwnd = CreateWindowExW(
             WS_EX_CONTROLPARENT,
             class_name.as_ptr(),
-            wide("LiteTray · 轻托盘").as_ptr(),
+            wide(&format!("LiteTray · 轻托盘 · {UI_REVISION}")).as_ptr(),
             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -211,7 +232,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             calendar: None,
             saved: config.clone(),
             draft: config,
-            status: "开发预览 · 任务栏接管尚未启用".into(),
+            status: "开发预览 · 任务栏接管尚未实现".into(),
             weather: None,
             update: None,
             migration_source: None,
@@ -574,7 +595,7 @@ impl App {
             }
             self.label(
                 &format!(
-                    "开发预览  v{}\r\n轻量 · 原生 · 自定义",
+                    "{UI_REVISION}  v{}\r\n轻量 · 原生 · 自定义",
                     env!("CARGO_PKG_VERSION")
                 ),
                 24,
@@ -873,7 +894,7 @@ impl App {
                     self.label("兼容策略：先检测系统能力，再启用对应任务栏适配。\r\nWindows 10 经典任务栏和 Windows 11 XAML 任务栏分别实现。\r\n未知系统版本不使用未验证的内存偏移。",224,389,width-260,100);
                 }
                 5 => {
-                    self.label(&format!("LiteTray 轻托盘  {}\r\nRust 原生 Windows 应用 · x64\r\n多屏托盘、自定义时钟、日历和可回退天气",env!("CARGO_PKG_VERSION")),224,86,width-260,80);
+                    self.label(&format!("LiteTray 轻托盘  {} · {UI_REVISION}\r\n日历与天气、时钟预览和设置\r\n任务栏时钟与多屏托盘接管尚未实现",env!("CARGO_PKG_VERSION")),224,86,width-260,80);
                     self.edit(
                         "GitHub 更新仓库（owner/repository）",
                         &c.updates.repository,
@@ -1812,6 +1833,29 @@ impl App {
     }
 }
 
+/// Inspect only the owner of our profile-specific settings window. This uses
+/// limited process metadata access, never shell injection or process memory.
+unsafe fn running_executable(window: HWND) -> Result<String, String> {
+    unsafe {
+        let mut pid = 0;
+        GetWindowThreadProcessId(window, &mut pid);
+        if pid == 0 {
+            return Err("无法识别正在运行的 LiteTray，请退出旧实例后重试。".into());
+        }
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return Err("无法核对已运行的 LiteTray 版本，请退出旧实例后重试。".into());
+        }
+        let mut path = vec![0u16; 32768];
+        let mut length = path.len() as u32;
+        let success = QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut length) != 0;
+        CloseHandle(process);
+        if !success {
+            return Err("无法读取已运行的 LiteTray 路径，请退出旧实例后重试。".into());
+        }
+        Ok(String::from_utf16_lossy(&path[..length as usize]))
+    }
+}
 fn instance_suffix() -> Result<String, String> {
     use sha2::{Digest, Sha256};
     // Keep the default profile compatible with earlier versions. Explicit
