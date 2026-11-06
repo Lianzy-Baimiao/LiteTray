@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$BinaryPath)
+param([string]$BinaryPath,[string]$OutputDirectory)
 $ErrorActionPreference='Stop'
 $projectRoot=Split-Path $PSScriptRoot -Parent
 if (-not $BinaryPath) {
@@ -8,11 +8,11 @@ if (-not $BinaryPath) {
     $BinaryPath=if(Test-Path -LiteralPath $standard){$standard}else{$local}
 }
 if(-not (Test-Path -LiteralPath $BinaryPath)){throw 'Build the release executable first.'}
-$output=Join-Path $projectRoot 'dist\LiteTray-dev-windows-x64'
-[IO.Directory]::CreateDirectory($output)|Out-Null
-Copy-Item -LiteralPath $BinaryPath -Destination (Join-Path $output 'LiteTray.exe')
 $adapter=Join-Path (Split-Path $BinaryPath -Parent) 'litetray_taskbar_adapter.dll'
 if(-not(Test-Path -LiteralPath $adapter)){throw 'Build the complete release workspace; the adapter DLL is required.'}
+$output=if($OutputDirectory){$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)}else{Join-Path $projectRoot 'dist\LiteTray-dev-windows-x64'}
+[IO.Directory]::CreateDirectory($output)|Out-Null
+Copy-Item -LiteralPath $BinaryPath -Destination (Join-Path $output 'LiteTray.exe')
 Copy-Item -LiteralPath $adapter -Destination (Join-Path $output 'litetray_taskbar_adapter.dll')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination (Join-Path $output 'README.md')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD-PARTY-NOTICES.md') -Destination (Join-Path $output 'THIRD-PARTY-NOTICES.md')
