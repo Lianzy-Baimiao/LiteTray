@@ -108,12 +108,47 @@ pub fn frame(config: &ClockConfig, weather: &str) -> Frame {
         text: Text {
             top: clock::format(&config.top_line, config, now, weather),
             bottom: clock::format(&config.bottom_line, config, now, weather),
+            tooltip: (!config.tooltip_line.is_empty())
+                .then(|| clock::format(&config.tooltip_line, config, now, weather)),
         },
         style: Style {
             font_family: config.font_family.clone(),
             font_size: config.font_size,
             width: config.width,
+            top_color: (!config.top_color.is_empty()).then(|| config.top_color.clone()),
+            bottom_color: (!config.bottom_color.is_empty()).then(|| config.bottom_color.clone()),
+            alignment: config.alignment,
         },
+    }
+}
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+    #[test]
+    fn host_formats_tooltip_and_preserves_weather_as_literal_text() {
+        let config = ClockConfig {
+            tooltip_line: "%weather%\n%year%".into(),
+            top_color: "#123456".into(),
+            bottom_color: "#80112233".into(),
+            alignment: litetray_adapter_protocol::clock::Alignment::Center,
+            ..ClockConfig::default()
+        };
+        let frame = frame(&config, "Humidity 80% <literal> %time%");
+        frame.validate().unwrap();
+        assert!(
+            frame
+                .text
+                .tooltip
+                .as_ref()
+                .unwrap()
+                .starts_with("Humidity 80% <literal> %time%\n")
+        );
+        assert_eq!(frame.style.top_color, Some("#123456".into()));
+        assert_eq!(frame.style.bottom_color, Some("#80112233".into()));
+        assert_eq!(
+            frame.style.alignment,
+            litetray_adapter_protocol::clock::Alignment::Center
+        );
     }
 }
 impl Connection {

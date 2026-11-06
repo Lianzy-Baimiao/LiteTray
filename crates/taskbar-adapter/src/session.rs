@@ -311,17 +311,7 @@ impl Session {
             .as_ref()
             .is_none_or(|old| old.style != frame.style);
         for target in &mut self.targets {
-            let result = if style_changed {
-                target.clock.apply(
-                    &frame.text.top,
-                    &frame.text.bottom,
-                    frame.style.font_size as f64,
-                    &frame.style.font_family,
-                    frame.style.width as f64,
-                )
-            } else {
-                target.clock.tick(&frame.text.top, &frame.text.bottom)
-            };
+            let result = target.clock.update(&frame, style_changed);
             if let Err(error) = result {
                 let error = format!("时钟 {} 更新失败：{error}", target.id);
                 return match self.stop() {

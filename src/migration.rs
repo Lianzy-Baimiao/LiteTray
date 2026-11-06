@@ -331,6 +331,41 @@ fn migrate_clock(
                 _ => review("来源字号不同或超出 8–32 范围，保留当前字号"),
             }
         }
+        "TimeStyle.TextColor" | "DateStyle.TextColor" => {
+            let Some(color) = string(value) else {
+                return review("颜色值无效");
+            };
+            if color.is_empty() {
+                return inactive("来源保留原生颜色，当前颜色设置保留");
+            }
+            if let Err(error) = litetray_adapter_protocol::clock::validate_color(color) {
+                return review(&error);
+            }
+            if key.starts_with("TimeStyle") {
+                config.clock.top_color = color.into();
+            } else {
+                config.clock.bottom_color = color.into();
+            }
+            imported("已转换此行文字颜色")
+        }
+        "TimeStyle.TextAlignment" | "DateStyle.TextAlignment" => {
+            use litetray_adapter_protocol::clock::Alignment;
+            if value.as_str() == Some("") {
+                return inactive("来源未指定对齐，当前设置保留");
+            }
+            let time = setting(settings, "TimeStyle.TextAlignment");
+            let date = setting(settings, "DateStyle.TextAlignment");
+            if time != date {
+                return review("来源两行对齐不同；当前共用对齐方式，保留原设置");
+            }
+            config.clock.alignment = match time {
+                Some("Left") => Alignment::Left,
+                Some("Center") => Alignment::Center,
+                Some("Right") => Alignment::Right,
+                _ => return review("暂不支持此对齐方式，保留原设置"),
+            };
+            imported("已转换两行文字对齐方式")
+        }
         "DateFormat" | "TimeFormat" | "WeekdayFormat" => {
             let used = match key {
                 "DateFormat" => "%date%",
@@ -575,6 +610,26 @@ fn format_pattern(pattern: &str, time: bool) -> Result<String, String> {
 mod tests {
     use super::*;
     use chrono::{Local, TimeZone};
+    #[test]
+    fn imports_independent_colors_but_preserves_unsupported_alignment() {
+        let mut base = Config::default();
+        base.clock.bottom_color = "#112233".into();
+        let report=preview(&profile(serde_json::json!({"TimeStyle.TextColor":"#FF0000","DateStyle.TextColor":"Red\"/>","TimeStyle.TextAlignment":"Right","DateStyle.TextAlignment":"Right"}),serde_json::json!({})),&base).unwrap();
+        assert_eq!(report.candidate.clock.top_color, "#FF0000");
+        assert_eq!(report.candidate.clock.bottom_color, "#112233");
+        assert_eq!(
+            report.candidate.clock.alignment,
+            litetray_adapter_protocol::clock::Alignment::Right
+        );
+        let report=preview(&profile(serde_json::json!({"TimeStyle.TextAlignment":"Left","DateStyle.TextAlignment":"Right"}),serde_json::json!({})),&base).unwrap();
+        assert_eq!(report.candidate.clock.alignment, base.clock.alignment);
+        assert!(
+            report
+                .entries
+                .iter()
+                .all(|e| e.status == Status::NeedsReview)
+        );
+    }
     fn profile(settings: Value, tray: Value) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({"schemaVersion":1,"modules":{CLOCK:{"version":"1.8.1","enabled":true,"settings":settings},TRAY:{"version":"1.3.0","enabled":true,"settings":tray}}})).unwrap()
     }

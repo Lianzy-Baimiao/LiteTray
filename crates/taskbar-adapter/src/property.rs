@@ -260,6 +260,12 @@ fn equal_value(a: &Object, b: &Object) -> Result<bool, String> {
         return Ok(true);
     }
     if let (Some(a), Some(b)) = (
+        crate::clock_style::alignment_value(a)?,
+        crate::clock_style::alignment_value(b)?,
+    ) {
+        return Ok(a == b);
+    }
+    if let (Some(a), Some(b)) = (
         crate::visibility::enum_value(a)?,
         crate::visibility::enum_value(b)?,
     ) {

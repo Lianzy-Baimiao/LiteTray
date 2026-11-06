@@ -10,6 +10,14 @@
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct Color {
+    pub A: u8,
+    pub R: u8,
+    pub G: u8,
+    pub B: u8,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub struct CorePhysicalKeyStatus {
     pub RepeatCount: u32,
     pub ScanCode: u32,
@@ -829,6 +837,16 @@ pub struct IPropertyValueStatics_Vtbl {
         *mut *mut core::ffi::c_void,
     ) -> windows_sys::core::HRESULT,
 }
+pub const IID_ISolidColorBrush: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0x9d850850_66f3_48df_9a8f_824bd5e070af);
+#[repr(C)]
+pub struct ISolidColorBrush_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    pub Color:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut Color) -> windows_sys::core::HRESULT,
+    pub SetColor:
+        unsafe extern "system" fn(*mut core::ffi::c_void, Color) -> windows_sys::core::HRESULT,
+}
 pub const IID_ITappedRoutedEventArgs: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0xa099e6be_e624_459a_bb1d_e05c73e2cc66);
 #[repr(C)]
@@ -868,8 +886,14 @@ pub struct ITextBlock_Vtbl {
     SetTextWrapping: usize,
     TextTrimming: usize,
     SetTextTrimming: usize,
-    TextAlignment: usize,
-    SetTextAlignment: usize,
+    pub TextAlignment: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut TextAlignment,
+    ) -> windows_sys::core::HRESULT,
+    pub SetTextAlignment: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        TextAlignment,
+    ) -> windows_sys::core::HRESULT,
     pub Text: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *mut windows_sys::core::HSTRING,
@@ -932,10 +956,16 @@ pub struct ITextBlockStatics_Vtbl {
     FontStyleProperty: usize,
     FontStretchProperty: usize,
     CharacterSpacingProperty: usize,
-    ForegroundProperty: usize,
+    pub ForegroundProperty: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
     TextWrappingProperty: usize,
     TextTrimmingProperty: usize,
-    TextAlignmentProperty: usize,
+    pub TextAlignmentProperty: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
     pub TextProperty: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *mut *mut core::ffi::c_void,
@@ -945,6 +975,24 @@ pub struct ITextBlockStatics_Vtbl {
     LineStackingStrategyProperty: usize,
     IsTextSelectionEnabledProperty: usize,
     SelectedTextProperty: usize,
+}
+pub const IID_IToolTipServiceStatics: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0x86e649f8_e245_48aa_a8c8_d1073ed76319);
+#[repr(C)]
+pub struct IToolTipServiceStatics_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    PlacementProperty: usize,
+    GetPlacement: usize,
+    SetPlacement: usize,
+    PlacementTargetProperty: usize,
+    GetPlacementTarget: usize,
+    SetPlacementTarget: usize,
+    pub ToolTipProperty: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    GetToolTip: usize,
+    SetToolTip: usize,
 }
 pub const IID_IUIElement: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0x676d0be9_b65c_41c6_ba40_58cf87f201c1);
@@ -1319,6 +1367,18 @@ pub struct Rect {
 pub struct Size {
     pub Width: f32,
     pub Height: f32,
+}
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct TextAlignment(pub i32);
+impl TextAlignment {
+    pub const Center: Self = Self(0i32);
+    pub const Left: Self = Self(1i32);
+    pub const Start: Self = Self(1i32);
+    pub const Right: Self = Self(2i32);
+    pub const End: Self = Self(2i32);
+    pub const Justify: Self = Self(3i32);
+    pub const DetectFromContent: Self = Self(4i32);
 }
 #[repr(transparent)]
 #[derive(Clone, Copy)]

@@ -191,6 +191,7 @@ pub fn self_test_clock_owner() -> Result<(), String> {
                 text: Text {
                     top: "Child process tick".into(),
                     bottom: "跨进程天气 25°C".into(),
+                    tooltip: None,
                 },
             },
         };

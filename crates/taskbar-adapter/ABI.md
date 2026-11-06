@@ -129,3 +129,13 @@ Session 的 Prepared 状态可以暂时没有时钟，`start_tray` 要求至少�
 Session 启动和有效命令批次前后、poll、输入发布前核对所持 guard；来源窗口和来源模型区域也检查。拒绝的旧结构不续租，统一停止并在恢复成功后释放 guard。对于显式 Stop、已处于 Restoring 的重试，不要求旧树可访问后才尝试恢复保留的原属性。Watchdog 输入回调使用 with_session 临时取走状态来执行 COM 检查，重入消息不能再次访问同一 Session；失败保留默认输入，停止后的原生委托不再发布。
 
 当前仅验证本进程的窗口、标准 XAML 控件和隐藏 island。窗口销毁已实测；没有强迫 Windows 重用同一个 HWND，也没有真实硬件插拔/混合 DPI 验证。显示器快照不包含完整 DisplayConfig 物理目标映射，宿主仍须处理拓扑通知并重建范围计划。检查允许正常模型条目变化，不会自动建立新会话；生产重连和模块卸载仍待完成。
+
+## 可选时钟样式与提示
+
+`Style` 增加可缺省的 `top_color`/`bottom_color` 与 `alignment`；`Text` 增加可缺省的 `tooltip`。旧消息可解码为保留原样。颜色仅接受 #RRGGBB/#AARRGGBB；提示是最多 4096 字节的普通字符串，格式化在宿主执行。配置的 `tooltip_line` 和两行模板一样最多 1024 字节，未知变量拒绝保存；天气字符串不会再作为模板解释。
+
+`clock_style::Decorations` 管理 Foreground、TextAlignment、ToolTipService.ToolTip 的可选租约。先构造值和捕获新启用字段的原始状态，再写文字与样式；已有归属在写入前复查。改回 Native 时恢复 binding/local/unset 并释放该字段的租约，之后外部改动可以正常发生。再次启用时重新捕获最新原值。提示每秒变化不会重建未改变的画刷或对齐对象。新增 WinRT 接口及属性槽从同一 Windows metadata 生成；枚举判等仅接受精确 IReference<TextAlignment>，不将任意 OtherType 当作整数。
+
+样式冲突在时钟更新时停止会话，恢复仍由 ClockLease/Session 统一执行并保留外部写入。没有声称直接修改同一画刷对象内部颜色也能通过 COM 身份比较检测到；所有权检测针对依赖属性值/绑定的替换。
+
+新增 8 项真实 XAML 场景覆盖独立 ARGB、对齐、提示特殊字符、只更新提示时画刷身份保持、无效颜色写入前拒绝、绑定/未设置值恢复、Native 后外部替换再启用的最新原值、会话冲突恢复和 Drop。通用原生场景合计 126 项；6 项版本限定的自有 Shell 宿主检查也启用了颜色/对齐/提示并通过。实际悬停 UI 和真实任务栏应用尚待验收。

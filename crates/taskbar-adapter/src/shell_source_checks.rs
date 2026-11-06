@@ -482,11 +482,15 @@ pub(crate) fn run() -> Result<serde_json::Value, String> {
         text: Text {
             top: "12:34:56".into(),
             bottom: "天气晴 22°C".into(),
+            tooltip: Some("Own Shell host tooltip".into()),
         },
         style: Style {
             font_size: 12,
             font_family: "Segoe UI".into(),
             width: 240,
+            top_color: Some("#79C0FF".into()),
+            bottom_color: Some("#FFCC88".into()),
+            alignment: litetray_adapter_protocol::clock::Alignment::Center,
         },
     };
     let events = Rc::new(RefCell::new(Vec::new()));

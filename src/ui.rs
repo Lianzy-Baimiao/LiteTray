@@ -47,7 +47,7 @@ const OPEN_RELEASE: u16 = 32;
 const EXIT: u16 = 33;
 const CALENDAR: u16 = 34;
 const MONTHCAL: u16 = 35;
-const PAGES: [&str; 7] = [
+const PAGES: [&str; 8] = [
     "日历与天气",
     "时钟显示",
     "多屏托盘",
@@ -55,6 +55,7 @@ const PAGES: [&str; 7] = [
     "常规设置",
     "关于与更新",
     "配置迁移",
+    "时钟样式",
 ];
 thread_local! {static STATE:RefCell<Option<App>>=const{RefCell::new(None)};}
 // Independent of App's modal-dialog borrow. Each native call retains its own
@@ -542,8 +543,8 @@ impl App {
             let brand = self.label("LiteTray", 22, 24, 170, 38);
             SendMessageW(brand, WM_SETFONT, self.title_font as usize, 1);
             self.label("轻托盘 · Rust 原生", 24, 66, 170, 25);
-            for (i, title) in PAGES.iter().enumerate() {
-                self.button(title, NAV + i as u16, 20, 112 + i as i32 * 46, 168);
+            for (row, i) in [0, 1, 7, 2, 3, 4, 5, 6].into_iter().enumerate() {
+                self.button(PAGES[i], NAV + i as u16, 20, 112 + row as i32 * 46, 168);
             }
             self.label(
                 &format!(
@@ -941,6 +942,46 @@ impl App {
                     SendMessageW(report_control, EM_SETLIMITTEXT, 2 * 1024 * 1024, 0);
                     SetWindowTextW(report_control, wide(&text).as_ptr());
                 }
+                7 => {
+                    use litetray_adapter_protocol::clock::Alignment;
+                    self.edit("第一行颜色", &c.clock.top_color, 801, 224, 90, 270);
+                    self.edit("第二行颜色", &c.clock.bottom_color, 802, 520, 90, 270);
+                    self.label("留空使用原生颜色。格式：#RRGGBB 或 #AARRGGBB（含透明度）。\r\n例如 #79C0FF；设置只作用于时钟文字。",224,165,width-260,56);
+                    self.label("两行文字对齐", 224, 235, 300, 25);
+                    self.combo(
+                        &["保留原样", "左对齐", "居中", "右对齐"],
+                        match c.clock.alignment {
+                            Alignment::Native => 0,
+                            Alignment::Left => 1,
+                            Alignment::Center => 2,
+                            Alignment::Right => 3,
+                        },
+                        803,
+                        224,
+                        266,
+                        330,
+                    );
+                    self.label("悬停提示模板 · 留空保留原生提示", 224, 326, width - 260, 25);
+                    let tip = self.control(
+                        "EDIT",
+                        &c.clock.tooltip_line.replace('\n', "\r\n"),
+                        804,
+                        WS_TABSTOP
+                            | WS_BORDER
+                            | WS_VSCROLL
+                            | ES_MULTILINE as u32
+                            | ES_AUTOVSCROLL as u32
+                            | ES_WANTRETURN as u32,
+                        224,
+                        360,
+                        width - 260,
+                        82,
+                    );
+                    SendMessageW(tip, EM_SETLIMITTEXT, 1024, 0);
+                    self.label("可使用 %date% %time% %weekday% %weather%，支持换行。\r\n在原生预览时钟上停留鼠标可查看提示。",224,454,width-260,48);
+                    self.button("应用草稿到原生预览", 209, 224, 518, 250);
+                    self.button("重置本页为原样", 805, 492, 518, 185);
+                }
                 _ => {}
             }
             self.control(
@@ -1019,6 +1060,18 @@ impl App {
                 c.updates.repository = self.text(601).trim().into();
                 c.updates.include_prerelease = self.checked(602);
                 c.updates.check_on_startup = self.checked(603);
+            }
+            7 => {
+                use litetray_adapter_protocol::clock::Alignment;
+                c.clock.top_color = self.text(801).trim().into();
+                c.clock.bottom_color = self.text(802).trim().into();
+                c.clock.alignment = match self.selected(803) {
+                    1 => Alignment::Left,
+                    2 => Alignment::Center,
+                    3 => Alignment::Right,
+                    _ => Alignment::Native,
+                };
+                c.clock.tooltip_line = self.text(804).replace("\r\n", "\n");
             }
             _ => {}
         }
@@ -1569,6 +1622,14 @@ impl App {
                 return false;
             }
             match id {
+                805 => {
+                    self.draft.clock.top_color.clear();
+                    self.draft.clock.bottom_color.clear();
+                    self.draft.clock.alignment = Default::default();
+                    self.draft.clock.tooltip_line.clear();
+                    self.status = "本页已恢复原样，点击保存设置后保留".into();
+                    self.render();
+                }
                 307 => self.refresh_displays(),
                 SAVE => {
                     if let Err(e) = self.save() {

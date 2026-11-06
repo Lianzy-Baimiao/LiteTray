@@ -83,6 +83,10 @@ LiteTray.exe --preview-windhawk <profile.json> [new-report.json]
 
 “时钟显示”页的“打开原生时钟预览”或 `--clock-preview` 可打开独立 XAML 时钟窗口，使用当前两行模板、字体和宽度。鼠标点击或聚焦后按回车可打开 LiteTray 日历天气面板，面板的 Esc 关闭已实测。空格处理已编写，仍待可靠的界面验收。预览始终使用 LiteTray 面板；系统日历选项留待任务栏接管验证。此窗口不接管任务栏，也不代表已能停用 Windhawk。
 
+“时钟样式”页可分别设置两行颜色（`#RRGGBB` 或 `#AARRGGBB`）、共同文字对齐和多行悬停提示模板。颜色留空、对齐选择“保留原样”、提示留空时恢复原生属性和绑定。提示支持时钟页相同的日期/时间/天气变量，显式 `%second%` 会保持每秒刷新；“应用草稿到原生预览”用于查看当前草稿，保存后下次运行使用相同配置。“重置本页为原样”只重置颜色、对齐和提示草稿。新增样式已通过真实 XAML 属性与会话自动化检查；本轮界面工具未能可靠激活窗口，因此本页视觉布局、手动保存重启和实际鼠标悬停尚未验收。
+
+样式字段默认缺省，不需要重新建立旧配置。Windhawk 迁移新增两行独立十六进制颜色和两行相同的 Left/Center/Right 对齐；不同对齐或非十六进制颜色会列为需要核对，不猜测转换。两行独立字体/字号、第三行和其余 Windhawk 样式项仍待补齐。
+
 预览的点击和文字由同一会话管理，失联或停止时同时解除输入和恢复原值。文件选择对话框保持打开超过 58 秒后，时钟和点击仍正常，已做实机检查；睡眠恢复与真实任务栏仍需单独验收。
 
 预览会话意外停止后，宿主确认旧会话已关闭，再按 1 秒、5 秒间隔尝试重建；连续三次故障暂停自动恢复，运行稳定 60 秒后清除连续失败计数。原状态恢复连续失败时保留旧连接并暂停重建，不能直接丢弃旧连接。时钟页显示状态和原因，可使用“重试预览连接”；自动重建保留隐藏状态，显示时不主动请求焦点。旧会话排队中的点击会被丢弃。以上恢复目前只用于独立预览，尚未连接 Explorer。
@@ -93,13 +97,13 @@ LiteTray.exe --preview-windhawk <profile.json> [new-report.json]
 
 只读检查报告的 `topology` 字段进一步限定原生托盘容器，识别通知图标、隐藏图标、系统图标、控制中心、时钟与通知入口。时钟只选择独立的两行文字容器；重复节点、未知类型、不可见或未布局状态会报告不可用。识别结果可以准备可恢复的时钟/模型事务，已在本进程夹具中验证；真实 SystemTray 类、显示器选择、点击路由和接入仍待验收。
 
-`--self-test-clock` 在 **LiteTray 自己进程** 的新 XAML 控件中检查时钟文本和样式写入、原值/原绑定恢复、部分失败回滚、会话更新、外部修改保留与失联恢复。另启动同一程序的隔离测试子进程，验证真实跨进程更新和子进程结束后的自动恢复，并创建隐藏的 XAML Island 验证输入订阅与释放。托盘模型事务共享 DataContext、ItemsSource 和非可视 Content；独立 island 验证集合增删传播、来源替换/清空、原绑定恢复及与时钟一起停止。当前合计 118 个隔离场景，约 20 秒，包含选定目标、独立托盘会话、可见性恢复、宿主预览重建和真实 Windows 定时器的 15 秒心跳超时验证。`--self-test-preview-recovery` 可单独运行其中 8 项宿主恢复检查，使用真实 DLL 和隐藏窗口，退避时间由测试控制，无需等待超时。它们不访问 Explorer，也不修改任务栏。适合开发检查，不代表已经实现任务栏接管：
+`--self-test-clock` 在 **LiteTray 自己进程** 的新 XAML 控件中检查时钟文本和样式写入、原值/原绑定恢复、部分失败回滚、会话更新、外部修改保留与失联恢复。另启动同一程序的隔离测试子进程，验证真实跨进程更新和子进程结束后的自动恢复，并创建隐藏的 XAML Island 验证输入订阅与释放。托盘模型事务共享 DataContext、ItemsSource 和非可视 Content；独立 island 验证集合增删传播、来源替换/清空、原绑定恢复及与时钟一起停止。当前合计 126 个隔离场景，约 20 秒，包含选定目标、独立托盘会话、可见性恢复、宿主预览重建和真实 Windows 定时器的 15 秒心跳超时验证。`--self-test-preview-recovery` 可单独运行其中 8 项宿主恢复检查，使用真实 DLL 和隐藏窗口，退避时间由测试控制，无需等待超时。它们不访问 Explorer，也不修改任务栏。适合开发检查，不代表已经实现任务栏接管：
 
 ```powershell
 .\tools\Test-XamlClock.ps1 -BinaryPath <release目录>\LiteTray.exe
 ```
 
-`--self-test-shell-source` 是另一组独立进程检查，只对本机已核对 SHA-256 和 PE/PDB 身份的 `twinui.pcshell.dll` 运行；其他版本拒绝私有调用。它创建两个自己的隐藏 Shell XAML 宿主，验证实际 source、父窗口、内容根、时钟/模型/输入及恢复，共 6 项。没有初始化普通预览、访问用户配置或连接 Explorer。它证明当前版本的内部宿主桥可行，结果仍明确标记 `production_taskbar_verified: false`。该检查不包含在上述 118 项或通用 CI 中，可用 `tools/Test-ShellSource.ps1 -BinaryPath <release目录>\LiteTray.exe` 单独运行。
+`--self-test-shell-source` 是另一组独立进程检查，只对本机已核对 SHA-256 和 PE/PDB 身份的 `twinui.pcshell.dll` 运行；其他版本拒绝私有调用。它创建两个自己的隐藏 Shell XAML 宿主，验证实际 source、父窗口、内容根、时钟/模型/输入及恢复，共 6 项。没有初始化普通预览、访问用户配置或连接 Explorer。它证明当前版本的内部宿主桥可行，结果仍明确标记 `production_taskbar_verified: false`。该检查不包含在上述 126 项或通用 CI 中，可用 `tools/Test-ShellSource.ps1 -BinaryPath <release目录>\LiteTray.exe` 单独运行。
 
 接口来源和隔离边界见 [ABI 说明](crates/taskbar-adapter/ABI.md)，上游参考与许可见 [第三方声明](THIRD-PARTY-NOTICES.md)。
 

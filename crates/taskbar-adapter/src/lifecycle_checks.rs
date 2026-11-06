@@ -83,11 +83,15 @@ fn frame() -> Frame {
         text: Text {
             top: "12:30:00".into(),
             bottom: "多云 24°C".into(),
+            tooltip: None,
         },
         style: Style {
             font_family: "Segoe UI".into(),
             font_size: 13,
             width: 260,
+            top_color: None,
+            bottom_color: None,
+            alignment: Default::default(),
         },
     }
 }
@@ -145,6 +149,7 @@ fn native_transport_checks(
     let tick = Text {
         top: "20:31:12".into(),
         bottom: "小雨 23°C".into(),
+        tooltip: None,
     };
     let bytes = command(&owner, 1, Change::Tick { text: tick.clone() });
     // The actual WM_COPYDATA callback, not Session::receive, rejects invalid
@@ -501,6 +506,7 @@ pub fn run() -> Result<Vec<&'static str>, String> {
     let tick = Text {
         top: "12:30:01".into(),
         bottom: "晴 25°C".into(),
+        tooltip: None,
     };
     session.receive(
         &command(&owner, 1, Change::Tick { text: tick.clone() }),
@@ -725,6 +731,7 @@ pub fn run() -> Result<Vec<&'static str>, String> {
     let text = Text {
         top: "12:31:00".into(),
         bottom: "更新天气".into(),
+        tooltip: None,
     };
     require(
         session

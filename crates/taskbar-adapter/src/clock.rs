@@ -71,6 +71,7 @@ pub(crate) struct ClockLease {
     live: bool,
     identities: [usize; 3],
     last_text: Option<(String, String)>,
+    decorations: crate::clock_style::Decorations,
 }
 impl ClockLease {
     pub fn capture(time: &Object, date: &Object, container: &Object) -> Result<Self, String> {
@@ -111,8 +112,38 @@ impl ClockLease {
                     container.query(&IID_IUnknown)?.raw() as usize,
                 ],
                 last_text: None,
+                decorations: crate::clock_style::Decorations::capture(time, date, container)?,
             })
         }
+    }
+    pub(crate) fn update(
+        &mut self,
+        frame: &litetray_adapter_protocol::clock::Frame,
+        style_changed: bool,
+    ) -> Result<(), String> {
+        frame.validate()?;
+        let result = (|| {
+            let prepared = self.decorations.prepare(frame)?;
+            if style_changed {
+                self.apply(
+                    &frame.text.top,
+                    &frame.text.bottom,
+                    frame.style.font_size as f64,
+                    &frame.style.font_family,
+                    frame.style.width as f64,
+                )?;
+            } else {
+                self.tick(&frame.text.top, &frame.text.bottom)?;
+            }
+            self.decorations.apply(prepared)
+        })();
+        if let Err(error) = result {
+            return match self.restore() {
+                Ok(()) => Err(error),
+                Err(restore) => Err(format!("{error}；恢复未完成：{restore}")),
+            };
+        }
+        Ok(())
     }
     pub fn apply(
         &mut self,
@@ -199,6 +230,9 @@ impl ClockLease {
     }
     pub fn restore(&mut self) -> Result<(), String> {
         let mut errors = Vec::new();
+        if let Err(error) = self.decorations.restore() {
+            errors.push(error);
+        }
         for property in self.properties.iter_mut().rev() {
             if let Err(error) = property.restore() {
                 errors.push(error);
@@ -223,10 +257,10 @@ impl ClockLease {
             .contains(&(object.query(&IID_IUnknown)?.raw() as usize)))
     }
     pub fn clean(&self) -> bool {
-        self.properties.iter().all(|p| !p.dirty)
+        self.properties.iter().all(|p| !p.dirty) && self.decorations.clean()
     }
     fn verify_ownership(&mut self) -> Result<(), String> {
-        let mut failure = None;
+        let mut failure = self.decorations.validate().err();
         for property in &self.properties {
             match property.owns_current() {
                 Ok(true) => {}
@@ -443,6 +477,7 @@ pub(crate) fn self_test() -> Result<serde_json::Value, String> {
             "active_native_setter_failure_restores_previous_values",
         ];
         checks.extend(crate::lifecycle_checks::run()?);
+        checks.extend(crate::clock_style_checks::run()?);
         Ok(
             serde_json::json!({"passed":true,"environment":"isolated_xaml_in_host_process","explorer_accessed":false,"checks":checks}),
         )

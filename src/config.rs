@@ -52,6 +52,10 @@ pub struct ClockConfig {
     pub font_size: u32,
     pub width: u32,
     pub click_action: ClickAction,
+    pub top_color: String,
+    pub bottom_color: String,
+    pub alignment: litetray_adapter_protocol::clock::Alignment,
+    pub tooltip_line: String,
 }
 impl Default for ClockConfig {
     fn default() -> Self {
@@ -64,6 +68,10 @@ impl Default for ClockConfig {
             font_size: 12,
             width: 280,
             click_action: ClickAction::CalendarWeather,
+            top_color: String::new(),
+            bottom_color: String::new(),
+            alignment: Default::default(),
+            tooltip_line: String::new(),
         }
     }
 }
@@ -231,11 +239,21 @@ impl Config {
         }
         if self.clock.top_line.len() > 1024
             || self.clock.bottom_line.len() > 1024
+            || self.clock.tooltip_line.len() > 1024
             || self.clock.font_family.len() > 128
         {
             return Err("时钟配置内容过长".into());
         }
-        for text in [&self.clock.top_line, &self.clock.bottom_line] {
+        for color in [&self.clock.top_color, &self.clock.bottom_color] {
+            if !color.is_empty() {
+                litetray_adapter_protocol::clock::validate_color(color)?;
+            }
+        }
+        for text in [
+            &self.clock.top_line,
+            &self.clock.bottom_line,
+            &self.clock.tooltip_line,
+        ] {
             crate::clock::validate_template(text)?;
         }
         validate_repository(&self.updates.repository)?;
@@ -346,6 +364,24 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clock_style_roundtrip_defaults_and_validation() {
+        let mut c: Config = serde_json::from_str(r#"{"clock":{"top_line":"%time%"}}"#).unwrap();
+        assert!(c.clock.top_color.is_empty() && c.clock.tooltip_line.is_empty());
+        c.clock.top_color = "#00FFff".into();
+        c.clock.bottom_color = "#80443322".into();
+        c.clock.tooltip_line = "%date%\n%weather%".into();
+        c.clock.alignment = litetray_adapter_protocol::clock::Alignment::Right;
+        c.validate().unwrap();
+        let restored: Config = serde_json::from_slice(&serde_json::to_vec(&c).unwrap()).unwrap();
+        assert_eq!(restored.clock.tooltip_line, c.clock.tooltip_line);
+        assert_eq!(restored.clock.alignment, c.clock.alignment);
+        c.clock.tooltip_line = "%unsupported%".into();
+        assert!(c.validate().is_err());
+        c.clock.tooltip_line.clear();
+        c.clock.top_color = "red".into();
+        assert!(c.validate().is_err());
+    }
     #[test]
     fn defaults_are_valid_and_missing_fields_migrate() {
         Config::default().validate().unwrap();

@@ -54,6 +54,8 @@ impl Owner {
 pub struct Text {
     pub top: String,
     pub bottom: String,
+    #[serde(default)]
+    pub tooltip: Option<String>,
 }
 impl Text {
     pub fn validate(&self) -> Result<(), String> {
@@ -61,6 +63,10 @@ impl Text {
             || self.bottom.len() > 4096
             || self.top.contains('\0')
             || self.bottom.contains('\0')
+            || self
+                .tooltip
+                .as_ref()
+                .is_some_and(|s| s.len() > 4096 || s.contains('\0'))
         {
             Err("时钟文本过长或包含无效字符".into())
         } else {
@@ -74,9 +80,38 @@ pub struct Style {
     pub font_family: String,
     pub font_size: u32,
     pub width: u32,
+    #[serde(default)]
+    pub top_color: Option<String>,
+    #[serde(default)]
+    pub bottom_color: Option<String>,
+    #[serde(default)]
+    pub alignment: Alignment,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Alignment {
+    #[default]
+    Native,
+    Left,
+    Center,
+    Right,
+}
+/// Only a literal RGB/ARGB color is accepted; never arbitrary XAML markup.
+pub fn validate_color(value: &str) -> Result<(), String> {
+    if matches!(value.len(), 7 | 9)
+        && value.starts_with('#')
+        && value.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
+    {
+        Ok(())
+    } else {
+        Err("颜色应为 #RRGGBB 或 #AARRGGBB".into())
+    }
 }
 impl Style {
     pub fn validate(&self) -> Result<(), String> {
+        for color in [&self.top_color, &self.bottom_color].into_iter().flatten() {
+            validate_color(color)?;
+        }
         if !(8..=32).contains(&self.font_size)
             || !(80..=600).contains(&self.width)
             || self.font_family.trim().is_empty()
@@ -188,6 +223,36 @@ impl Lease {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn optional_style_defaults_and_rejects_markup_and_bad_enums() {
+        let old: Frame=serde_json::from_str(r#"{"text":{"top":"time","bottom":"date"},"style":{"font_family":"Segoe UI","font_size":12,"width":200}}"#).unwrap();
+        old.validate().unwrap();
+        assert_eq!(old.style.alignment, Alignment::Native);
+        assert!(old.text.tooltip.is_none() && old.style.top_color.is_none());
+        for color in ["#ABCDEF", "#80010203", "#abcdef"] {
+            validate_color(color).unwrap();
+        }
+        for color in [
+            "red",
+            "#123",
+            "#GG0000",
+            "#123456789",
+            "#ffffff\"/>",
+            "＃FFFFFF",
+        ] {
+            assert!(validate_color(color).is_err());
+        }
+        let mut frame = old.clone();
+        frame.text.tooltip = Some("<Button/>\nplain text".into());
+        frame.validate().unwrap();
+        frame.text.tooltip = Some("x\0y".into());
+        assert!(frame.validate().is_err());
+        frame.text.tooltip = Some("a".repeat(4097));
+        assert!(frame.validate().is_err());
+        let mut json = serde_json::to_value(old).unwrap();
+        json["style"]["alignment"] = "justify".into();
+        assert!(serde_json::from_value::<Frame>(json).is_err());
+    }
     fn owner() -> Owner {
         Owner {
             nonce: 1,
@@ -239,7 +304,8 @@ mod tests {
         assert!(
             Text {
                 top: "当前天气 24°C".into(),
-                bottom: "".into()
+                bottom: "".into(),
+                tooltip: None,
             }
             .validate()
             .is_ok()
@@ -247,7 +313,8 @@ mod tests {
         assert!(
             Text {
                 top: "a\0b".into(),
-                bottom: "".into()
+                bottom: "".into(),
+                tooltip: None,
             }
             .validate()
             .is_err()
@@ -256,7 +323,10 @@ mod tests {
             Style {
                 font_family: "".into(),
                 font_size: 12,
-                width: 200
+                width: 200,
+                top_color: None,
+                bottom_color: None,
+                alignment: Default::default(),
             }
             .validate()
             .is_err()

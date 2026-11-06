@@ -22,7 +22,7 @@ const TOKENS: [&str; 18] = [
 ];
 pub fn needs_second_ticks(config: &ClockConfig) -> bool {
     config.show_seconds
-        || [&config.top_line, &config.bottom_line]
+        || [&config.top_line, &config.bottom_line, &config.tooltip_line]
             .iter()
             .any(|line| line.contains("%second%"))
 }
@@ -149,5 +149,7 @@ mod tests {
         assert!(needs_second_ticks(&c));
         c.top_line = "%time%".into();
         assert!(!needs_second_ticks(&c));
+        c.tooltip_line = "%second%".into();
+        assert!(needs_second_ticks(&c));
     }
 }
