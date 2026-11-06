@@ -1,6 +1,6 @@
 # 任务栏窗口与 XAML source 的关联证据
 
-2026-11-06。只读取磁盘模块、PDB 和 Microsoft 符号服务器；未访问 Explorer 对象或安装 hook。以下离线证据不代表实时任务栏验证通过。
+2026-11-06。离线读取磁盘模块、PDB 和 Microsoft 符号服务器，并在自有进程中创建独立私有宿主；未访问 Explorer 对象或安装 hook。以下证据不代表实时任务栏验证通过。
 
 ## 当前对象类型
 
@@ -34,3 +34,15 @@ DbgHelp 核对模块/PDB GUID 与 age，离线反汇编核对调用关系。额�
 接口来源是 Microsoft SDK 的 [windows.ui.xaml.hosting.desktopwindowxamlsource.h](https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/windows.ui.xaml.hosting.desktopwindowxamlsource.h)。它适用于已取得的系统 XAML DesktopWindowXamlSource，不代表私有 Shell 或 WinAppSDK 类型已经适配。
 
 真实 TaskbarHost 仍须提供可验证的 source，或为其内部宿主建立经过验证的等价绑定；还要证明窗口与当前物理显示器选择一致。当前访问限制未改变，本进程夹具不能替代这项生产验证。之后才能接入正式启动、Explorer 重启后重新识别、托盘菜单与回调和多屏弹窗位置。
+
+## 自有进程的私有宿主验证
+
+`--self-test-shell-source` 在新进程、新 STA 中调用内部宿主工厂，只传入自己创建的隐藏父窗口。`Host` 类型不接受外部 HWND、进程或借用的私有宿主。模块限制为上表中已离线核对的 x64 `twinui.pcshell.dll`：先校验磁盘 SHA-256，再核对已加载路径、PE 时间戳/大小、PDB GUID/age、工厂和子接口的具体 vtable。其他版本直接拒绝，不套用原偏移。
+
+工厂 IID 为 `ff119559-d636-5e6b-b169-390efeb2cf6e`，子接口 IID 为 `ec97afd0-5c0d-581b-9508-074773c6f1e0`。具体工厂 vtable RVA 为 7866448，具体子接口 vtable RVA 为 7739040。XamlContent getter 的离线调用链先将子接口指针减 `0x10`，再访问对象的 `+0x20` 成员，因此自检在刚创建且仍持有引用的自有对象中读取接口指针 `+0x10` 处的 source。该路径只保留在 `shell_source_checks.rs`，没有成为生产 TaskbarHost 解析器。
+
+取得的对象实际支持公开 `IDesktopWindowXamlSource` 及 SDK 原生接口；返回 HWND 的 PID/TID、直接父窗口和 `IsChild` 与夹具一致。私有 XamlContent getter/setter 与公开 source 的根一致。两个自有宿主通过 6 项场景：source/root 交换拒绝、选定时钟和不同模型更新、原生委托点击、停止恢复、内容替换后拒绝旧输入并恢复、关闭宿主后绑定失效。测试使用标准 Windows 控件，未模拟 SystemTray 私有类；点击通过调用保留的真实委托验证，不是操作系统鼠标输入。
+
+初始化有两个实测条件：先创建普通 WindowsXamlManager 再创建该私有宿主，会在本版本记录 `0x8000FFFF` 后异常退出；去掉重复初始化、由内部宿主自行建立 XAML 环境后成功。初次附加内容还需要所属 STA 处理 Windows 消息才能建立可视父级；单独调用 Measure/Arrange/UpdateLayout 不足。Release 构建还复现父级先建立、时钟尚未完成布局的时序，所以自检同时等待真实父级和可识别时钟，限时 2 秒且限制每批消息数量，不放宽原有树归属检查。修复后的 Release 连续 5 个独立进程检查均通过。
+
+这证明当前版本的桥接在自有宿主中可行；真实任务栏对象的获取、物理屏幕关联和生产生命周期仍未验证。`production_taskbar_verified` 明确为 `false`。该专用检查不加入通用 CI 的成功计数，CI 机器使用其他系统版本时不能当作兼容通过；通过 `tools/Test-ShellSource.ps1` 单独运行并保留结果与错误日志。

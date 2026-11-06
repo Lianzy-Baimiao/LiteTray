@@ -545,6 +545,7 @@ version = "0.1.0"
 dependencies = [
  "litetray-adapter-protocol",
  "serde_json",
+ "sha2",
  "windows-collections",
  "windows-core",
  "windows-link",

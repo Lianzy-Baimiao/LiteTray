@@ -112,7 +112,7 @@ View 保留节点引用和到 XamlRoot 的父级链，准备时钟与模型时�
 
 `routing::attach_interactive` 从该绑定产生 InputTarget，独立核对点击控件属于同一 root，窗口由 source 返回；不会让调用方另选输入 HWND。只为计划中的时钟准备订阅，返回尚未启动的 watchdog，成功应用整组组件后才启用输入。无自定义点击行为的路径仍可只使用 prepare/Watchdog::attach。完整准备快照在布局后可能变化，重建必须重新识别，不能复用旧 View。
 
-当前真实 Shell 使用 IXamlExplorerHostChildWindow，尚未取得其实际 DesktopWindowXamlSource。Binding 的验证不能证明生产 Shell 对象已经适配；本次没有调用其私有接口。离线模块与 PDB 的证据见 [任务栏 source 调查](../../docs/taskbar-source-binding.md)。
+当前真实 Shell 使用 IXamlExplorerHostChildWindow。新增独立 `LiteTraySelfTestShellSource` 仅在本进程新建私有宿主中验证其到 DesktopWindowXamlSource 的桥，并将 Binding、范围会话与恢复串联；它不接受生产 TaskbarHost。这个导出要求新 STA、之前没有初始化 XAML，且调用方不得是 Explorer。模块 SHA-256、加载路径、PE/PDB 与具体接口 vtable 全部匹配才允许访问该自有对象的已核对字段；不匹配则返回错误。工厂与 source 引用留在所属线程，模块持有到所有对象释放以后。单独 CLI 在读取配置前运行，20 秒外部超时；通用 XAML 自检不调用此版本特定实验。已验证行为和边界见 [任务栏 source 调查](../../docs/taskbar-source-binding.md)。
 
 `VisibilityLease` 仅修改直接托盘模型区域的 Visibility，禁止通知按钮和时钟区域。依赖属性入口从 winmd 生成 IUIElementStatics.VisibilityProperty。枚举值由新建的临时 XAML Grid 读取原生装箱对象；判等仅接受标准参数化 `IReference<Windows.UI.Xaml.Visibility>` 的精确签名，不把任意 OtherType 当成整数。所有目标先捕获、全部原值核对后写入；Session 负责部分失败整组回滚与 poll 中的归属冲突停用。
 

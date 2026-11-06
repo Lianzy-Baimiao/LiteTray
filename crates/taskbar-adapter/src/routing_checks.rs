@@ -23,7 +23,7 @@ use windows_sys::Win32::System::{
     Threading::{GetCurrentProcessId, GetCurrentThreadId},
 };
 
-const MARKUP: &str = r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+pub(crate) const MARKUP: &str = r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 <StackPanel x:Name="SystemTrayFrameGrid" Width="520" Height="130">
   <ContentControl x:Name="NotificationAreaIcons" DataContext="Icons model" Content="Icons" Visibility="Collapsed"/>
   <ContentControl x:Name="NotifyIconStack" DataContext="Overflow model" Content="Overflow" Visibility="Collapsed"/>

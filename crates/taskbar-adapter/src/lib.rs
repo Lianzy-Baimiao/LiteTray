@@ -15,6 +15,7 @@ mod property;
 mod routing;
 mod routing_checks;
 mod session;
+mod shell_source_checks;
 mod tray;
 mod tray_checks;
 mod visibility;
@@ -47,6 +48,33 @@ pub unsafe extern "system" fn LiteTraySelfTestClock(output: *mut u8, capacity: u
         Err(error) => (
             1,
             serde_json::json!({"passed":false,"environment":"isolated_xaml_in_host_process","explorer_accessed":false,"error":error}),
+        ),
+    };
+    let bytes = result.to_string();
+    if bytes.len() >= capacity {
+        return -1;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), output, bytes.len());
+        *output.add(bytes.len()) = 0;
+    }
+    status
+}
+/// Exercises only freshly created private hosts in the calling application.
+/// Refuses every system image except the one inspected for this experiment.
+/// # Safety
+/// `output` must reference `capacity` writable bytes. Call on a fresh STA thread
+/// with no previously initialized XAML runtime. Never call inside Explorer.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn LiteTraySelfTestShellSource(output: *mut u8, capacity: usize) -> i32 {
+    if output.is_null() || capacity < 2 {
+        return -1;
+    }
+    let (status, result) = match shell_source_checks::run() {
+        Ok(result) => (0, result),
+        Err(error) => (
+            1,
+            serde_json::json!({"passed":false,"environment":"isolated_private_shell_host_in_app_process","explorer_accessed":false,"error":error}),
         ),
     };
     let bytes = result.to_string();

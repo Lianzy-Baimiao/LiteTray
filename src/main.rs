@@ -16,6 +16,7 @@ fn main() {
                     | "--probe-taskbar"
                     | "--inspect-taskbar"
                     | "--self-test-clock"
+                    | "--self-test-shell-source"
                     | "--self-test-preview-recovery"
                     | "--self-test-clock-owner"
                     | "--preview-windhawk"
@@ -41,6 +42,14 @@ fn run() -> Result<(), String> {
     // Internal isolated-test child: no profile, tray discovery or network.
     if arguments.first().map(String::as_str) == Some("--self-test-clock-owner") {
         return platform::adapter::self_test_clock_owner();
+    }
+    if arguments.first().map(String::as_str) == Some("--self-test-shell-source") {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&platform::adapter::self_test_shell_source()?)
+                .map_err(|e| e.to_string())?
+        );
+        return Ok(());
     }
     if arguments.first().map(String::as_str) == Some("--self-test-preview-recovery") {
         println!(
@@ -154,7 +163,7 @@ fn run() -> Result<(), String> {
         }
         Some("--help") => {
             println!(
-                "LiteTray [--settings | --calendar | --clock-preview | --background | --diagnose [file] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-clock | --self-test-preview-recovery | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
+                "LiteTray [--settings | --calendar | --clock-preview | --background | --diagnose [file] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-clock | --self-test-shell-source | --self-test-preview-recovery | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
             );
             Ok(())
         }

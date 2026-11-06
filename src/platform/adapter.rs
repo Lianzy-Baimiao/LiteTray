@@ -26,6 +26,16 @@ struct Session {
 /// Exercise XAML controls in this process and a child of this same executable.
 /// No taskbar discovery or hook installation is involved.
 pub fn self_test_clock() -> Result<serde_json::Value, String> {
+    isolated_check(c"LiteTraySelfTestClock", true)
+}
+/// Separate CLI process: the private host must own the first XAML lifetime.
+pub fn self_test_shell_source() -> Result<serde_json::Value, String> {
+    isolated_check(c"LiteTraySelfTestShellSource", false)
+}
+fn isolated_check(
+    export: &std::ffi::CStr,
+    include_recovery: bool,
+) -> Result<serde_json::Value, String> {
     unsafe {
         let executable = std::env::current_exe().map_err(|e| e.to_string())?;
         let dll = executable
@@ -47,7 +57,7 @@ pub fn self_test_clock() -> Result<serde_json::Value, String> {
                 std::io::Error::last_os_error()
             ));
         }
-        let function = GetProcAddress(session.library, c"LiteTraySelfTestClock".as_ptr().cast())
+        let function = GetProcAddress(session.library, export.as_ptr().cast())
             .ok_or("适配 DLL 缺少隔离检查接口")?;
         let check: unsafe extern "system" fn(*mut u8, usize) -> i32 = std::mem::transmute(function);
         let mut output = vec![0u8; 16384];
@@ -58,15 +68,17 @@ pub fn self_test_clock() -> Result<serde_json::Value, String> {
         if status != 0 {
             return Err(format!("隔离 XAML 检查失败：{value}"));
         }
-        // Each suite owns a complete STA/XAML lifetime. A closed XAML thread
-        // cannot initialize a second lifetime; recovery itself keeps its runtime.
-        let host_checks = std::thread::spawn(super::clock_preview::self_test)
-            .join()
-            .map_err(|_| "预览恢复检查线程失败")??;
-        value["checks"]
-            .as_array_mut()
-            .ok_or("检查列表无效")?
-            .extend(host_checks.into_iter().map(serde_json::Value::from));
+        if include_recovery {
+            // Keep this DLL reference across both suites. Each owns a separate
+            // STA lifetime; recovery itself keeps its runtime between sessions.
+            let host_checks = std::thread::spawn(super::clock_preview::self_test)
+                .join()
+                .map_err(|_| "预览恢复检查线程失败")??;
+            value["checks"]
+                .as_array_mut()
+                .ok_or("检查列表无效")?
+                .extend(host_checks.into_iter().map(serde_json::Value::from));
+        }
         Ok(value)
     }
 }

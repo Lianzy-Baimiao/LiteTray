@@ -60,6 +60,7 @@ LiteTray.exe --probe-taskbar [output.json]
 LiteTray.exe --prepare-symbols [existing-symbol-cache]
 LiteTray.exe --inspect-taskbar [output.json]
 LiteTray.exe --self-test-clock
+LiteTray.exe --self-test-shell-source
 LiteTray.exe --self-test-preview-recovery
 LiteTray.exe --preview-windhawk <profile.json> [new-report.json]
 ```
@@ -78,7 +79,7 @@ LiteTray.exe --preview-windhawk <profile.json> [new-report.json]
 
 由范围计划准备的会话会持续核对来源和目标的原生身份。控件替换、重命名、重复区域、父级/root 变化或窗口失效会触发停止和恢复；普通模型集合增删及无关模板内容变化允许继续。窗口显示器/工作区/DPI 与 XAML 缩放变化也有失效检查，但真实硬件插拔及混合 DPI 尚未验收。此检查不自动重连 Explorer，也不替代生产窗口与 XAML 根的对应验证。
 
-范围会话现在要求由实际 XAML source 提供原生子窗口及内容根，拒绝交换窗口、交换根或任意拼接输入 HWND；source 内容替换、关闭及子窗口重设父级也会停止会话。自定义点击订阅与该绑定共用生命周期，只对选中时钟启用。上述路径已在本进程真实 XAML island 验证，真实 Shell 的内部宿主仍缺少完整关联证据，见 [source 调查](docs/taskbar-source-binding.md)。
+范围会话现在要求由实际 XAML source 提供原生子窗口及内容根，拒绝交换窗口、交换根或任意拼接输入 HWND；source 内容替换、关闭及子窗口重设父级也会停止会话。自定义点击订阅与该绑定共用生命周期，只对选中时钟启用。上述路径已在本进程真实 XAML island 和自己创建的内部 Shell 宿主验证；真实任务栏对象的关联与启动仍未完成，见 [source 调查](docs/taskbar-source-binding.md)。
 
 “时钟显示”页的“打开原生时钟预览”或 `--clock-preview` 可打开独立 XAML 时钟窗口，使用当前两行模板、字体和宽度。鼠标点击或聚焦后按回车可打开 LiteTray 日历天气面板，面板的 Esc 关闭已实测。空格处理已编写，仍待可靠的界面验收。预览始终使用 LiteTray 面板；系统日历选项留待任务栏接管验证。此窗口不接管任务栏，也不代表已能停用 Windhawk。
 
@@ -97,6 +98,8 @@ LiteTray.exe --preview-windhawk <profile.json> [new-report.json]
 ```powershell
 .\tools\Test-XamlClock.ps1 -BinaryPath <release目录>\LiteTray.exe
 ```
+
+`--self-test-shell-source` 是另一组独立进程检查，只对本机已核对 SHA-256 和 PE/PDB 身份的 `twinui.pcshell.dll` 运行；其他版本拒绝私有调用。它创建两个自己的隐藏 Shell XAML 宿主，验证实际 source、父窗口、内容根、时钟/模型/输入及恢复，共 6 项。没有初始化普通预览、访问用户配置或连接 Explorer。它证明当前版本的内部宿主桥可行，结果仍明确标记 `production_taskbar_verified: false`。该检查不包含在上述 118 项或通用 CI 中，可用 `tools/Test-ShellSource.ps1 -BinaryPath <release目录>\LiteTray.exe` 单独运行。
 
 接口来源和隔离边界见 [ABI 说明](crates/taskbar-adapter/ABI.md)，上游参考与许可见 [第三方声明](THIRD-PARTY-NOTICES.md)。
 
