@@ -16,6 +16,7 @@ fn main() {
                     | "--probe-taskbar"
                     | "--inspect-taskbar"
                     | "--self-test-clock"
+                    | "--self-test-clock-owner"
                     | "--preview-windhawk"
             )
         }) {
@@ -36,6 +37,10 @@ fn main() {
 fn run() -> Result<(), String> {
     use litetray::{config, http, platform, update, weather};
     let arguments: Vec<_> = std::env::args().skip(1).collect();
+    // Internal isolated-test child: no profile, tray discovery or network.
+    if arguments.first().map(String::as_str) == Some("--self-test-clock-owner") {
+        return platform::adapter::self_test_clock_owner();
+    }
     let config = config::load(&config::data_dir().join("config.json"))?;
     match arguments.first().map(String::as_str) {
         Some("--preview-windhawk") => {

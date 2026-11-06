@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 pub const LEASE_MILLIS: u64 = 15_000;
 pub const HEARTBEAT_MILLIS: u64 = 5_000;
 pub const MAX_CLOCKS: usize = 16;
+/// WM_COPYDATA tag for commands to an already established clock session.
+/// A nonzero native return value acknowledges application; zero rejects it.
+pub const COMMAND_TAG: usize = 0x4c544103;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

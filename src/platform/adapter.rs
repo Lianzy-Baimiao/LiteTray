@@ -23,8 +23,8 @@ struct Session {
     library: HMODULE,
     hook: HHOOK,
 }
-/// Exercise actual XAML controls created in this process. No taskbar discovery,
-/// cross-process messaging or hook installation is involved.
+/// Exercise XAML controls in this process and a child of this same executable.
+/// No taskbar discovery or hook installation is involved.
 pub fn self_test_clock() -> Result<serde_json::Value, String> {
     unsafe {
         let executable = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -58,6 +58,151 @@ pub fn self_test_clock() -> Result<serde_json::Value, String> {
             return Err(format!("隔离 XAML 检查失败：{value}"));
         }
         Ok(value)
+    }
+}
+/// Internal test participant. Sends a bounded clock update from its own HWND,
+/// then waits for the test to terminate it to exercise actual process loss.
+pub fn self_test_clock_owner() -> Result<(), String> {
+    use litetray_adapter_protocol::clock::{COMMAND_TAG, Change, Command, Owner, Text};
+    use std::io::{BufRead, Write};
+    // If the parent fails before cleanup, the helper still has a finite life.
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(20));
+        std::process::exit(2);
+    });
+    unsafe {
+        let window = CreateWindowExW(
+            0,
+            super::wide("STATIC").as_ptr(),
+            super::wide("LiteTray isolated child receiver").as_ptr(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            HWND_MESSAGE,
+            null_mut(),
+            GetModuleHandleW(null()),
+            null(),
+        );
+        if window.is_null() {
+            return Err("创建隔离子进程窗口失败".into());
+        }
+        struct Receiver(HWND);
+        impl Drop for Receiver {
+            fn drop(&mut self) {
+                unsafe {
+                    DestroyWindow(self.0);
+                }
+            }
+        }
+        let receiver = Receiver(window);
+        let mut out = std::io::stdout().lock();
+        writeln!(
+            out,
+            "{}",
+            serde_json::json!({"process_id":GetCurrentProcessId(),"receiver":window as u64})
+        )
+        .and_then(|_| out.flush())
+        .map_err(|e| e.to_string())?;
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Input {
+            endpoint: u64,
+            nonce: u64,
+        }
+        let mut line = String::new();
+        std::io::Read::take(std::io::stdin().lock(), 1025)
+            .read_line(&mut line)
+            .map_err(|e| e.to_string())?;
+        if line.len() > 1024 {
+            return Err("隔离测试输入过长".into());
+        }
+        let input: Input = serde_json::from_str(&line).map_err(|_| "隔离测试输入无效")?;
+        if input.endpoint == 0 || input.nonce == 0 {
+            return Err("隔离测试身份无效".into());
+        }
+        // This helper can address only another copy of this executable's
+        // clock-test endpoint; never a shell/taskbar window.
+        let mut class = [0u16; 256];
+        let count = GetClassNameW(
+            input.endpoint as HWND,
+            class.as_mut_ptr(),
+            class.len() as i32,
+        );
+        let mut target_pid = 0;
+        GetWindowThreadProcessId(input.endpoint as HWND, &mut target_pid);
+        if !String::from_utf16_lossy(&class[..count.max(0) as usize])
+            .starts_with("LiteTray.ClockWatchdog.v1.")
+            || target_pid == 0
+            || target_pid == GetCurrentProcessId()
+        {
+            return Err("隔离测试目标不是另一 LiteTray 进程的时钟端点".into());
+        }
+        use windows_sys::Win32::System::Threading::*;
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, target_pid);
+        if process.is_null() {
+            return Err("无法验证隔离测试目标".into());
+        }
+        let mut path = vec![0u16; 32768];
+        let mut length = path.len() as u32;
+        let queried = QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut length) != 0;
+        CloseHandle(process);
+        if !queried
+            || !String::from_utf16_lossy(&path[..length as usize]).eq_ignore_ascii_case(
+                &std::env::current_exe()
+                    .map_err(|e| e.to_string())?
+                    .to_string_lossy(),
+            )
+        {
+            return Err("隔离测试目标程序不匹配".into());
+        }
+        let command = Command {
+            version: VERSION,
+            owner: Owner {
+                nonce: input.nonce,
+                process_id: GetCurrentProcessId(),
+                receiver: receiver.0 as u64,
+            },
+            sequence: 1,
+            change: Change::Tick {
+                text: Text {
+                    top: "Child process tick".into(),
+                    bottom: "跨进程天气 25°C".into(),
+                },
+            },
+        };
+        let bytes = serde_json::to_vec(&command).map_err(|e| e.to_string())?;
+        let copy = COPYDATASTRUCT {
+            dwData: COMMAND_TAG,
+            cbData: bytes.len() as u32,
+            lpData: bytes.as_ptr() as *mut _,
+        };
+        let mut accepted = 0;
+        let sent = SendMessageTimeoutW(
+            input.endpoint as HWND,
+            WM_COPYDATA,
+            receiver.0 as usize,
+            &copy as *const _ as isize,
+            SMTO_ABORTIFHUNG,
+            2000,
+            &mut accepted,
+        );
+        writeln!(
+            out,
+            "{}",
+            serde_json::json!({"accepted":sent!=0 && accepted==1})
+        )
+        .and_then(|_| out.flush())
+        .map_err(|e| e.to_string())?;
+        drop(out);
+        // The parent owns stdin and intentionally kills this child after the
+        // acknowledgment. EOF is a clean fallback if the parent disappears.
+        line.clear();
+        std::io::Read::take(std::io::stdin().lock(), 1025)
+            .read_line(&mut line)
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 }
 impl Drop for Session {

@@ -10,12 +10,15 @@ use crate::{
 };
 use litetray_adapter_protocol::{
     VERSION,
-    clock::{Change, Command, Frame, LEASE_MILLIS, Owner, Style, Text},
+    clock::{COMMAND_TAG, Change, Command, Frame, LEASE_MILLIS, Owner, Style, Text},
 };
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::{
     Foundation::*,
-    System::{LibraryLoader::*, SystemInformation::GetTickCount64, Threading::*},
+    System::{
+        DataExchange::COPYDATASTRUCT, LibraryLoader::*, SystemInformation::GetTickCount64,
+        Threading::*,
+    },
     UI::WindowsAndMessaging::*,
 };
 
@@ -97,6 +100,192 @@ fn command(owner: &Owner, sequence: u64, change: Change) -> Vec<u8> {
     })
     .expect("serializable protocol")
 }
+fn native_send(endpoint: HWND, sender: HWND, tag: usize, bytes: &[u8]) -> Result<bool, String> {
+    let copy = COPYDATASTRUCT {
+        dwData: tag,
+        cbData: bytes.len() as u32,
+        lpData: bytes.as_ptr() as *mut _,
+    };
+    let mut accepted = 0;
+    if unsafe {
+        SendMessageTimeoutW(
+            endpoint,
+            WM_COPYDATA,
+            sender as usize,
+            &copy as *const _ as isize,
+            SMTO_ABORTIFHUNG,
+            1000,
+            &mut accepted,
+        )
+    } == 0
+    {
+        return Err("隔离原生消息发送超时或失败".into());
+    }
+    Ok(accepted == 1)
+}
+fn native_transport_checks(
+    primary: &Fixture,
+    secondary: &Fixture,
+) -> Result<Vec<&'static str>, String> {
+    let receiver = Receiver::new()?;
+    let other = Receiver::new()?;
+    let owner = Owner {
+        nonce: 456,
+        process_id: unsafe { GetCurrentProcessId() },
+        receiver: receiver.0 as u64,
+    };
+    let session = Session::new(
+        owner.clone(),
+        vec![primary.capture(1)?, secondary.capture(2)?],
+        unsafe { GetTickCount64() },
+    )?;
+    let watchdog = Watchdog::attach(session)?;
+    watchdog.start(frame())?;
+    let endpoint = watchdog.endpoint().ok_or("缺少隔离会话消息端点")?;
+    let tick = Text {
+        top: "20:31:12".into(),
+        bottom: "小雨 23°C".into(),
+    };
+    let bytes = command(&owner, 1, Change::Tick { text: tick.clone() });
+    // The actual WM_COPYDATA callback, not Session::receive, rejects invalid
+    // envelopes before any native XAML call or sequence update can happen.
+    for (sender, tag, input) in [
+        (other.0, COMMAND_TAG, bytes.clone()),
+        (receiver.0, COMMAND_TAG + 1, bytes.clone()),
+        (receiver.0, COMMAND_TAG, Vec::new()),
+        (
+            receiver.0,
+            COMMAND_TAG,
+            vec![b' '; litetray_adapter_protocol::MAX_REQUEST + 1],
+        ),
+        (receiver.0, COMMAND_TAG, b"{".to_vec()),
+        (
+            receiver.0,
+            COMMAND_TAG,
+            command(
+                &Owner {
+                    nonce: owner.nonce + 1,
+                    ..owner.clone()
+                },
+                1,
+                Change::Stop,
+            ),
+        ),
+    ] {
+        require(
+            !native_send(endpoint, sender, tag, &input)?,
+            "native reject invalid sender or envelope",
+        )?;
+    }
+    require(
+        primary.text()?.0 == frame().text.top && watchdog.state() == State::Active,
+        "invalid input leaves clocks active and unchanged",
+    )?;
+    require(
+        native_send(endpoint, receiver.0, COMMAND_TAG, &bytes)?,
+        "native tick accepted",
+    )?;
+    require(
+        primary.text()? == (tick.top, tick.bottom) && primary.text()? == secondary.text()?,
+        "native tick updates all clocks",
+    )?;
+    require(
+        !native_send(endpoint, receiver.0, COMMAND_TAG, &bytes)?,
+        "native replay rejected",
+    )?;
+
+    // Send from a different thread while this XAML STA pumps its queue. Only
+    // integers and owned bytes cross threads; native controls stay here.
+    let sender = receiver.0 as usize;
+    let destination = endpoint as usize;
+    let mut changed = frame();
+    changed.style.width = 340;
+    let bytes = command(&owner, 2, Change::Update { frame: changed });
+    let thread = std::thread::spawn(move || {
+        native_send(destination as HWND, sender as HWND, COMMAND_TAG, &bytes)
+    });
+    let limit = unsafe { GetTickCount64() } + 3000;
+    while !thread.is_finished() && unsafe { GetTickCount64() } < limit {
+        unsafe {
+            MsgWaitForMultipleObjectsEx(0, null(), 25, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            let mut message: MSG = std::mem::zeroed();
+            while PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE) != 0 {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+    }
+    require(thread.is_finished(), "native sender thread finished")?;
+    require(
+        thread.join().map_err(|_| "隔离消息发送线程失败")??,
+        "cross-thread native update acknowledged",
+    )?;
+    require(
+        primary.width()? == 340. && secondary.width()? == 340.,
+        "cross-thread native update on owning XAML thread",
+    )?;
+    require(
+        native_send(
+            endpoint,
+            receiver.0,
+            COMMAND_TAG,
+            &command(&owner, 3, Change::Heartbeat),
+        )?,
+        "native heartbeat",
+    )?;
+    require(
+        native_send(
+            endpoint,
+            receiver.0,
+            COMMAND_TAG,
+            &command(&owner, 4, Change::Stop),
+        )?,
+        "native stop",
+    )?;
+    require(
+        primary.restored()? && secondary.restored()? && watchdog.state() == State::Closed,
+        "native stop restores every target",
+    )?;
+    require(
+        !native_send(
+            endpoint,
+            receiver.0,
+            COMMAND_TAG,
+            &command(&owner, 5, Change::Tick { text: frame().text }),
+        )?,
+        "late native update cannot restart session",
+    )?;
+    drop(watchdog);
+
+    let session = Session::new(
+        owner,
+        vec![primary.capture(1)?, secondary.capture(2)?],
+        unsafe { GetTickCount64() },
+    )?;
+    let watchdog = Watchdog::attach(session)?;
+    watchdog.start(frame())?;
+    let endpoint = watchdog.endpoint().ok_or("缺少隔离会话消息端点")?;
+    require(
+        unsafe { DestroyWindow(endpoint) } != 0,
+        "destroy native endpoint",
+    )?;
+    require(
+        primary.restored()?
+            && secondary.restored()?
+            && watchdog.state() == State::Closed
+            && watchdog.endpoint().is_none(),
+        "endpoint destruction restores before timer disappears",
+    )?;
+    drop(watchdog);
+    Ok(vec![
+        "native_command_sender_and_envelope_validation",
+        "native_command_tick_and_replay",
+        "native_command_cross_thread_style",
+        "native_command_heartbeat_and_stop",
+        "native_command_late_update_rejected",
+        "native_endpoint_destruction_restore",
+    ])
+}
 fn pump_until_closed(watchdog: &Watchdog, milliseconds: u64) -> Result<(), String> {
     let limit = unsafe { GetTickCount64() } + milliseconds;
     while watchdog.state() != State::Closed && unsafe { GetTickCount64() } < limit {
@@ -113,6 +302,147 @@ fn pump_until_closed(watchdog: &Watchdog, milliseconds: u64) -> Result<(), Strin
         watchdog.state() == State::Closed && watchdog.error().is_none(),
         "watchdog native timer did not finish",
     )
+}
+struct IsolatedChild {
+    process: std::process::Child,
+    input: std::process::ChildStdin,
+    output: std::sync::mpsc::Receiver<Result<serde_json::Value, String>>,
+    reader: Option<std::thread::JoinHandle<()>>,
+}
+impl IsolatedChild {
+    fn start() -> Result<Self, String> {
+        use std::{
+            io::{BufRead, BufReader, Read},
+            os::windows::process::CommandExt,
+            process::Stdio,
+        };
+        let mut process =
+            std::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?)
+                .arg("--self-test-clock-owner")
+                .creation_flags(CREATE_NO_WINDOW)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| format!("创建隔离宿主子进程失败：{e}"))?;
+        let input = process.stdin.take().expect("piped stdin");
+        let stdout = process.stdout.take().expect("piped stdout");
+        let (tx, output) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut pipe = BufReader::new(stdout.take(4097));
+            for _ in 0..2 {
+                let mut line = String::new();
+                let result = pipe
+                    .read_line(&mut line)
+                    .map_err(|e| e.to_string())
+                    .and_then(|length| {
+                        if length == 0 || length > 4096 {
+                            return Err("隔离子进程响应缺失或过长".into());
+                        }
+                        serde_json::from_str(&line).map_err(|_| "隔离子进程响应无效".into())
+                    });
+                let failed = result.is_err();
+                if tx.send(result).is_err() || failed {
+                    break;
+                }
+            }
+        });
+        Ok(Self {
+            process,
+            input,
+            output,
+            reader: Some(reader),
+        })
+    }
+    fn receive(&self) -> Result<serde_json::Value, String> {
+        let limit = unsafe { GetTickCount64() } + 5000;
+        loop {
+            match self.output.try_recv() {
+                Ok(result) => return result,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return Err("隔离子进程响应通道已关闭".into());
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+            if unsafe { GetTickCount64() } >= limit {
+                return Err("隔离子进程响应超时".into());
+            }
+            unsafe {
+                MsgWaitForMultipleObjectsEx(0, null(), 25, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+                let mut message: MSG = std::mem::zeroed();
+                while PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE) != 0 {
+                    TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+            }
+        }
+    }
+}
+impl Drop for IsolatedChild {
+    fn drop(&mut self) {
+        if self.process.try_wait().ok().flatten().is_none() {
+            let _ = self.process.kill();
+        }
+        let _ = self.process.wait();
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+    }
+}
+fn child_process_checks(
+    primary: &Fixture,
+    secondary: &Fixture,
+) -> Result<Vec<&'static str>, String> {
+    use std::io::Write;
+    let mut child = IsolatedChild::start()?;
+    let ready = child.receive()?;
+    require(
+        ready["process_id"].as_u64() == Some(child.process.id() as u64),
+        "child process identity",
+    )?;
+    let owner = Owner {
+        nonce: 789,
+        process_id: child.process.id(),
+        receiver: ready["receiver"].as_u64().ok_or("隔离子进程接收窗口缺失")?,
+    };
+    let session = Session::new(
+        owner.clone(),
+        vec![primary.capture(1)?, secondary.capture(2)?],
+        unsafe { GetTickCount64() },
+    )?;
+    let watchdog = Watchdog::attach(session)?;
+    watchdog.start(frame())?;
+    let endpoint = watchdog.endpoint().ok_or("缺少跨进程测试端点")?;
+    writeln!(
+        child.input,
+        "{}",
+        serde_json::json!({"endpoint":endpoint as u64,"nonce":owner.nonce})
+    )
+    .and_then(|_| child.input.flush())
+    .map_err(|e| e.to_string())?;
+    let reply = child.receive()?;
+    require(
+        reply["accepted"].as_bool() == Some(true),
+        "cross-process update acknowledged",
+    )?;
+    require(
+        primary.text()? == ("Child process tick".into(), "跨进程天气 25°C".into())
+            && primary.text()? == secondary.text()?,
+        "cross-process XAML update",
+    )?;
+    // Terminate only the child that this check just created. Its HWND disappears
+    // and the retained kernel process handle becomes signaled, without Stop.
+    child.process.kill().map_err(|e| e.to_string())?;
+    child.process.wait().map_err(|e| e.to_string())?;
+    pump_until_closed(&watchdog, 4000)?;
+    require(
+        primary.restored()? && secondary.restored()?,
+        "actual child process exit restores clocks",
+    )?;
+    Ok(vec![
+        "native_command_cross_process_tick",
+        "native_watchdog_process_exit",
+    ])
 }
 struct Receiver(HWND);
 impl Receiver {
@@ -278,6 +608,9 @@ pub fn run() -> Result<Vec<&'static str>, String> {
     )?;
     checks.push("session_overlap_rejection");
 
+    checks.extend(native_transport_checks(&primary, &secondary)?);
+    checks.extend(child_process_checks(&primary, &secondary)?);
+
     // Native timer test: destroy only our synthetic host receiver and pump the
     // real Windows message queue. No direct call to Session::poll is made.
     let receiver = Receiver::new()?;
@@ -288,7 +621,15 @@ pub fn run() -> Result<Vec<&'static str>, String> {
     let session = Session::new(owner.clone(), targets()?, unsafe { GetTickCount64() })?;
     let watchdog = Watchdog::attach(session)?;
     watchdog.start(frame())?;
-    watchdog.receive(&command(&owner, 1, Change::Heartbeat))?;
+    require(
+        native_send(
+            watchdog.endpoint().ok_or("缺少隔离消息端点")?,
+            receiver.0,
+            COMMAND_TAG,
+            &command(&owner, 1, Change::Heartbeat),
+        )?,
+        "native watchdog heartbeat",
+    )?;
     require(
         watchdog.state() == State::Active && watchdog.error().is_none(),
         "watchdog start",
@@ -342,7 +683,15 @@ pub fn run() -> Result<Vec<&'static str>, String> {
         let session = Session::new(owner.clone(), targets()?, unsafe { GetTickCount64() })?;
         let watchdog = Watchdog::attach(session)?;
         watchdog.start(frame())?;
-        watchdog.stop()?;
+        require(
+            native_send(
+                watchdog.endpoint().ok_or("缺少隔离消息端点")?,
+                receiver.0,
+                COMMAND_TAG,
+                &command(&owner, 1, Change::Stop),
+            )?,
+            "native repeated stop",
+        )?;
         drop(watchdog);
         require(
             primary.restored()? && secondary.restored()?,

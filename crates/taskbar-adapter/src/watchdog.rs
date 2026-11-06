@@ -11,7 +11,10 @@ use std::{
 };
 use windows_sys::Win32::{
     Foundation::*,
-    System::{LibraryLoader::*, SystemInformation::GetTickCount64, Threading::*},
+    System::{
+        DataExchange::COPYDATASTRUCT, LibraryLoader::*, SystemInformation::GetTickCount64,
+        Threading::*,
+    },
     UI::WindowsAndMessaging::*,
 };
 const CLASS: &str = "LiteTray.ClockWatchdog.v1";
@@ -24,11 +27,43 @@ struct Context {
     receiver: HWND,
     process_id: u32,
     error: RefCell<Option<String>>,
+    detached: Cell<bool>,
 }
 impl Context {
+    // Detach before COM calls. Reentrant messages observe an unavailable
+    // session rather than borrowing it while a native setter pumps messages.
+    fn with_session(
+        &self,
+        apply: impl FnOnce(&mut Session) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let mut session = self.session.borrow_mut().take().ok_or("时钟更新正在进行")?;
+        let result = apply(&mut session);
+        // Destruction can reenter during `apply`; complete restoration before
+        // returning the session to a context whose timer no longer exists.
+        let restore = if self.detached.get() {
+            session.stop()
+        } else {
+            Ok(())
+        };
+        if let Err(error) = &restore {
+            *self.error.borrow_mut() = Some(error.clone());
+        }
+        *self.session.borrow_mut() = Some(session);
+        restore.and(result)
+    }
+    fn receive(&self, bytes: &[u8]) -> Result<(), String> {
+        self.with_session(|session| {
+            if unsafe { self.alive() } {
+                session.receive(bytes, unsafe { GetTickCount64() })
+            } else {
+                session.stop()?;
+                Err("时钟宿主已失联".into())
+            }
+        })
+    }
     unsafe fn alive(&self) -> bool {
         unsafe {
-            if WaitForSingleObject(self.process, 0) != WAIT_TIMEOUT {
+            if self.detached.get() || WaitForSingleObject(self.process, 0) != WAIT_TIMEOUT {
                 return false;
             }
             let mut pid = 0;
@@ -77,6 +112,7 @@ impl Watchdog {
                     receiver,
                     process_id,
                     error: RefCell::new(None),
+                    detached: Cell::new(false),
                 }),
                 class,
             };
@@ -122,38 +158,29 @@ impl Watchdog {
         }
     }
     pub fn start(&self, frame: litetray_adapter_protocol::clock::Frame) -> Result<(), String> {
-        let mut session = self
-            .context
-            .session
-            .borrow_mut()
-            .take()
-            .ok_or("时钟更新正在进行")?;
-        let result = if unsafe { self.context.alive() } {
-            session.start(frame, unsafe { GetTickCount64() })
-        } else {
-            Err("时钟宿主已失联".into())
-        };
-        *self.context.session.borrow_mut() = Some(session);
-        result
-    }
-    pub fn receive(&self, bytes: &[u8]) -> Result<(), String> {
-        // Take the session out before COM calls; a reentrant timer sees None.
-        let mut session = self
-            .context
-            .session
-            .borrow_mut()
-            .take()
-            .ok_or("时钟更新正在进行")?;
-        let result = if unsafe { self.context.alive() } {
-            session.receive(bytes, unsafe { GetTickCount64() })
-        } else {
-            match session.stop() {
-                Ok(()) => Err("时钟宿主已失联".into()),
-                Err(e) => Err(e),
+        self.context.with_session(|session| {
+            if unsafe { self.context.alive() } {
+                session.start(frame, unsafe { GetTickCount64() })
+            } else {
+                session.stop()?;
+                Err("时钟宿主已失联".into())
             }
-        };
-        *self.context.session.borrow_mut() = Some(session);
-        result
+        })
+    }
+    /// Advertised only by an established session, never a taskbar HWND.
+    pub fn endpoint(&self) -> Option<HWND> {
+        if self.owns_window() {
+            Some(self.hwnd)
+        } else {
+            None
+        }
+    }
+    fn owns_window(&self) -> bool {
+        !self.hwnd.is_null()
+            && !self.context.detached.get()
+            && unsafe {
+                GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) == Rc::as_ptr(&self.context) as isize
+            }
     }
     pub fn state(&self) -> State {
         self.context
@@ -166,15 +193,8 @@ impl Watchdog {
         self.context.error.borrow().clone()
     }
     pub fn stop(&self) -> Result<(), String> {
-        let mut session = self
-            .context
-            .session
-            .borrow_mut()
-            .take()
-            .ok_or("时钟更新正在进行")?;
-        let result = session.stop();
-        *self.context.session.borrow_mut() = Some(session);
-        if result.is_ok() && !self.hwnd.is_null() {
+        let result = self.context.with_session(Session::stop);
+        if result.is_ok() && self.owns_window() {
             unsafe {
                 KillTimer(self.hwnd, TIMER);
             }
@@ -186,11 +206,16 @@ impl Drop for Watchdog {
     fn drop(&mut self) {
         unsafe {
             if !self.hwnd.is_null() {
+                let owns_window = self.owns_window();
                 let hwnd = std::mem::replace(&mut self.hwnd, null_mut());
-                KillTimer(hwnd, TIMER);
+                self.context.detached.set(true);
                 // Remove the pointer before restoring properties can reenter.
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                DestroyWindow(hwnd);
+                // Never touch a handle recycled after external destruction.
+                if owns_window {
+                    KillTimer(hwnd, TIMER);
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                    DestroyWindow(hwnd);
+                }
                 WINDOWS.with(|v| v.set(v.get().saturating_sub(1)));
                 if WINDOWS.with(|v| v.get()) == 0 {
                     UnregisterClassW(self.class.as_ptr(), GetModuleHandleW(null()));
@@ -206,26 +231,63 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             let create = &*(l as *const CREATESTRUCTW);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
         }
-        if message == WM_TIMER && w == TIMER {
+        if message == WM_COPYDATA || message == WM_NCDESTROY || message == WM_TIMER && w == TIMER {
             let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Context;
             if !pointer.is_null() {
                 // Retain Context across XAML callbacks that might synchronously
                 // close the owner window. Its session is already detached.
                 Rc::increment_strong_count(pointer);
                 let context = Rc::from_raw(pointer);
-                // Do not hold a Rust reference into Context while invoking COM.
-                // XAML can pump messages synchronously on this same thread.
-                let session = context.session.borrow_mut().take();
-                if let Some(mut session) = session {
-                    let alive = context.alive();
-                    let result = session.poll(GetTickCount64(), alive);
-                    let closed = session.state() == State::Closed;
-                    *context.error.borrow_mut() = result.err();
-                    *context.session.borrow_mut() = Some(session);
-                    if closed && GetWindowLongPtrW(hwnd, GWLP_USERDATA) == pointer as isize {
-                        KillTimer(hwnd, TIMER);
-                    }
+                if message == WM_NCDESTROY {
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                    context.detached.set(true);
+                    KillTimer(hwnd, TIMER);
+                    // An in-flight call performs this restoration when its
+                    // native setter returns; there is no second mutable owner.
+                    let _ = context.with_session(Session::stop);
+                    return DefWindowProcW(hwnd, message, w, l);
                 }
+                let accepted = if message == WM_COPYDATA {
+                    if w as HWND != context.receiver || l == 0 || !context.alive() {
+                        return 0;
+                    }
+                    let copy = &*(l as *const COPYDATASTRUCT);
+                    if copy.dwData != litetray_adapter_protocol::clock::COMMAND_TAG
+                        || copy.cbData == 0
+                        || copy.cbData as usize > litetray_adapter_protocol::MAX_REQUEST
+                        || copy.lpData.is_null()
+                    {
+                        return 0;
+                    }
+                    // The sender's buffer is valid only during this callback.
+                    // Own the bounded payload before invoking any XAML method.
+                    let bytes =
+                        std::slice::from_raw_parts(copy.lpData.cast::<u8>(), copy.cbData as usize)
+                            .to_vec();
+                    context.receive(&bytes).is_ok()
+                } else {
+                    // A reentrant timer is skipped, without replacing the last
+                    // error or extending the session's lease.
+                    if context.session.borrow().is_none() {
+                        return 0;
+                    }
+                    let result = context
+                        .with_session(|session| session.poll(GetTickCount64(), context.alive()));
+                    *context.error.borrow_mut() = result.err();
+                    false
+                };
+                let closed = context
+                    .session
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|s| s.state() == State::Closed);
+                if closed
+                    && !context.detached.get()
+                    && GetWindowLongPtrW(hwnd, GWLP_USERDATA) == pointer as isize
+                {
+                    KillTimer(hwnd, TIMER);
+                }
+                return accepted as LRESULT;
             }
             return 0;
         }
