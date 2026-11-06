@@ -37,7 +37,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 4";
+const UI_REVISION: &str = "开发版 5";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -47,6 +47,7 @@ const WM_SHOW_PANEL: u32 = WM_APP + 4;
 const WM_CLOCK_ACTIVATED: u32 = WM_APP + 5;
 const WM_PREVIEW_CLOCK: u32 = WM_APP + 6;
 const WM_SHOW_SECONDARY: u32 = WM_APP + 7;
+const WM_PREPARE_PANELS: u32 = WM_APP + 8;
 const NAV: u16 = 100;
 const SAVE: u16 = 20;
 const STATUS: u16 = 900;
@@ -74,6 +75,7 @@ thread_local! {static PREVIEW:RefCell<Option<Rc<clock_preview::Preview>>>=const{
 thread_local! {static TASKBAR:RefCell<Option<Rc<taskbar_clock::Service>>>=const{RefCell::new(None)};}
 thread_local! {static TASKBAR_CREATED:Cell<u32>=const{Cell::new(0)};}
 thread_local! {static TRAY_READD:Cell<bool>=const{Cell::new(false)};}
+thread_local! {static CLOCK_RETRY:Cell<Option<Instant>>=const{Cell::new(None)};}
 #[derive(Clone, Copy)]
 struct Palette {
     background: HBRUSH,
@@ -100,6 +102,7 @@ struct App {
     notices: std::collections::VecDeque<organizer::Notice>,
     next_notice: Instant,
     popup_router: tray_popup::Router,
+    panel_cache: Vec<HWND>,
     panel: HWND,
     preview: Option<Rc<clock_preview::Preview>>,
     taskbar: Option<Rc<taskbar_clock::Service>>,
@@ -264,6 +267,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             notices: std::collections::VecDeque::new(),
             next_notice: Instant::now(),
             popup_router: tray_popup::Router::default(),
+            panel_cache: vec![],
             panel: null_mut(),
             preview: None,
             taskbar: Some(Rc::new(taskbar_clock::service(
@@ -324,13 +328,14 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             cache_error: None,
         });
         app.render();
-        app.popup_router.configure(&app.saved.tray);
+        app.popup_router.configure(&app.saved.tray, app.hwnd);
         app.add_tray();
         app.start_weather(false);
         if app.draft.updates.check_on_startup {
             app.start_update();
         }
         STATE.with(|state| *state.borrow_mut() = Some(app));
+        PostMessageW(hwnd, WM_PREPARE_PANELS, 0, 0);
         if mode != "--background" {
             if mode == "--show-secondary" {
                 PostMessageW(hwnd, WM_SHOW_SECONDARY, secondary_page(), 0);
@@ -374,6 +379,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
         });
         CloseHandle(mutex);
         RoUninitialize();
+        litetray::platform::sound::stop();
         Ok(())
     }
 }
@@ -457,9 +463,50 @@ impl App {
     }
     unsafe fn close_panel(&mut self) {
         unsafe {
+            for panel in self.panel_cache.drain(..) {
+                DestroyWindow(panel);
+            }
+            self.panel = null_mut();
+        }
+    }
+    unsafe fn hide_panel(&self) {
+        unsafe {
             if !self.panel.is_null() {
-                DestroyWindow(self.panel);
-                self.panel = null_mut();
+                ShowWindow(self.panel, SW_HIDE);
+            }
+        }
+    }
+    unsafe fn prewarm_panels(&mut self) {
+        unsafe {
+            let mut areas: Vec<RECT> = vec![];
+            unsafe extern "system" fn collect(
+                monitor: HMONITOR,
+                _: HDC,
+                _: *mut RECT,
+                data: LPARAM,
+            ) -> i32 {
+                unsafe {
+                    let mut info: MONITORINFO = std::mem::zeroed();
+                    info.cbSize = size_of::<MONITORINFO>() as u32;
+                    if GetMonitorInfoW(monitor, &mut info) != 0 {
+                        (&mut *(data as *mut Vec<RECT>)).push(info.rcWork);
+                    }
+                    1
+                }
+            }
+            EnumDisplayMonitors(
+                null_mut(),
+                null(),
+                Some(collect),
+                &mut areas as *mut _ as isize,
+            );
+            for area in areas {
+                self.prepare_panel_at(popup::Rect {
+                    left: area.right - 80,
+                    top: area.bottom,
+                    right: area.right,
+                    bottom: area.bottom + 1,
+                });
             }
         }
     }
@@ -1166,14 +1213,12 @@ impl App {
                 }
                 8 | 9 => {
                     let timers = self.page == 9;
+                    ShowScrollBar(self.page_host, SB_VERT, 0);
+                    let mut bounds: RECT = std::mem::zeroed();
+                    GetClientRect(self.page_host, &mut bounds);
                     let view = agenda::create(
                         self.page_host,
-                        design::rect(
-                            0,
-                            0,
-                            self.scale(width - 220),
-                            self.scale(if timers { 874 } else { 712 }),
-                        ),
+                        bounds,
                         self.dark(),
                         self.organizer.clone(),
                         timers,
@@ -1214,7 +1259,9 @@ impl App {
                     125,
                 );
             }
-            page::finish(self.page_host);
+            if self.page < 8 {
+                page::finish(self.page_host);
+            }
             self.update_views();
             InvalidateRect(self.hwnd, null(), 1);
         }
@@ -1381,7 +1428,7 @@ impl App {
                 return Err(error);
             }
             self.saved = self.draft.clone();
-            self.popup_router.configure(&self.saved.tray);
+            self.popup_router.configure(&self.saved.tray, self.hwnd);
             self.status = match self
                 .taskbar
                 .as_ref()
@@ -1629,7 +1676,11 @@ impl App {
             data.hWnd = self.hwnd;
             data.uID = 1;
             data.uFlags = NIF_INFO;
-            data.dwInfoFlags = NIIF_INFO | NIIF_RESPECT_QUIET_TIME;
+            data.dwInfoFlags = NIIF_INFO | NIIF_RESPECT_QUIET_TIME | NIIF_NOSOUND;
+            let sound = self.organizer.borrow().data.sound.clone();
+            if let Err(error) = litetray::platform::sound::play(&sound, false) {
+                self.set_status(error);
+            }
             for (target, source) in data
                 .szInfoTitle
                 .iter_mut()
@@ -1739,8 +1790,32 @@ impl App {
     }
     unsafe fn show_panel_at(&mut self, anchor: popup::Rect) {
         unsafe {
-            if anchor.validate().is_err() {
+            let started = Instant::now();
+            let Some(hwnd) = self.prepare_panel_at(anchor) else {
                 return;
+            };
+            if IsWindowVisible(hwnd) != 0 {
+                ShowWindow(hwnd, SW_HIDE);
+                return;
+            }
+            let view = GetDlgItem(hwnd, dashboard::ID as i32);
+            dashboard::update(view, &self.saved, &self.weather, self.weather_busy);
+            ShowWindow(hwnd, SW_SHOW);
+            SetForegroundWindow(hwnd);
+            SetFocus(GetDlgItem(view, 1102));
+            self.schedule_tick();
+            // Integer window property is inspectable without disk I/O on the click path.
+            SetPropW(
+                hwnd,
+                wide("LiteTray.OpenMicros").as_ptr(),
+                started.elapsed().as_micros().max(1) as usize as HANDLE,
+            );
+        }
+    }
+    unsafe fn prepare_panel_at(&mut self, anchor: popup::Rect) -> Option<HWND> {
+        unsafe {
+            if anchor.validate().is_err() {
+                return None;
             }
             let rect = RECT {
                 left: anchor.left,
@@ -1749,18 +1824,39 @@ impl App {
                 bottom: anchor.bottom,
             };
             let monitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST);
-            if !self.panel.is_null()
-                && IsWindowVisible(self.panel) != 0
-                && MonitorFromWindow(self.panel, MONITOR_DEFAULTTONEAREST) == monitor
-            {
-                ShowWindow(self.panel, SW_HIDE);
-                return;
-            }
-            self.close_panel();
             let mut info: MONITORINFO = std::mem::zeroed();
             info.cbSize = size_of::<MONITORINFO>() as u32;
             if GetMonitorInfoW(monitor, &mut info) == 0 {
-                return;
+                return None;
+            }
+            if let Some(&panel) = self.panel_cache.iter().find(|&&p| {
+                IsWindow(p) != 0 && MonitorFromWindow(p, MONITOR_DEFAULTTONEAREST) == monitor
+            }) {
+                if self.panel != panel && !self.panel.is_null() {
+                    ShowWindow(self.panel, SW_HIDE);
+                }
+                let work = popup::Rect {
+                    left: info.rcWork.left,
+                    top: info.rcWork.top,
+                    right: info.rcWork.right,
+                    bottom: info.rcWork.bottom,
+                };
+                if let Ok(position) = popup::place(anchor, work, GetDpiForWindow(panel).max(96)) {
+                    SetWindowPos(
+                        panel,
+                        null_mut(),
+                        position.rect.left,
+                        position.rect.top,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
+                }
+                self.panel = panel;
+                return Some(panel);
+            }
+            if !self.panel.is_null() {
+                ShowWindow(self.panel, SW_HIDE);
             }
             let hwnd = CreateWindowExW(
                 WS_EX_TOOLWINDOW | WS_EX_CONTROLPARENT,
@@ -1778,9 +1874,10 @@ impl App {
             );
             if hwnd.is_null() {
                 self.set_status("无法创建日历天气面板");
-                return;
+                return None;
             }
             self.panel = hwnd;
+            self.panel_cache.push(hwnd);
             // Derive scale from the popup's actual monitor. Settings can be on
             // a completely different display with a different effective DPI.
             let dpi = GetDpiForWindow(hwnd).max(96) as i32;
@@ -1795,7 +1892,7 @@ impl App {
                 Err(e) => {
                     self.close_panel();
                     self.set_status(e);
-                    return;
+                    return None;
                 }
             };
             let scale = |value: i32| {
@@ -1827,11 +1924,8 @@ impl App {
             if self.build >= 22000 {
                 DwmSetWindowAttribute(hwnd, 33, &rounded as *const _ as _, 4);
             }
-            self.update_views();
-            ShowWindow(hwnd, SW_SHOW);
-            SetForegroundWindow(hwnd);
-            SetFocus(GetDlgItem(GetDlgItem(hwnd, dashboard::ID as i32), 1102));
-            self.schedule_tick();
+            dashboard::update(view, &self.saved, &self.weather, self.weather_busy);
+            Some(hwnd)
         }
     }
     unsafe fn command(&mut self, id: u16) -> bool {
@@ -2265,6 +2359,10 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 let _ = preview.heartbeat();
             }
         }
+        if msg == taskbar_clock::WM_ACTIVATED {
+            CLOCK_RETRY.with(|pending| pending.set(Some(Instant::now() + Duration::from_secs(2))));
+            SetTimer(hwnd, 3, 16, None);
+        }
         if let Some(result) = paint_message(hwnd, msg, w, l) {
             return result;
         }
@@ -2300,7 +2398,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     Some(0)
                 }
                 agenda::OPEN_DATE => {
-                    app.close_panel();
+                    app.hide_panel();
                     app.agenda_scope = chrono::NaiveDate::from_num_days_from_ce_opt(w as i32);
                     app.agenda_state[0] = None;
                     app.page = 8;
@@ -2313,7 +2411,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     Some(0)
                 }
                 agenda::OPEN_ENTRY => {
-                    app.close_panel();
+                    app.hide_panel();
                     app.page = 8;
                     app.render();
                     agenda::open_entry(app.field(agenda::ID), w as u64);
@@ -2327,10 +2425,23 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     agenda::open_alarms(app.field(agenda::ID));
                     Some(0)
                 }
-                taskbar_clock::WM_ACTIVATED => {
+                taskbar_clock::WM_ACTIVATED | WM_TIMER
+                    if msg == taskbar_clock::WM_ACTIVATED || w == 3 =>
+                {
                     if let Some(event) = app.taskbar.as_ref().and_then(|t| t.take_activation()) {
+                        CLOCK_RETRY.with(|pending| pending.set(None));
                         app.show_panel_at(event.anchor);
                     }
+                    if CLOCK_RETRY
+                        .with(|pending| pending.get().is_none_or(|end| Instant::now() >= end))
+                    {
+                        CLOCK_RETRY.with(|pending| pending.set(None));
+                        KillTimer(hwnd, 3);
+                    }
+                    Some(0)
+                }
+                WM_PREPARE_PANELS => {
+                    app.prewarm_panels();
                     Some(0)
                 }
                 WM_PREVIEW_CLOCK => {
@@ -2401,10 +2512,11 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                         app.add_tray();
                     }
                     app.refresh_displays();
+                    app.close_panel();
+                    PostMessageW(hwnd, WM_PREPARE_PANELS, 0, 0);
                     Some(0)
                 }
                 WM_TIMER => {
-                    app.popup_router.tick(&app.saved.tray);
                     app.organizer_tick();
                     if IsWindowVisible(hwnd) != 0
                         || (!app.panel.is_null() && IsWindowVisible(app.panel) != 0)
@@ -2504,6 +2616,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     );
                     app.render();
                     app.restore_inputs(fields);
+                    PostMessageW(hwnd, WM_PREPARE_PANELS, 0, 0);
                     Some(0)
                 }
                 WM_SETTINGCHANGE | WM_THEMECHANGED | WM_DWMCOLORIZATIONCOLORCHANGED => {
@@ -2514,6 +2627,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                         app.recreate_resources();
                         app.render();
                         app.restore_inputs(fields);
+                        PostMessageW(hwnd, WM_PREPARE_PANELS, 0, 0);
                     }
                     Some(0)
                 }
@@ -2557,6 +2671,7 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM)
         // next invocation recreates it on the current monitor with fresh fonts.
         if msg == WM_DPICHANGED || msg == WM_DISPLAYCHANGE {
             ShowWindow(hwnd, SW_HIDE);
+            SetTimer(GetWindow(hwnd, GW_OWNER), 2, 500, None);
             return 0;
         }
         if let Some(result) = paint_message(hwnd, msg, w, l) {

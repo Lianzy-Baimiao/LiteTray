@@ -28,3 +28,4 @@ jobs:
           path: |
             target/release/LiteTray.exe
             target/release/litetray_taskbar_adapter.dll
+            target/release/litetray_popup_hook.dll

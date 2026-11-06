@@ -540,6 +540,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "litetray-popup-hook"
+version = "0.1.0"
+dependencies = [
+ "litetray-adapter-protocol",
+ "serde_json",
+ "windows-sys",
+]
+
+[[package]]
 name = "litetray-taskbar-adapter"
 version = "0.1.0"
 dependencies = [

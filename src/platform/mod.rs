@@ -6,6 +6,7 @@ pub mod diagnostics;
 pub mod displays;
 pub mod lunar;
 pub mod probe;
+pub mod sound;
 pub mod startup;
 pub mod symbols;
 pub mod taskbar_clock;

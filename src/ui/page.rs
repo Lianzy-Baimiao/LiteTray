@@ -91,6 +91,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 0
             }
             WM_MOUSEWHEEL | WM_VSCROLL => {
+                if GetWindowLongW(hwnd, GWL_STYLE) as u32 & WS_VSCROLL == 0 {
+                    return 0;
+                }
                 let mut info: SCROLLINFO = std::mem::zeroed();
                 info.cbSize = size_of::<SCROLLINFO>() as u32;
                 info.fMask = SIF_ALL;
@@ -136,7 +139,9 @@ pub(super) unsafe fn paint_fields(hwnd: HWND, dc: HDC, theme: design::Theme) {
         let scale = GetDpiForWindow(hwnd).max(96) as i32;
         let mut child = GetWindow(hwnd, GW_CHILD);
         while !child.is_null() {
-            if !GetPropW(child, wide("LiteTray.Field").as_ptr()).is_null() {
+            if GetWindowLongW(child, GWL_STYLE) as u32 & WS_VISIBLE != 0
+                && !GetPropW(child, wide("LiteTray.Field").as_ptr()).is_null()
+            {
                 let mut r: RECT = std::mem::zeroed();
                 GetWindowRect(child, &mut r);
                 MapWindowPoints(null_mut(), hwnd, &mut r as *mut RECT as *mut POINT, 2);

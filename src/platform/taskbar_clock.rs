@@ -467,8 +467,13 @@ impl Connection {
     }
     pub fn take_activation(&self) -> Option<Activation> {
         let event = self.context.pending.borrow_mut().take()?;
-        (self.context.active.get() && self.status().ok() == Some(SessionStatus::Active))
-            .then_some(event)
+        // The sender already validated the live lease and the receiver accepted
+        // its nonce, source HWND and sequence. A synchronous status roundtrip
+        // here could wait 1s or discard that click on a transient Busy response.
+        (self.context.active.get()
+            && self.failure.borrow().is_none()
+            && self.verify_endpoint().is_ok())
+        .then_some(event)
     }
 }
 impl Drop for Connection {
@@ -581,5 +586,113 @@ unsafe extern "system" fn receive(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             return 1;
         }
         0
+    }
+}
+
+#[cfg(test)]
+mod activation_checks {
+    use super::*;
+    unsafe extern "system" fn busy_endpoint(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+        if msg == WM_COPYDATA {
+            return SessionStatus::Busy as LRESULT;
+        }
+        unsafe { DefWindowProcW(hwnd, msg, w, l) }
+    }
+    #[test]
+    fn accepted_click_survives_a_busy_shell_without_another_roundtrip() {
+        unsafe {
+            let tid = GetCurrentThreadId();
+            let pid = GetCurrentProcessId();
+            let class = wide(&format!("LiteTray.ClockWatchdog.v1.{tid}.ActivationTest"));
+            RegisterClassW(&WNDCLASSW {
+                lpfnWndProc: Some(busy_endpoint),
+                hInstance: GetModuleHandleW(null()),
+                lpszClassName: class.as_ptr(),
+                ..std::mem::zeroed()
+            });
+            let endpoint = CreateWindowExW(
+                0,
+                class.as_ptr(),
+                null(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                HWND_MESSAGE,
+                null_mut(),
+                GetModuleHandleW(null()),
+                null(),
+            );
+            assert!(!endpoint.is_null());
+            let owner = Owner {
+                nonce: 1,
+                process_id: pid,
+                receiver: endpoint as u64,
+            };
+            let event = Activation {
+                version: VERSION,
+                owner: owner.clone(),
+                sequence: 1,
+                clock_id: 1,
+                source_window: endpoint as u64,
+                anchor: crate::popup::Rect {
+                    left: 10,
+                    top: 10,
+                    right: 100,
+                    bottom: 40,
+                },
+                input: litetray_adapter_protocol::activation::Input::Pointer,
+            };
+            let context = Rc::new(Context {
+                request: Prepare {
+                    version: VERSION,
+                    owner,
+                    layout: HostLayout {
+                        schema: 1,
+                        module: litetray_adapter_protocol::ModuleIdentity {
+                            machine: 0x8664,
+                            timestamp: 0,
+                            image_size: 4096,
+                            pdb_guid: [1; 16],
+                            pdb_age: 1,
+                        },
+                        symbols: vec![],
+                        element_offset: 0,
+                    },
+                    routes: vec![],
+                    custom_calendar: true,
+                    source: None,
+                    clocks: true,
+                    mirror_icons: false,
+                },
+                reply: RefCell::new(None),
+                gate: RefCell::new(None),
+                pending: RefCell::new(Some(event)),
+                active: Cell::new(true),
+                main: endpoint,
+                pid,
+                tid,
+            });
+            let mut connection = Connection {
+                receiver: null_mut(),
+                endpoint: Cell::new(endpoint),
+                process: OpenProcess(PROCESS_SYNCHRONIZE, 0, pid),
+                context,
+                sequence: Cell::new(0),
+                last: RefCell::new(None),
+                busy: Cell::new(false),
+                failure: RefCell::new(None),
+            };
+            let accepted = connection.take_activation();
+            CloseHandle(connection.process);
+            connection.process = null_mut();
+            DestroyWindow(endpoint);
+            drop(connection);
+            assert!(
+                accepted.is_some(),
+                "an authenticated click was discarded when the shell was temporarily busy"
+            );
+        }
     }
 }

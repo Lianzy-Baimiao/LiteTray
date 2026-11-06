@@ -249,12 +249,58 @@ pub struct Notice {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct SoundSettings {
+    /// 0 = silent, 1..=10 = Windows alarm sounds, 11 = a local WAV file.
+    pub tone: u8,
+    pub custom_file: String,
+    pub seconds: u32,
+}
+impl Default for SoundSettings {
+    fn default() -> Self {
+        Self {
+            tone: 1,
+            custom_file: String::new(),
+            seconds: 30,
+        }
+    }
+}
+impl SoundSettings {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.tone > 11 || !(5..=120).contains(&self.seconds) {
+            return Err("铃声持续时间须为 5–120 秒".into());
+        }
+        if self.tone == 11
+            && (!Path::new(&self.custom_file).is_absolute()
+                || !Path::new(&self.custom_file)
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("wav")))
+        {
+            return Err("请选择本机 WAV 音频文件".into());
+        }
+        Ok(())
+    }
+    pub fn path(&self) -> Option<PathBuf> {
+        match self.tone {
+            0 => None,
+            1..=10 => std::env::var_os("WINDIR").map(|root| {
+                PathBuf::from(root)
+                    .join("Media")
+                    .join(format!("Alarm{:02}.wav", self.tone))
+            }),
+            11 => Some(PathBuf::from(&self.custom_file)),
+            _ => None,
+        }
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Organizer {
     pub schema: u32,
     pub next_id: u64,
     pub entries: Vec<Entry>,
     pub timers: Vec<Timer>,
     pub focus: FocusSettings,
+    pub sound: SoundSettings,
     pub notices: Vec<Notice>,
     pub fired: Vec<String>,
     pub last_poll: DateTime<Utc>,
@@ -267,6 +313,7 @@ impl Default for Organizer {
             entries: vec![],
             timers: vec![],
             focus: FocusSettings::default(),
+            sound: SoundSettings::default(),
             notices: vec![],
             fired: vec![],
             last_poll: Utc::now(),
@@ -282,6 +329,7 @@ impl Organizer {
             return Err("日程或计时器数量超出上限".into());
         }
         self.focus.validate()?;
+        self.sound.validate()?;
         let mut ids = std::collections::BTreeSet::new();
         for entry in &self.entries {
             entry.validate()?;

@@ -72,3 +72,13 @@
 停止旧 h 版 LiteTray PID43448 后，仅重启持有任务栏的 Explorer PID14404；另一个文件管理器进程 PID12816 保留。新任务栏 Explorer PID39992，启动于 00:49:35，新 LiteTray PID32060 从 `dist/LiteTray-ui4-calendar-menu-fix` 后台启动。`local/menu-fix-deployment.json` 记录切换前后的 PID、路径和时间。
 
 模块枚举确认新 Explorer 中只有一份适配 DLL，路径为 menu-fix 目录，旧 h 版已不在该进程中。`local/menu-fix-live.json` 检查主副屏都显示 `11/07 周六 00:50:34` 和 `晴间多云 24°C`，完整托盘宽度、水平/垂直位置和图标身份顺序通过。配置仍为系统外观、所有显示器、Auto 宽度 0、图标复制开启。副屏无激活显示日程页，深色控件与空列表提示正常。此次未发送鼠标键盘输入，真实右键菜单仍待现场复测，不能用模块加载成功代替交互验收。
+
+## 2026-11-07 开发版 5 部署与四项修正
+
+- 01:17 完成实际切换：宿主 PID 7816，任务栏 Explorer PID 24928，运行目录 dist/LiteTray-ui5-responsive。只重启了任务栏所属 Explorer，QQ PID 12728 启动时间仍为 11-06 18:19:42。系统应用错误日志未发现部署后的 Explorer、QQ 或 LiteTray 崩溃。
+- 新 QQ 钩子 DLL 为 282112 字节，已在 QQ 通知线程 12724 确认 ready=true；旧的显示后 WinEvent 搬移实现已移除。100 次原生隐藏窗口回归通过。90 秒自然观察期间没有副屏 QQ 悬停样本，严格脚本返回 INCONCLUSIVE，尚不能声称真实首次显示无闪现已验收。
+- 有效时钟点击不再被 Explorer Busy 状态丢弃；各屏日历已在运行进程中预建并保持隐藏。自有窗口预热约 327ms，缓存准备/更新 p95 约 459us（100 次，不包含系统输入和合成显示时间）；真实点击体感待用户复测。
+- 日程改为六种类型 Tab，切换保留各类型未保存输入。计时页拆为专注、定时提醒、记录、铃声；最小 1060×820 窗口下逐个检查全部 Tab，控件均在视口内，外层滚轮不移动页面。
+- 铃声支持 Windows Alarm01–10、本地 WAV、静音、5–120 秒响铃、5 秒试听和停止。原生页面保存/重载验证通过；本轮没有出声试听，避免影响主屏游戏。
+- 96 项自动检查、Clippy -D warnings、149 项隔离原生 XAML 检查通过。新版实机检查确认主副屏时间/天气一致，托盘宽度、右侧和垂直对齐、应用图标顺序通过。
+- 本地证据：local/ui5-deployment.json、local/ui5-live.json、local/ui5-window-state.json、local/ui5-xaml-check.txt、local/ui5-popup-observations.jsonl；界面检查图在 local/ui5-final-renders。

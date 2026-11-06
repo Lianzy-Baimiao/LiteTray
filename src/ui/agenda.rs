@@ -12,12 +12,10 @@ const CLASS: &str = "LiteTray.Organizer.1";
 const SS_CENTER: u32 = 1;
 const LIST: u16 = 4000;
 const NEW: u16 = 4001;
-const FILTER: u16 = 4002;
 const ALL_DATES: u16 = 4003;
 const SCOPE: u16 = 4004;
 const EMPTY: u16 = 4005;
 const TITLE: u16 = 4010;
-const KIND: u16 = 4011;
 const DATE: u16 = 4012;
 const TIME: u16 = 4013;
 const REPEAT: u16 = 4014;
@@ -44,6 +42,15 @@ const TIMER_TOGGLE: u16 = 4123;
 const TIMER_DELETE: u16 = 4124;
 const HISTORY: u16 = 4130;
 const EMPTY_TIMERS: u16 = 4131;
+const TYPE_TAB: u16 = 4200;
+const TIMER_TAB: u16 = 4300;
+const SOUND_CHOICE: u16 = 4400;
+const SOUND_PATH: u16 = 4401;
+const SOUND_SECONDS: u16 = 4402;
+const SOUND_BROWSE: u16 = 4403;
+const SOUND_PREVIEW: u16 = 4404;
+const SOUND_SAVE: u16 = 4405;
+const SOUND_STOP: u16 = 4406;
 const LEADS: [Option<u32>; 8] = [
     None,
     Some(0),
@@ -56,6 +63,13 @@ const LEADS: [Option<u32>; 8] = [
 ];
 
 #[derive(Clone)]
+struct Draft {
+    selected: u64,
+    text: HashMap<u16, String>,
+    choices: HashMap<u16, usize>,
+    checks: HashMap<u16, bool>,
+}
+#[derive(Clone)]
 pub(super) struct Snapshot {
     pub(super) timer_mode: bool,
     selected: u64,
@@ -64,6 +78,8 @@ pub(super) struct Snapshot {
     text: HashMap<u16, String>,
     choices: HashMap<u16, usize>,
     checks: HashMap<u16, bool>,
+    drafts: HashMap<usize, Draft>,
+    timer_tab: usize,
 }
 struct View {
     hwnd: HWND,
@@ -82,6 +98,9 @@ struct View {
     message: String,
     brush: HBRUSH,
     field_brush: HBRUSH,
+    drafts: HashMap<usize, Draft>,
+    timer_tab: usize,
+    timer_groups: Vec<Vec<HWND>>,
 }
 impl Drop for View {
     fn drop(&mut self) {
@@ -158,16 +177,21 @@ pub(super) unsafe fn create(
             timer_mode: timers,
             selected: 0,
             scope,
-            filter: 0,
+            filter: 2,
             ids: vec![],
             message: error,
             brush: CreateSolidBrush(t.surface),
             field_brush: CreateSolidBrush(t.field),
+            drafts: HashMap::new(),
+            timer_tab: 0,
+            timer_groups: vec![],
         };
         if let Some(saved) = saved.filter(|s| s.timer_mode == timers) {
             view.selected = saved.selected;
             view.scope = saved.scope;
             view.filter = saved.filter;
+            view.drafts = saved.drafts.clone();
+            view.timer_tab = saved.timer_tab;
         }
         // Build before installing state: synchronous native control messages
         // during construction cannot reenter a partially built editor.
@@ -222,8 +246,7 @@ pub(super) unsafe fn open_date(hwnd: HWND, date: NaiveDate) {
         {
             view.scope = Some(date);
             view.selected = 0;
-            view.filter = 0;
-            SendMessageW(view.field(FILTER), CB_SETCURSEL, 0, 0);
+            view.filter = 2;
             view.load_entry(&Entry::new(Kind::Event, date));
             set_text(view.field(SCOPE), &date.format("%Y年%m月%d日").to_string());
             view.populate();
@@ -247,8 +270,7 @@ pub(super) unsafe fn open_entry(hwnd: HWND, id: u64) {
             if let Some(entry) = entry {
                 view.selected = id;
                 view.scope = None;
-                view.filter = 0;
-                SendMessageW(view.field(FILTER), CB_SETCURSEL, 0, 0);
+                view.filter = Kind::ALL.iter().position(|k| *k == entry.kind).unwrap() + 1;
                 set_text(view.field(SCOPE), "全部日期 · 即将到来");
                 view.load_entry(&entry);
                 view.populate();
@@ -265,7 +287,6 @@ pub(super) unsafe fn open_alarms(hwnd: HWND) {
             view.filter = 6;
             view.scope = None;
             view.selected = 0;
-            SendMessageW(view.field(FILTER), CB_SETCURSEL, 6, 0);
             let mut entry = Entry::new(Kind::Alarm, Local::now().date_naive());
             entry.time = NaiveTime::from_hms_opt(8, 0, 0);
             entry.repeat = Repeat::Daily;
@@ -275,6 +296,73 @@ pub(super) unsafe fn open_alarms(hwnd: HWND) {
     }
 }
 impl View {
+    fn kind(&self) -> Kind {
+        Kind::ALL[self.filter.saturating_sub(1).min(5)]
+    }
+    unsafe fn switch_kind(&mut self, index: usize) {
+        unsafe {
+            if index == self.filter {
+                return;
+            }
+            let old = self.snapshot();
+            self.drafts.insert(
+                self.filter,
+                Draft {
+                    selected: self.selected,
+                    text: old.text,
+                    choices: old.choices,
+                    checks: old.checks,
+                },
+            );
+            self.filter = index;
+            if let Some(draft) = self.drafts.get(&index).cloned() {
+                self.selected = draft.selected;
+                for (id, text) in draft.text {
+                    set_text(self.field(id), &text);
+                }
+                for (id, choice) in draft.choices {
+                    SendMessageW(self.field(id), CB_SETCURSEL, choice, 0);
+                }
+                for (id, check) in draft.checks {
+                    SendMessageW(self.field(id), BM_SETCHECK, usize::from(check), 0);
+                }
+                EnableWindow(self.field(DELETE), i32::from(self.selected != 0));
+            } else {
+                self.new_entry();
+            }
+            self.populate();
+        }
+    }
+    unsafe fn new_entry(&mut self) {
+        unsafe {
+            self.selected = 0;
+            let mut entry = Entry::new(
+                self.kind(),
+                self.scope.unwrap_or_else(|| Local::now().date_naive()),
+            );
+            if entry.kind == Kind::Alarm {
+                entry.time = NaiveTime::from_hms_opt(8, 0, 0);
+                entry.repeat = Repeat::Daily;
+            }
+            self.load_entry(&entry);
+        }
+    }
+    fn read_sound(&self) -> Result<organizer::SoundSettings, String> {
+        let settings = organizer::SoundSettings {
+            tone: self.choice(SOUND_CHOICE) as u8,
+            custom_file: self.value(SOUND_PATH).trim().into(),
+            seconds: self
+                .value(SOUND_SECONDS)
+                .trim()
+                .parse()
+                .map_err(|_| "响铃时长请填写整数")?,
+        };
+        settings.validate()?;
+        if settings.tone != 0 && settings.path().is_none_or(|p| !p.is_file()) {
+            return Err("铃声文件不存在，请重新选择".into());
+        }
+        Ok(settings)
+    }
     fn s(&self, n: i32) -> i32 {
         n * self.dpi as i32 / 96
     }
@@ -423,28 +511,22 @@ impl View {
             let mut rect: RECT = std::mem::zeroed();
             GetClientRect(self.hwnd, &mut rect);
             let width = rect.right * 96 / self.dpi as i32;
+            let height = rect.bottom * 96 / self.dpi as i32;
             if self.timer_mode {
-                self.timer_layout(width);
+                self.timer_layout(width, height);
                 return;
             }
-            let left = (width * 40 / 100).clamp(250, 340);
-            self.combo(
-                &[
-                    "全部类型",
-                    "待办",
-                    "日程",
-                    "生日",
-                    "纪念日",
-                    "倒数日",
-                    "闹钟",
-                ],
-                self.filter,
-                FILTER,
-                20,
-                20,
-                left - 108,
-            );
-            self.button("新建", NEW, left - 76, 20, 76);
+            let tab_width = (width - 40) / 6;
+            for (index, kind) in Kind::ALL.into_iter().enumerate() {
+                self.button(
+                    kind.label(),
+                    TYPE_TAB + index as u16,
+                    20 + index as i32 * tab_width,
+                    16,
+                    tab_width - 6,
+                );
+            }
+            let left = (width * 38 / 100).clamp(250, 330);
             self.control(
                 "STATIC",
                 &self
@@ -454,11 +536,12 @@ impl View {
                 SCOPE,
                 0,
                 20,
-                66,
-                left - 80,
+                72,
+                left - 74,
                 24,
             );
-            self.button("全部", ALL_DATES, left - 56, 60, 56);
+            self.button("全部", ALL_DATES, left - 54, 66, 54);
+            self.button("＋ 新建", NEW, 20, 108, left - 20);
             let list = self.control(
                 "LISTBOX",
                 "",
@@ -467,30 +550,28 @@ impl View {
                     | WS_VSCROLL
                     | LBS_NOTIFY as u32
                     | LBS_OWNERDRAWFIXED as u32
-                    | LBS_HASSTRINGS as u32,
+                    | LBS_HASSTRINGS as u32
+                    | LBS_NOINTEGRALHEIGHT as u32,
                 20,
-                104,
+                154,
                 left - 20,
-                476,
+                height - 236,
             );
             SendMessageW(list, LB_SETITEMHEIGHT, 0, self.s(65) as isize);
             self.control(
                 "STATIC",
-                "暂无日程\r\n点击“新建”记录第一件事",
+                "暂无事项\r\n点击“新建”记录第一件事",
                 EMPTY,
                 SS_CENTER,
                 30,
-                202,
+                210,
                 left - 40,
                 70,
             );
             let x = left + 28;
             let w = width - x - 20;
             let half = (w - 16) / 2;
-            self.label("日程详情", x, 20, w);
-            self.edit("标题", "", TITLE, x, 62, w);
-            self.label("类型", x, 140, half);
-            self.combo(&Kind::ALL.map(Kind::label), 1, KIND, x, 168, half);
+            self.edit("标题", "", TITLE, x, 70, w);
             self.edit(
                 "日期（公历）",
                 &self
@@ -498,21 +579,14 @@ impl View {
                     .unwrap_or_else(|| Local::now().date_naive())
                     .to_string(),
                 DATE,
-                x + half + 16,
-                140,
+                x,
+                144,
                 half,
             );
-            self.edit("时间（留空为全天）", "", TIME, x, 218, half);
-            self.label("重复", x + half + 16, 218, half);
-            self.combo(
-                &Repeat::ALL.map(Repeat::label),
-                0,
-                REPEAT,
-                x + half + 16,
-                246,
-                half,
-            );
-            self.label("提醒", x, 296, half);
+            self.edit("时间（留空为全天）", "", TIME, x + half + 16, 144, half);
+            self.label("重复", x, 218, half);
+            self.combo(&Repeat::ALL.map(Repeat::label), 0, REPEAT, x, 246, half);
+            self.label("提醒", x + half + 16, 218, half);
             self.combo(
                 &[
                     "不提醒",
@@ -526,79 +600,95 @@ impl View {
                 ],
                 1,
                 REMIND,
-                x,
-                324,
-                w,
+                x + half + 16,
+                246,
+                half,
             );
-            self.label("备注", x, 374, w);
+            self.label("备注", x, 292, w);
             self.control(
                 "EDIT",
                 "",
                 NOTES,
                 WS_TABSTOP | ES_MULTILINE as u32 | ES_AUTOVSCROLL as u32 | ES_WANTRETURN as u32,
                 x,
-                402,
+                320,
                 w,
-                88,
+                (height - 498).clamp(54, 160),
             );
+            let bottom = (height - 178).min(486);
             self.control(
                 "BUTTON",
-                "已完成（待办）",
+                "已完成",
                 DONE,
                 WS_TABSTOP | BS_AUTOCHECKBOX as u32,
                 x,
-                502,
-                half + 10,
+                bottom,
+                half,
                 30,
             );
             let enabled = self.control(
                 "BUTTON",
-                "启用",
+                "启用提醒",
                 ENABLED,
                 WS_TABSTOP | BS_AUTOCHECKBOX as u32,
                 x + half + 16,
-                502,
+                bottom,
                 half,
                 30,
             );
             SendMessageW(enabled, BM_SETCHECK, BST_CHECKED as usize, 0);
-            self.button("保存日程", COMMIT, x, 550, half);
-            self.button("删除", DELETE, x + half + 16, 550, half);
+            self.button("保存", COMMIT, x, bottom + 44, half);
+            self.button("删除", DELETE, x + half + 16, bottom + 44, half);
             self.control(
                 "STATIC",
                 &self.message.clone(),
                 MESSAGE,
                 0,
                 20,
-                606,
+                height - 68,
                 width - 40,
-                54,
+                26,
             );
             self.label(
-                "全天事项默认在当天 09:00 提醒。提醒需要 LiteTray 在后台运行。",
+                "全天事项在 09:00 提醒 · 日历同时显示农历",
                 20,
-                670,
+                height - 36,
                 width - 40,
             );
+            self.update_tabs();
         }
     }
-    unsafe fn timer_layout(&mut self, width: i32) {
+    unsafe fn timer_layout(&mut self, width: i32, height: i32) {
         unsafe {
+            let tab_width = (width - 188) / 4;
+            for (index, label) in ["番茄钟", "定时提醒", "提醒记录", "铃声"]
+                .into_iter()
+                .enumerate()
+            {
+                self.button(
+                    label,
+                    TIMER_TAB + index as u16,
+                    20 + index as i32 * tab_width,
+                    16,
+                    tab_width - 6,
+                );
+            }
+            self.button("管理闹钟", 4190, width - 150, 16, 130);
             let half = (width - 64) / 2;
             let right = 44 + half;
-            self.label("番茄钟", 20, 16, 240);
-            let clock = self.control("STATIC", "25:00", FOCUS_TIME, 0, 20, 48, half, 62);
+            let start = self.children.len();
+            let clock = self.control("STATIC", "25:00", FOCUS_TIME, 0, 24, 98, width - 48, 68);
             SendMessageW(clock, WM_SETFONT, self.fonts[2] as usize, 0);
-            self.control("STATIC", "准备专注", FOCUS_PHASE, 0, 20, 116, half, 30);
-            self.button("开始专注", FOCUS_TOGGLE, right, 58, half - 106);
-            self.button("重置", FOCUS_RESET, width - 110, 58, 90);
+            self.control("STATIC", "准备专注", FOCUS_PHASE, 0, 24, 180, half, 30);
+            self.button("开始专注", FOCUS_TOGGLE, right, 170, half - 106);
+            self.button("重置", FOCUS_RESET, width - 110, 170, 90);
             let cell = (width - 100) / 4;
             let settings = self.store.borrow().data.focus.clone();
             for (i, (name, id, value)) in [
                 ("专注 / 分钟", FOCUS_WORK, settings.work),
                 ("短休息 / 分钟", FOCUS_SHORT, settings.short_break),
                 ("长休息 / 分钟", FOCUS_LONG, settings.long_break),
-                ("长休息间隔 / 轮", FOCUS_ROUNDS, settings.rounds),
+                ("间隔 / 轮", FOCUS_ROUNDS, settings.rounds),
             ]
             .into_iter()
             .enumerate()
@@ -608,18 +698,20 @@ impl View {
                     &value.to_string(),
                     id,
                     20 + i as i32 * (cell + 20),
-                    164,
+                    248,
                     cell,
                 );
             }
-            self.button("保存节奏", FOCUS_SAVE, 20, 240, 124);
+            self.button("保存节奏", FOCUS_SAVE, 20, 334, 124);
             self.label(
-                "每个阶段结束后提醒，由你决定何时开始下一阶段。",
-                164,
-                244,
-                width - 184,
+                "阶段结束后响铃，由你决定何时开始下一阶段。",
+                20,
+                404,
+                width - 40,
             );
-            self.label("定时提醒", 20, 304, half);
+            self.timer_groups.push(self.children[start..].to_vec());
+            let start = self.children.len();
+            self.label("进行中的计时", 20, 82, half);
             let list = self.control(
                 "LISTBOX",
                 "",
@@ -628,11 +720,12 @@ impl View {
                     | WS_VSCROLL
                     | LBS_NOTIFY as u32
                     | LBS_OWNERDRAWFIXED as u32
-                    | LBS_HASSTRINGS as u32,
+                    | LBS_HASSTRINGS as u32
+                    | LBS_NOINTEGRALHEIGHT as u32,
                 20,
-                340,
+                122,
                 half,
-                234,
+                height - 210,
             );
             SendMessageW(list, LB_SETITEMHEIGHT, 0, self.s(65) as isize);
             self.control(
@@ -641,49 +734,153 @@ impl View {
                 EMPTY_TIMERS,
                 SS_CENTER,
                 32,
-                396,
+                208,
                 half - 24,
                 70,
             );
-            self.edit("提醒内容", "喝水 / 休息一下", TIMER_TITLE, right, 304, half);
-            self.edit("多久后提醒 / 分钟", "10", TIMER_MINUTES, right, 386, half);
-            self.button("开始计时", TIMER_START, right, 472, half);
-            self.button("暂停 / 继续", TIMER_TOGGLE, right, 530, (half - 16) / 2);
+            self.edit("提醒内容", "喝水 / 休息一下", TIMER_TITLE, right, 82, half);
+            self.edit("多久后提醒 / 分钟", "10", TIMER_MINUTES, right, 168, half);
+            self.button("开始计时", TIMER_START, right, 260, half);
+            self.button("暂停 / 继续", TIMER_TOGGLE, right, 316, (half - 16) / 2);
             self.button(
                 "删除计时器",
                 TIMER_DELETE,
                 right + (half + 16) / 2,
-                530,
+                316,
                 (half - 16) / 2,
             );
+            self.timer_groups.push(self.children[start..].to_vec());
+            let start = self.children.len();
+            self.label("最近提醒 · 保存在本机", 20, 82, width - 40);
+            self.control(
+                "LISTBOX",
+                "",
+                HISTORY,
+                WS_TABSTOP | WS_VSCROLL | LBS_HASSTRINGS as u32 | LBS_NOINTEGRALHEIGHT as u32,
+                20,
+                124,
+                width - 40,
+                height - 214,
+            );
+            self.timer_groups.push(self.children[start..].to_vec());
+            let start = self.children.len();
+            let sound = self.store.borrow().data.sound.clone();
+            self.label("提醒铃声", 20, 86, width - 40);
+            self.combo(
+                &[
+                    "静音",
+                    "Windows 闹钟 1",
+                    "Windows 闹钟 2",
+                    "Windows 闹钟 3",
+                    "Windows 闹钟 4",
+                    "Windows 闹钟 5",
+                    "Windows 闹钟 6",
+                    "Windows 闹钟 7",
+                    "Windows 闹钟 8",
+                    "Windows 闹钟 9",
+                    "Windows 闹钟 10",
+                    "自定义 WAV",
+                ],
+                sound.tone as usize,
+                SOUND_CHOICE,
+                20,
+                116,
+                width - 40,
+            );
+            self.edit(
+                "自定义音乐（WAV）",
+                &sound.custom_file,
+                SOUND_PATH,
+                20,
+                172,
+                width - 186,
+            );
+            SendMessageW(self.field(SOUND_PATH), EM_SETLIMITTEXT, 32767, 0);
+            self.button("选择文件…", SOUND_BROWSE, width - 146, 200, 126);
+            self.edit(
+                "响铃时长 / 秒（5–120）",
+                &sound.seconds.to_string(),
+                SOUND_SECONDS,
+                20,
+                252,
+                half,
+            );
+            self.button("试听 5 秒", SOUND_PREVIEW, right, 280, half);
+            self.button("保存铃声", SOUND_SAVE, 20, 350, half);
+            self.label(
+                "适用于闹钟、日程、定时提醒和专注；使用当前系统音量。",
+                20,
+                414,
+                width - 40,
+            );
+            self.timer_groups.push(self.children[start..].to_vec());
+            self.button("停止响铃", SOUND_STOP, width - 146, height - 76, 126);
             self.control(
                 "STATIC",
                 &self.message.clone(),
                 MESSAGE,
                 0,
                 20,
-                592,
-                width - 40,
-                40,
+                height - 72,
+                width - 186,
+                28,
             );
-            self.label("最近提醒", 20, 648, width - 40);
-            self.control(
-                "LISTBOX",
-                "",
-                HISTORY,
-                WS_VSCROLL | LBS_HASSTRINGS as u32 | LBS_NOINTEGRALHEIGHT as u32,
-                20,
-                682,
-                width - 40,
-                122,
-            );
-            self.button("管理闹钟", 4190, width - 150, 640, 130);
             self.label(
-                "窗口关闭后仍可计时；退出程序后停止通知，下次启动会补发到期计时。",
+                "关闭窗口后仍会计时和提醒 · 退出 LiteTray 后停止通知",
                 20,
-                826,
+                height - 34,
                 width - 40,
             );
+            self.update_tabs();
+        }
+    }
+    unsafe fn update_tabs(&self) {
+        unsafe {
+            for index in 0..if self.timer_mode { 4 } else { 6 } {
+                InvalidateRect(
+                    self.field(if self.timer_mode { TIMER_TAB } else { TYPE_TAB } + index),
+                    null(),
+                    0,
+                );
+            }
+            if self.timer_mode {
+                for (index, group) in self.timer_groups.iter().enumerate() {
+                    for &hwnd in group {
+                        ShowWindow(
+                            hwnd,
+                            if index == self.timer_tab {
+                                SW_SHOWNA
+                            } else {
+                                SW_HIDE
+                            },
+                        );
+                    }
+                }
+                if self.timer_tab == 1 {
+                    ShowWindow(
+                        self.field(LIST),
+                        if self.ids.is_empty() {
+                            SW_HIDE
+                        } else {
+                            SW_SHOWNA
+                        },
+                    );
+                    ShowWindow(
+                        self.field(EMPTY_TIMERS),
+                        if self.ids.is_empty() {
+                            SW_SHOWNA
+                        } else {
+                            SW_HIDE
+                        },
+                    );
+                }
+            } else {
+                ShowWindow(
+                    self.field(DONE),
+                    if self.filter == 1 { SW_SHOWNA } else { SW_HIDE },
+                );
+                set_text(self.field(COMMIT), &format!("保存{}", self.kind().label()));
+            }
         }
     }
     unsafe fn populate(&mut self) {
@@ -810,6 +1007,7 @@ impl View {
                 ShowWindow(empty, SW_HIDE);
             }
             InvalidateRect(self.hwnd, null(), 0);
+            self.update_tabs();
         }
     }
     unsafe fn update_timer_labels(&self) {
@@ -867,10 +1065,6 @@ impl View {
             }
             for (id, index) in [
                 (
-                    KIND,
-                    Kind::ALL.iter().position(|k| *k == entry.kind).unwrap(),
-                ),
-                (
                     REPEAT,
                     Repeat::ALL.iter().position(|r| *r == entry.repeat).unwrap(),
                 ),
@@ -914,7 +1108,7 @@ impl View {
                     .map_err(|_| "时间格式为 HH:MM，例如 08:30")?,
             )
         };
-        let kind = Kind::ALL[self.choice(KIND).min(5)];
+        let kind = self.kind();
         let entry = Entry {
             id: self.selected,
             kind,
@@ -936,6 +1130,8 @@ impl View {
             selected: self.selected,
             filter: self.filter,
             scope: self.scope,
+            drafts: self.drafts.clone(),
+            timer_tab: self.timer_tab,
             text: [
                 TITLE,
                 DATE,
@@ -947,12 +1143,14 @@ impl View {
                 FOCUS_SHORT,
                 FOCUS_LONG,
                 FOCUS_ROUNDS,
+                SOUND_PATH,
+                SOUND_SECONDS,
             ]
             .into_iter()
             .filter(|id| !self.field(*id).is_null())
             .map(|id| (id, self.value(id)))
             .collect(),
-            choices: [KIND, REPEAT, REMIND]
+            choices: [REPEAT, REMIND, SOUND_CHOICE]
                 .into_iter()
                 .filter(|id| !self.field(*id).is_null())
                 .map(|id| (id, self.choice(id)))
@@ -1001,32 +1199,44 @@ impl View {
                 }
                 return Ok(());
             }
-            if id == FILTER && notification == CBN_SELCHANGE as u16 {
-                self.filter = self.choice(FILTER);
-                self.populate();
-                return Ok(());
-            }
-            if id == KIND && notification == CBN_SELCHANGE as u16 {
-                let kind = Kind::ALL[self.choice(KIND).min(5)];
-                if matches!(kind, Kind::Birthday | Kind::Anniversary) {
-                    SendMessageW(self.field(REPEAT), CB_SETCURSEL, 4, 0);
-                }
-                if kind == Kind::Alarm && self.value(TIME).is_empty() {
-                    set_text(self.field(TIME), "08:00");
-                    SendMessageW(self.field(REPEAT), CB_SETCURSEL, 1, 0);
-                }
-                return Ok(());
-            }
             if notification != BN_CLICKED as u16 {
                 return Ok(());
             }
+            if (TYPE_TAB..TYPE_TAB + 6).contains(&id) {
+                self.switch_kind((id - TYPE_TAB + 1) as usize);
+                return Ok(());
+            }
+            if (TIMER_TAB..TIMER_TAB + 4).contains(&id) {
+                self.timer_tab = (id - TIMER_TAB) as usize;
+                self.update_tabs();
+                InvalidateRect(self.hwnd, null(), 0);
+                return Ok(());
+            }
             match id {
+                SOUND_BROWSE => {
+                    if let Some(path) = choose_sound_file(self.root)? {
+                        set_text(self.field(SOUND_PATH), &path.to_string_lossy());
+                        SendMessageW(self.field(SOUND_CHOICE), CB_SETCURSEL, 11, 0);
+                    }
+                }
+                SOUND_PREVIEW => {
+                    litetray::platform::sound::play(&self.read_sound()?, true)?;
+                    self.message = "试听中 · 5 秒后自动停止".into();
+                }
+                SOUND_STOP => {
+                    litetray::platform::sound::stop();
+                    self.message = "已停止响铃".into();
+                }
+                SOUND_SAVE => {
+                    let settings = self.read_sound()?;
+                    self.store.borrow_mut().change(|data| {
+                        data.sound = settings;
+                        Ok(())
+                    })?;
+                    self.message = "铃声已保存".into();
+                }
                 NEW => {
-                    self.selected = 0;
-                    self.load_entry(&Entry::new(
-                        Kind::Event,
-                        self.scope.unwrap_or_else(|| Local::now().date_naive()),
-                    ));
+                    self.new_entry();
                     self.message = "新建日程 · 填写后保存".into();
                 }
                 ALL_DATES => {
@@ -1049,11 +1259,7 @@ impl View {
                         data.entries.retain(|e| e.id != selected);
                         Ok(())
                     })?;
-                    self.selected = 0;
-                    self.load_entry(&Entry::new(
-                        Kind::Event,
-                        self.scope.unwrap_or_else(|| Local::now().date_naive()),
-                    ));
+                    self.new_entry();
                     self.message = "日程已删除".into();
                     self.populate();
                 }
@@ -1299,7 +1505,13 @@ unsafe fn draw_item(view: &View, item: &DRAWITEMSTRUCT) {
                 DrawFocusRect(item.hDC, &item.rcItem);
             }
         } else {
-            let primary = matches!(item.CtlID as u16, COMMIT | FOCUS_TOGGLE | TIMER_START);
+            let id = item.CtlID as u16;
+            let active_tab = (TYPE_TAB..TYPE_TAB + 6).contains(&id)
+                && id - TYPE_TAB + 1 == view.filter as u16
+                || (TIMER_TAB..TIMER_TAB + 4).contains(&id)
+                    && id - TIMER_TAB == view.timer_tab as u16;
+            let primary =
+                matches!(id, COMMIT | FOCUS_TOGGLE | TIMER_START | SOUND_SAVE) || active_tab;
             let hover = !GetPropW(item.hwndItem, wide("LiteTray.Hover").as_ptr()).is_null();
             let color = if primary {
                 t.accent
@@ -1324,5 +1536,33 @@ unsafe fn draw_item(view: &View, item: &DRAWITEMSTRUCT) {
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE,
             );
         }
+    }
+}
+
+unsafe fn choose_sound_file(owner: HWND) -> Result<Option<std::path::PathBuf>, String> {
+    unsafe {
+        use std::os::windows::ffi::OsStringExt;
+        use windows_sys::Win32::UI::Controls::Dialogs::*;
+        let mut path = vec![0u16; 32768];
+        let filter = wide("WAV 音乐 (*.wav)\0*.wav\0");
+        let title = wide("选择提醒音乐");
+        let mut dialog: OPENFILENAMEW = std::mem::zeroed();
+        dialog.lStructSize = size_of::<OPENFILENAMEW>() as u32;
+        dialog.hwndOwner = owner;
+        dialog.lpstrFilter = filter.as_ptr();
+        dialog.lpstrTitle = title.as_ptr();
+        dialog.lpstrFile = path.as_mut_ptr();
+        dialog.nMaxFile = path.len() as u32;
+        dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER;
+        if GetOpenFileNameW(&mut dialog) == 0 {
+            let error = CommDlgExtendedError();
+            return if error == 0 {
+                Ok(None)
+            } else {
+                Err(format!("文件选择失败：0x{error:08X}"))
+            };
+        }
+        let length = path.iter().position(|c| *c == 0).ok_or("文件路径过长")?;
+        Ok(Some(std::ffi::OsString::from_wide(&path[..length]).into()))
     }
 }

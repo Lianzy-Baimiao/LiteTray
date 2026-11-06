@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 pub mod activation;
 pub mod clock;
+pub mod popup;
 pub mod routing;
 pub mod taskbar;
 pub mod topology;

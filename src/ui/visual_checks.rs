@@ -16,6 +16,12 @@ unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path) -> App {
             lpszClassName: class.as_ptr(),
             ..std::mem::zeroed()
         });
+        RegisterClassW(&WNDCLASSW {
+            lpfnWndProc: Some(panel_proc),
+            hInstance: GetModuleHandleW(null()),
+            lpszClassName: wide(PANEL_CLASS).as_ptr(),
+            ..std::mem::zeroed()
+        });
         let hwnd = CreateWindowExW(
             WS_EX_CONTROLPARENT,
             class.as_ptr(),
@@ -84,6 +90,7 @@ unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path) -> App {
             notices: Default::default(),
             next_notice: Instant::now(),
             popup_router: tray_popup::Router::default(),
+            panel_cache: vec![],
             panel: null_mut(),
             preview: None,
             taskbar: None,
@@ -217,6 +224,18 @@ fn render_settings_artifacts() {
                         )),
                     );
                 }
+                if page == 9 {
+                    for tab in 1..4 {
+                        SendMessageW(app.field(agenda::ID), WM_COMMAND, 4300 + tab, 0);
+                        write_window(
+                            app.hwnd,
+                            &output.join(format!(
+                                "settings-{}-9-tab{tab}.bmp",
+                                if dark { "dark" } else { "light" }
+                            )),
+                        );
+                    }
+                }
             }
             DestroyWindow(app.hwnd);
             app.release_resources();
@@ -245,16 +264,23 @@ fn native_agenda_editor_persists_six_types_and_timer_actions() {
             GetWindowLongW(GetDlgItem(view, 4000), GWL_STYLE) as u32 & WS_VISIBLE,
             0
         );
-        assert_eq!(window_text(GetDlgItem(view, 4011)), "日程");
+        assert!(GetDlgItem(view, 4011).is_null());
+        assert_eq!(window_text(GetDlgItem(view, 4201)), "日程");
         assert_eq!(window_text(GetDlgItem(view, 4015)), "准时");
+        SetWindowTextW(GetDlgItem(view, 4010), wide("未保存的日程").as_ptr());
+        SendMessageW(view, WM_COMMAND, 4200, 0);
+        SetWindowTextW(GetDlgItem(view, 4010), wide("未保存的待办").as_ptr());
+        SendMessageW(view, WM_COMMAND, 4201, 0);
+        assert_eq!(window_text(GetDlgItem(view, 4010)), "未保存的日程");
+        SendMessageW(view, WM_COMMAND, 4200, 0);
+        assert_eq!(window_text(GetDlgItem(view, 4010)), "未保存的待办");
         for (index, kind) in Kind::ALL.into_iter().enumerate() {
+            SendMessageW(view, WM_COMMAND, 4200 + index, 0);
             SendMessageW(view, WM_COMMAND, 4001, 0);
             SetWindowTextW(
                 GetDlgItem(view, 4010),
                 wide(&format!("测试{}", kind.label())).as_ptr(),
             );
-            SendMessageW(GetDlgItem(view, 4011), CB_SETCURSEL, index, 0);
-            SendMessageW(view, WM_COMMAND, 4011 | ((CBN_SELCHANGE as usize) << 16), 0);
             SetWindowTextW(
                 GetDlgItem(view, 4012),
                 wide(&(Local::now().date_naive() + Days::new(1)).to_string()).as_ptr(),
@@ -273,7 +299,7 @@ fn native_agenda_editor_persists_six_types_and_timer_actions() {
         app.page = 9;
         app.render();
         let view = app.field(agenda::ID);
-        assert_eq!(GetWindow(view, GW_CHILD), GetDlgItem(view, 4131));
+        SendMessageW(view, WM_COMMAND, 4301, 0);
         assert_eq!(
             GetWindowLongW(GetDlgItem(view, 4000), GWL_STYLE) as u32 & WS_VISIBLE,
             0
@@ -286,9 +312,186 @@ fn native_agenda_editor_persists_six_types_and_timer_actions() {
         assert!(app.organizer.borrow().data.timers[0].due.is_some());
         SendMessageW(view, WM_COMMAND, 4102, 0);
         assert_eq!(app.organizer.borrow().data.timers.len(), 2);
+        SendMessageW(view, WM_COMMAND, 4303, 0);
+        // A local WAV also works on CI hosts without Windows' bundled Media
+        // files. This exercises selection/persistence without playing audio.
+        let sound_file = directory.join("test.wav");
+        std::fs::write(&sound_file, b"RIFF\x24\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x40\x1f\0\0\x80\x3e\0\0\x02\0\x10\0data\0\0\0\0").unwrap();
+        SendMessageW(GetDlgItem(view, 4400), CB_SETCURSEL, 11, 0);
+        SetWindowTextW(
+            GetDlgItem(view, 4401),
+            wide(&sound_file.to_string_lossy()).as_ptr(),
+        );
+        SetWindowTextW(GetDlgItem(view, 4402), wide("45").as_ptr());
+        SendMessageW(view, WM_COMMAND, 4405, 0);
+        let restored = Store::open(&file);
+        assert!(restored.error.is_none());
+        assert_eq!(restored.data.sound.tone, 11);
+        assert_eq!(
+            restored.data.sound.custom_file,
+            sound_file.to_string_lossy()
+        );
+        assert_eq!(restored.data.sound.seconds, 45);
         DestroyWindow(app.hwnd);
         app.release_resources();
         std::fs::remove_file(file).unwrap();
+        std::fs::remove_file(sound_file).unwrap();
         std::fs::remove_dir(directory).unwrap();
+    }
+}
+
+#[test]
+fn organizer_pages_fit_the_viewport_without_page_scrollbars() {
+    unsafe {
+        let mut app = app_for_check(
+            true,
+            96,
+            &std::env::temp_dir().join("litetray-layout-check-unused.json"),
+        );
+        for (page, height) in [(8, 820), (9, 820), (8, 920), (9, 920)] {
+            SetWindowPos(
+                app.hwnd,
+                null_mut(),
+                0,
+                0,
+                app.scale(1060),
+                app.scale(height),
+                SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
+            );
+            app.page = page;
+            app.render();
+            let mut viewport: RECT = std::mem::zeroed();
+            let mut editor: RECT = std::mem::zeroed();
+            GetClientRect(app.page_host, &mut viewport);
+            GetClientRect(app.field(agenda::ID), &mut editor);
+            SendMessageW(app.page_host, WM_VSCROLL, SB_BOTTOM as usize, 0);
+            let mut origin: RECT = std::mem::zeroed();
+            GetWindowRect(app.field(agenda::ID), &mut origin);
+            MapWindowPoints(
+                null_mut(),
+                app.page_host,
+                &mut origin as *mut _ as *mut POINT,
+                2,
+            );
+            assert_eq!(origin.top, 0, "a fitted page must ignore outer scrolling");
+            let fits = editor.bottom <= viewport.bottom;
+            if !fits {
+                DestroyWindow(app.hwnd);
+                app.release_resources();
+            }
+            assert!(
+                fits,
+                "page {page} content height {} exceeds viewport {}",
+                editor.bottom, viewport.bottom
+            );
+            assert_eq!(
+                GetWindowLongW(app.page_host, GWL_STYLE) as u32 & WS_VSCROLL,
+                0
+            );
+            for tab in 0..if page == 9 { 4 } else { 6 } {
+                let view = app.field(agenda::ID);
+                SendMessageW(
+                    view,
+                    WM_COMMAND,
+                    if page == 9 { 4300 } else { 4200 } + tab,
+                    0,
+                );
+                let mut child = GetWindow(view, GW_CHILD);
+                while !child.is_null() {
+                    if GetWindowLongW(child, GWL_STYLE) as u32 & WS_VISIBLE != 0 {
+                        let mut r: RECT = std::mem::zeroed();
+                        GetWindowRect(child, &mut r);
+                        MapWindowPoints(null_mut(), view, &mut r as *mut _ as *mut POINT, 2);
+                        assert!(
+                            r.top >= 0
+                                && r.bottom <= editor.bottom
+                                && r.left >= 0
+                                && r.right <= editor.right,
+                            "page {page}, tab {tab}, height {height}, control {} extends outside viewport: [{},{},{},{}] / [{},{}]",
+                            GetDlgCtrlID(child),
+                            r.left,
+                            r.top,
+                            r.right,
+                            r.bottom,
+                            editor.right,
+                            editor.bottom
+                        );
+                    }
+                    child = GetWindow(child, GW_HWNDNEXT);
+                }
+            }
+        }
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+    }
+}
+
+#[test]
+fn hidden_calendar_cache_reuses_controls_and_tracks_new_anchor() {
+    unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-panel-cache-unused.json"),
+        );
+        let foreground = GetForegroundWindow();
+        let cold = Instant::now();
+        app.prewarm_panels();
+        let cold = cold.elapsed();
+        assert!(!app.panel_cache.is_empty());
+        let panel = app.panel_cache[0];
+        let view = GetDlgItem(panel, dashboard::ID as i32);
+        let date = GetDlgItem(view, 1000);
+        assert!(!date.is_null());
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = size_of::<MONITORINFO>() as u32;
+        GetMonitorInfoW(
+            MonitorFromWindow(panel, MONITOR_DEFAULTTONEAREST),
+            &mut info,
+        );
+        let anchor = popup::Rect {
+            left: info.rcWork.right - 180,
+            top: info.rcWork.bottom,
+            right: info.rcWork.right - 100,
+            bottom: info.rcWork.bottom + 40,
+        };
+        let mut samples = vec![];
+        for _ in 0..100 {
+            let start = Instant::now();
+            assert_eq!(app.prepare_panel_at(anchor), Some(panel));
+            dashboard::update(view, &app.saved, &app.weather, false);
+            samples.push(start.elapsed().as_micros());
+            assert_eq!(GetDlgItem(view, 1000), date);
+            assert_eq!(IsWindowVisible(panel), 0);
+        }
+        let expected = popup::place(
+            anchor,
+            popup::Rect {
+                left: info.rcWork.left,
+                top: info.rcWork.top,
+                right: info.rcWork.right,
+                bottom: info.rcWork.bottom,
+            },
+            GetDpiForWindow(panel).max(96),
+        )
+        .unwrap();
+        let mut bounds: RECT = std::mem::zeroed();
+        GetWindowRect(panel, &mut bounds);
+        assert_eq!(
+            (bounds.left, bounds.top),
+            (expected.rect.left, expected.rect.top)
+        );
+        samples.sort();
+        eprintln!(
+            "calendar prewarm={:.2}ms; cached prepare/update p95={}us",
+            cold.as_secs_f64() * 1000.,
+            samples[95]
+        );
+        assert!(samples[95] < 50_000);
+        assert_eq!(GetForegroundWindow(), foreground);
+        app.close_panel();
+        assert_eq!(IsWindow(panel), 0);
+        DestroyWindow(app.hwnd);
+        app.release_resources();
     }
 }
