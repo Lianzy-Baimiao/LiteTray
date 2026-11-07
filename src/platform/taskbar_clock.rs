@@ -590,7 +590,8 @@ unsafe extern "system" fn receive(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                 return 0;
             };
             if !calendar {
-                return super::volume::dispatch(event.input) as isize;
+                return super::volume::dispatch(event.input, context.main as usize, event.anchor)
+                    as isize;
             }
             if PostMessageW(context.main, WM_ACTIVATED, 0, 0) == 0 {
                 return 0;

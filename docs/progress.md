@@ -384,3 +384,11 @@ Release 复现了父级已附加但时钟尚未完成布局的竞争；等待条
 00:26 最终发布版运行目录 dist/LiteTray-5.11.0，宿主 PID 3804，Explorer PID 31596。主副屏真实任务栏输入 active=true，两屏 error／geometry_error 均为空；用户 config.json 哈希保持不变，开机启动指向最终版本。旧目录恢复成原完整旧包，避免先前占用错误留下混合二进制。部署证据 local/ui511-final-verified.json。
 
 dist/Setup.exe 已更新为 5.11.0，BuildId 5.11.0-6310a1ec4012；安装、正常退出旧宿主、占用文件重装、安装后首开、卸载与保留用户数据全部通过，证据 local/setup511-check.json。运行 EXE SHA256 3301D0435A9D0BA240D385100117A9C5156AF2B018FAD524C7FFF06A6B7E3CFE。
+
+## 2026-11-08 · 开发版 5.11.1：音量百分比
+
+时钟滚轮调音量／中键静音后，按发起操作的时钟位置显示实际百分比、SVG 喇叭、进度条与静音状态。连续操作复用浮层并更新数值，停止约 1.4 秒自动收起；跟随主题和显示器 DPI，置顶且不抢焦点。音频线程在操作后读回设备状态，不可用时明确提示；沿用既有音量开关。
+
+187 项常规回归、Clippy 和真实 Core Audio 反馈验证通过；音频检查结束已恢复原音量 26%／未静音。浮层在非输入桌面检查两屏定位、明暗渲染、窗口复用、焦点保持、鼠标穿透、到期隐藏及清理。发布包完整管理、日历设置及专注入口均一次打开成功。未重复执行无关的导航性能基准；后台音频与窗口检查不冒充物理滚轮全链路验收。说明见 [窗口入口与时钟音量](clock-input-5.11.md)，图像证据 `local/ui5111-volume/`。
+
+00:43:14 已正常退出旧宿主并在原 `dist/LiteTray-5.11.0` 目录切换至 5.11.1，宿主 PID 33464，设置窗口保持隐藏。Explorer PID 31596、两个 DLL 与用户配置哈希不变；主副屏实际接管检查 active=true，两屏 error／geometry_error 均为空。QQ 兼容项仍为 disabled／hooks=0。完整独立包在 `dist/LiteTray-5.11.1`；部署与检查证据 `local/ui5111-deployment.json`、`local/ui5111-live-taskbar.json`。EXE SHA256 `93EEC961B173EF95E4E64C9673C4AC2A5A5CAFD61F9317E9786567D46D6A5C1D`。

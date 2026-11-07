@@ -8,16 +8,28 @@ pub struct Placement {
     pub scale_percent: u32,
 }
 pub fn place(anchor: Rect, work: Rect, dpi: u32) -> Result<Placement, String> {
+    place_sized(anchor, work, dpi, WIDTH + 2, HEIGHT + 2)
+}
+pub fn place_sized(
+    anchor: Rect,
+    work: Rect,
+    dpi: u32,
+    logical_width: i32,
+    logical_height: i32,
+) -> Result<Placement, String> {
     anchor.validate()?;
     work.validate()?;
-    if !(48..=768).contains(&dpi) {
+    if !(48..=768).contains(&dpi)
+        || !(1..=4096).contains(&logical_width)
+        || !(1..=4096).contains(&logical_height)
+    {
         return Err("面板 DPI 无效".into());
     }
     let w = i64::from(work.right) - i64::from(work.left);
     let h = i64::from(work.bottom) - i64::from(work.top);
     let margin = (10 * i64::from(dpi) / 96).min(w / 20).min(h / 20);
-    let preferred_w = i64::from(WIDTH + 2) * i64::from(dpi) / 96;
-    let preferred_h = i64::from(HEIGHT + 2) * i64::from(dpi) / 96;
+    let preferred_w = (i64::from(logical_width) * i64::from(dpi) / 96).max(1);
+    let preferred_h = (i64::from(logical_height) * i64::from(dpi) / 96).max(1);
     // Scale the entire native layout together on small work areas instead of
     // placing buttons outside the available display.
     let percent = 100_i64
@@ -138,5 +150,57 @@ mod tests {
         assert!(p.scale_percent < 100);
         assert!(p.rect.bottom <= work.bottom && p.rect.right <= work.right);
         assert!(place(anchor, work, 0).is_err());
+    }
+    #[test]
+    fn compact_volume_feedback_stays_by_its_clock_on_every_edge_and_scale() {
+        for dpi in [96, 120, 144, 192] {
+            let work = Rect {
+                left: -1920,
+                top: -1080,
+                right: 0,
+                bottom: 0,
+            };
+            for anchor in [
+                Rect {
+                    left: -160,
+                    top: 0,
+                    right: 0,
+                    bottom: 48,
+                },
+                Rect {
+                    left: -160,
+                    top: -1128,
+                    right: 0,
+                    bottom: -1080,
+                },
+                Rect {
+                    left: -1968,
+                    top: -500,
+                    right: -1920,
+                    bottom: -350,
+                },
+                Rect {
+                    left: 0,
+                    top: -500,
+                    right: 48,
+                    bottom: -350,
+                },
+            ] {
+                let p = place_sized(anchor, work, dpi, 208, 72).unwrap().rect;
+                assert!(
+                    p.left >= work.left
+                        && p.right <= work.right
+                        && p.top >= work.top
+                        && p.bottom <= work.bottom
+                );
+                assert!(
+                    p.bottom <= anchor.top
+                        || p.top >= anchor.bottom
+                        || p.left >= anchor.right
+                        || p.right <= anchor.left
+                );
+                assert_eq!(p.right - p.left, 208 * dpi as i32 / 96);
+            }
+        }
     }
 }

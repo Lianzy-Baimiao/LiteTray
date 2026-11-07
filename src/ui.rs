@@ -12,6 +12,7 @@ mod quick_agenda;
 mod settings;
 mod settings_open;
 mod typography;
+mod volume_tip;
 #[cfg(test)]
 mod visual_checks;
 mod weather_icons;
@@ -49,7 +50,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.11.0";
+const UI_REVISION: &str = "开发版 5.11.1";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -2182,6 +2183,9 @@ unsafe fn choose_migration_file(owner: HWND) -> Result<Option<std::path::PathBuf
 
 unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     unsafe {
+        if let Some(result) = volume_tip::message(hwnd, msg) {
+            return result;
+        }
         if let Some(result) = settings_open::message(hwnd, msg, w, l) {
             return result;
         }

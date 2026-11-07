@@ -13,6 +13,8 @@ pub(super) enum Icon {
     List,
     Left,
     Right,
+    Volume,
+    Muted,
 }
 impl Icon {
     fn source(self) -> &'static str {
@@ -26,6 +28,8 @@ impl Icon {
             Self::List => include_str!("../../assets/icons/list.svg"),
             Self::Left => include_str!("../../assets/icons/chevron-left.svg"),
             Self::Right => include_str!("../../assets/icons/chevron-right.svg"),
+            Self::Volume => include_str!("../../assets/icons/volume.svg"),
+            Self::Muted => include_str!("../../assets/icons/volume-muted.svg"),
         }
     }
 }
