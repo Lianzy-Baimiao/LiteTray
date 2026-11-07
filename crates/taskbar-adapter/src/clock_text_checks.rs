@@ -17,6 +17,7 @@ fn require(value: bool, label: &str) -> Result<(), String> {
     }
 }
 pub(crate) fn run() -> Result<Vec<&'static str>, String> {
+    compact_display()?;
     let baseline = crate::clock_text::TextLayer::handler_count();
     let time = load(
         r#"<TextBlock xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Text="System time"/>"#,
@@ -110,5 +111,77 @@ pub(crate) fn run() -> Result<Vec<&'static str>, String> {
         "native_clock_refresh_binding_priority",
         "native_clock_stop_reveals_latest_values",
         "native_clock_drop_releases_text_override",
+        "compact_clock_initial_display_and_live_size_switches",
+        "compact_clock_preserves_native_visibility_and_restore",
     ])
+}
+
+fn compact_display() -> Result<(), String> {
+    let baseline = crate::clock_text::TextLayer::handler_count();
+    let time = load(
+        r#"<TextBlock xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Text="System time"/>"#,
+    )?;
+    let date = load(
+        r#"<TextBlock xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Visibility="Collapsed" Text="System date"/>"#,
+    )?;
+    let container =
+        load(r#"<StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"/>"#)?;
+    let mut lease = ClockLease::capture_native(&time, &date, &container)?;
+    lease.apply("12:34", "晴 24°C", 12., "Segoe UI", 0.)?;
+    require(
+        text(&time)? == "12:34 · 晴 24°C",
+        "compact cold start keeps both configured lines",
+    )?;
+    let element = date.query(&IID_IUIElement)?;
+    let time_text = time.query(&IID_ITextBlock)?;
+    for n in 0..20 {
+        let collapsed = n % 2 == 1;
+        unsafe {
+            check(
+                (element.table::<IUIElement_Vtbl>().SetVisibility)(
+                    element.raw(),
+                    Visibility(i32::from(collapsed)),
+                ),
+                "simulate taskbar size change",
+            )?;
+        }
+        // The content is unchanged: a size switch must bypass text caching.
+        lease.tick("12:34", "晴 24°C")?;
+        let expected = if collapsed {
+            "12:34 · 晴 24°C"
+        } else {
+            "12:34"
+        };
+        require(
+            text(&time)? == expected,
+            "live taskbar size changes retain custom content",
+        )?;
+        unsafe {
+            let native = StringHandle::new("Latest native time")?;
+            check(
+                (time_text.table::<ITextBlock_Vtbl>().SetText)(time_text.raw(), native.0),
+                "native refresh in compact mode",
+            )?;
+        }
+        require(
+            text(&time)? == expected,
+            "Shell refresh cannot hide compact custom content",
+        )?;
+        require(
+            crate::xaml::visibility(&date)? == Some(!collapsed),
+            "respect Shell's date visibility",
+        )?;
+    }
+    lease.tick("", "晴 25°C")?;
+    require(text(&time)? == "晴 25°C", "compact bottom-only format")?;
+    lease.restore()?;
+    require(
+        text(&time)? == "Latest native time" && crate::xaml::visibility(&date)? == Some(false),
+        "restore compact native clock",
+    )?;
+    drop(lease);
+    require(
+        crate::clock_text::TextLayer::handler_count() == baseline,
+        "compact callbacks released",
+    )
 }

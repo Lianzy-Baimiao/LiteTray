@@ -161,8 +161,20 @@ impl<'a> Tree<'a> {
                 if !matches!(
                     node.name.as_str(),
                     "TimeInnerTextBlock" | "DateInnerTextBlock"
-                ) || !self.visible(i)?
-                {
+                ) {
+                    continue;
+                }
+                // Compact Shell clocks retain a collapsed date TextBlock in
+                // this exact two-text layout. It is still part of the clock,
+                // although it has no arranged size on a compact cold start.
+                let collapsed_date = node.name == "DateInnerTextBlock"
+                    && node.visible == Some(false)
+                    && self.parents[i].is_some_and(|p| {
+                        self.nodes[p].name == "DateTimeStackPanel"
+                            && self.nodes[p].class_name == "Windows.UI.Xaml.Controls.StackPanel"
+                    })
+                    && self.visible(self.parents[i].expect("checked above"))?;
+                if !self.visible(i)? && !collapsed_date {
                     continue;
                 }
                 if node.class_name != "Windows.UI.Xaml.Controls.TextBlock" {
@@ -199,10 +211,14 @@ impl<'a> Tree<'a> {
                     return Err("时钟文字容器还包含其他交互或未知控件".into());
                 }
             }
-            if [parent, time, date].into_iter().any(|i| {
-                self.nodes[i].width.is_none_or(|v| v <= 0.)
-                    || self.nodes[i].height.is_none_or(|v| v <= 0.)
-            }) {
+            if [parent, time, date]
+                .into_iter()
+                .filter(|&i| i != date || self.nodes[date].visible != Some(false))
+                .any(|i| {
+                    self.nodes[i].width.is_none_or(|v| v <= 0.)
+                        || self.nodes[i].height.is_none_or(|v| v <= 0.)
+                })
+            {
                 return Err("时钟布局尚未就绪".into());
             }
             candidates.push(Clock {
@@ -449,6 +465,37 @@ mod tests {
         let mut nodes = fixture();
         nodes[0].name = "PretendSystemTrayFrameGrid".into();
         assert!(analyze_panel(&nodes, false).is_err());
+    }
+    #[test]
+    fn compact_taskbar_keeps_the_native_clock_when_shell_collapses_only_the_date() {
+        let mut nodes = fixture();
+        nodes[0].height = Some(32.);
+        nodes[2].height = Some(32.);
+        nodes[3].name = "DateTimeStackPanel".into();
+        nodes[3].height = Some(16.);
+        nodes[5].visible = Some(false);
+        // A collapsed TextBlock can retain its previous arrangement, or have
+        // no layout at all when Explorer starts directly in compact mode.
+        for size in [16., 0.] {
+            nodes[5].width = Some(size);
+            nodes[5].height = Some(size);
+            let topology = analyze_panel(&nodes, false).unwrap();
+            assert!(
+                topology.clock.is_some(),
+                "small taskbar loses the custom clock: {:?}",
+                topology.clock_error
+            );
+            let input = clock_input_node(&nodes, topology.clock.as_ref().unwrap()).unwrap();
+            assert_ne!(nodes[input].name, "Bell");
+        }
+        nodes[4].visible = Some(false);
+        assert!(analyze_panel(&nodes, false).unwrap().clock.is_none());
+        nodes[4].visible = Some(true);
+        nodes[3].visible = Some(false);
+        assert!(analyze_panel(&nodes, false).unwrap().clock.is_none());
+        nodes[3].visible = Some(true);
+        nodes[3].name = "UnknownClockLayout".into();
+        assert!(analyze_panel(&nodes, false).unwrap().clock.is_none());
     }
     #[test]
     fn clock_failure_does_not_hide_other_surface_diagnostics() {

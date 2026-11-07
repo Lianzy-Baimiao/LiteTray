@@ -420,3 +420,11 @@ dist/Setup.exe 已更新为 5.11.0，BuildId 5.11.0-6310a1ec4012；安装、正�
 本次已完成真实切换：先备份已保存配置、日程及旧窗口控件状态到 `local/before-5114-20261108-014059`，对核对过的旧版退出提示选择“不保存”，正常退出 5.11.1，重载 Explorer 并从 `dist/LiteTray-5.11.4` 后台启动。随后在真实新版宿主中后台遍历全部设置页、关闭、正常退出和再次启动，无未保存提示；最终宿主 PID 25496，Explorer PID 22756。主副屏接管及输入 active，布局错误为空，Explorer 加载的适配 DLL 路径确认为 5.11.4。开机启动已指向新目录，正式配置 SHA256 仍为 `B422D74896656B96A0987AC12062A327F63CA0B3AFD735959458BD9D28195497`，日程哈希不变，QQ 兼容仍 disabled／hooks 0。中键冲突及外部点击收起两项修复随本次切换生效；未将程序化事件回归描述为物理鼠标验收。
 
 证据：`local/ui5114-browsing-red.txt`、`local/ui5114-close-red.txt`、`local/ui5114-ui-check.txt`、`local/setup5114-check.json`、`local/ui5114-deployment.json`、`local/ui5114-final-verified.json`。
+
+## 2026-11-08 · 开发版 5.11.5：小型任务栏恢复接管
+
+用户切换小型任务栏后自定义时钟消失。现场主副屏均为 32 逻辑像素高，日期 TextBlock 被系统折叠，旧识别误报“时间或日期缺失、重复”，连带停止托盘复制。精确布局回归先失败，再允许已知 DateTimeStackPanel 下的折叠日期行，保留可见性、唯一性及容器检查。紧凑时将两行模板合并到仍可见的时间行，普通尺寸恢复两行；不修改原生日期可见性。
+
+30 项协议测试、4 项适配器单元检查及 158 项发布包隔离 XAML 检查通过，Clippy 通过。已切换运行 5.11.5，宿主 PID 31856、Explorer PID 30276；主副屏均在 32 像素任务栏显示完整时间和天气，文字宽约 364.69、容器宽约 364.8 逻辑像素，无裁切。连续检查跨分钟持续走时、输入 active、托盘复制恢复、无结构或布局错误，QQ 兼容仍 disabled／hooks 0。正式配置及日程哈希不变，启动项及 Setup 已更新。
+
+证据：`local/ui5115-small-before.json`、`local/ui5115-small-red.txt`、`local/ui5115-native-red.txt`、`local/ui5115-release-xaml.txt`、`local/ui5115-deployment.json`、`local/ui5115-final-verified.json`。用户随后要求增加紧凑布局选择：默认单行，可强制双行，继续在后续版本实现。

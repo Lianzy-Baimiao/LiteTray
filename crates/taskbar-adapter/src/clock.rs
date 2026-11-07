@@ -5,7 +5,7 @@ use crate::{
     xaml::{Object, StringHandle, check, factory},
     xaml_abi::*,
 };
-use std::ptr::null_mut;
+use std::{borrow::Cow, ptr::null_mut};
 use windows_sys::core::IID_IUnknown;
 
 pub(crate) fn boxed_text(text: &str) -> Result<Object, String> {
@@ -73,6 +73,7 @@ pub(crate) struct ClockLease {
     last_text: Option<(String, String)>,
     decorations: crate::clock_style::Decorations,
     native_text: Option<[crate::clock_text::TextLayer; 2]>,
+    native_date: Option<Object>,
 }
 impl ClockLease {
     pub(crate) fn capture_native(
@@ -85,6 +86,7 @@ impl ClockLease {
             crate::clock_text::TextLayer::prepare(time)?,
             crate::clock_text::TextLayer::prepare(date)?,
         ]);
+        lease.native_date = Some(date.clone());
         Ok(lease)
     }
     pub fn capture(time: &Object, date: &Object, container: &Object) -> Result<Self, String> {
@@ -127,6 +129,7 @@ impl ClockLease {
                 last_text: None,
                 decorations: crate::clock_style::Decorations::capture(time, date, container)?,
                 native_text: None,
+                native_date: None,
             })
         }
     }
@@ -194,6 +197,8 @@ impl ClockLease {
         }
         // Construct every value before writing. Failure here leaves the active
         // clock untouched and keeps the original rollback snapshot.
+        let displayed_top = self.display_top(top, bottom)?;
+        let top = displayed_top.as_ref();
         let top_value = boxed_text(top)?;
         let bottom_value = boxed_text(bottom)?;
         let top_size = boxed_number(fonts[0].0)?;
@@ -244,6 +249,8 @@ impl ClockLease {
             return Err("时钟文本过长".into());
         }
         self.verify_ownership()?;
+        let displayed_top = self.display_top(top, bottom)?;
+        let top = displayed_top.as_ref();
         if self
             .last_text
             .as_ref()
@@ -277,6 +284,30 @@ impl ClockLease {
         }
         self.last_text = Some((top.to_owned(), bottom.to_owned()));
         Ok(())
+    }
+    fn display_top<'a>(&self, top: &'a str, bottom: &str) -> Result<Cow<'a, str>, String> {
+        let Some(date) = &self.native_date else {
+            return Ok(Cow::Borrowed(top));
+        };
+        match crate::xaml::visibility(date)? {
+            Some(true) => Ok(Cow::Borrowed(top)),
+            Some(false) => {
+                // Shell deliberately collapses the date in compact taskbars.
+                // Keep its layout/visibility untouched and show both configured
+                // lines in the remaining text row. Read this on each tick so a
+                // size change works even when the formatted text is unchanged.
+                let lines = [top.trim(), bottom.trim()];
+                Ok(Cow::Owned(
+                    lines
+                        .into_iter()
+                        .filter(|line| !line.is_empty())
+                        .map(|line| line.replace(['\r', '\n'], " "))
+                        .collect::<Vec<_>>()
+                        .join(" · "),
+                ))
+            }
+            None => Err("原生日期行可见性尚未就绪".into()),
+        }
     }
     pub fn restore(&mut self) -> Result<(), String> {
         let mut errors = Vec::new();
