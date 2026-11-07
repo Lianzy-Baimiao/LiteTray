@@ -33,6 +33,7 @@ $documents += @('data/holidays/README.md','data/holidays/LICENSE')
 $documents += @('docs/images/panel-editor-dark.png')
 $documents += @('docs/ui-audit-5.5.md','docs/ui-audit-5.6.md','docs/images/focus-light.png','docs/weather-location.md','docs/images/weather-location-light.png')
 $documents += @('docs/almanac-hover.md','docs/images/almanac-light.png','docs/images/almanac-dark.png','docs/images/solar-terms-light.png')
+$documents += @('docs/hourly-weather.md','docs/images/hourly-weather-light.png')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null

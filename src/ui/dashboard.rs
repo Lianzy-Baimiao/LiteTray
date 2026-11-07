@@ -25,6 +25,7 @@ struct View {
     days: Vec<NaiveDate>,
     buttons: Vec<HWND>,
     weather: Option<weather::WeatherResult>,
+    forecast: forecast::State,
     city: String,
     enabled: bool,
     busy: bool,
@@ -100,6 +101,7 @@ pub(super) unsafe fn create(parent: HWND, bounds: RECT, dark: bool, flyout: bool
             days: vec![],
             buttons: vec![],
             weather: None,
+            forecast: Default::default(),
             city: String::new(),
             enabled: true,
             busy: false,
@@ -340,6 +342,10 @@ pub(super) unsafe fn update(
         view.enabled = config.weather.enabled;
         view.busy = busy;
         view.weather = weather.clone();
+        let hourly_changed = view.forecast.sync(
+            weather.as_ref().and_then(|r| r.weather.as_ref()),
+            Utc::now(),
+        );
         view.lunar = config.clock.show_lunar;
         view.almanac = config.clock.show_almanac;
         if !view.almanac {
@@ -376,11 +382,11 @@ pub(super) unsafe fn update(
         }
         let factor = view.factor;
         drop(view);
-        if changed || day_changed || holiday_changed {
+        if changed || day_changed || holiday_changed || weather_changed || hourly_changed {
             layout(hwnd);
         }
         invalidate_part(hwnd, factor, rect(20, 13, 380, 53));
-        if weather_changed {
+        if weather_changed || hourly_changed {
             invalidate_part(hwnd, factor, rect(380, 88, 320, 390));
             invalidate_part(hwnd, factor, rect(0, 628, WIDTH, 28));
         }
@@ -475,6 +481,32 @@ fn button_specs(v: &View) -> Vec<ButtonSpec> {
         close.visible = v.detached;
         buttons.push(detach);
         buttons.push(close);
+    }
+    let weather_visible =
+        v.enabled && v.weather.as_ref().is_some_and(|r| r.weather.is_some()) && !v.editing;
+    for (id, label, x, width, visible) in [
+        (forecast::HOURLY, "逐小时", 400, 90, weather_visible),
+        (forecast::DAILY, "三日", 498, 90, weather_visible),
+        (
+            forecast::PREVIOUS,
+            "前四小时",
+            612,
+            30,
+            weather_visible && !v.forecast.daily && v.forecast.page > 0,
+        ),
+        (
+            forecast::NEXT,
+            "后四小时",
+            650,
+            30,
+            weather_visible
+                && !v.forecast.daily
+                && (v.forecast.page + 1) * forecast::PER_PAGE < v.forecast.count,
+        ),
+    ] {
+        let mut button = spec(label.into(), id, x, 288, width, 30, true);
+        button.visible = visible;
+        buttons.push(button);
     }
     for (i, date) in v.days.iter().enumerate() {
         buttons.push(spec(
@@ -912,6 +944,27 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 let v = &mut *guard;
                 let id = (w & 0xffff) as u16;
                 let mut focus = None;
+                if msg == WM_COMMAND && (forecast::HOURLY..=forecast::NEXT).contains(&id) {
+                    if v.editing || !v.enabled {
+                        return 0;
+                    }
+                    v.forecast.command(id);
+                    let factor = v.factor;
+                    drop(guard);
+                    layout(hwnd);
+                    invalidate_part(hwnd, factor, rect(380, 284, 320, 194));
+                    for id in forecast::HOURLY..=forecast::NEXT {
+                        InvalidateRect(GetDlgItem(hwnd, id as i32), null(), 0);
+                    }
+                    let focused = GetFocus();
+                    if !focused.is_null()
+                        && GetParent(focused) == hwnd
+                        && GetWindowLongW(focused, GWL_STYLE) as u32 & WS_VISIBLE == 0
+                    {
+                        SetFocus(GetDlgItem(hwnd, forecast::HOURLY as i32));
+                    }
+                    return 0;
+                }
                 if msg == SELECT_DAY {
                     let delta = w as isize as i64;
                     if !matches!(delta, -7 | -1 | 1 | 7) {
@@ -994,8 +1047,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
 fn button_icon(id: u16) -> Option<icons::Icon> {
     use icons::Icon;
     Some(match id {
-        PREV | EARLIER => Icon::Left,
-        NEXT | LATER => Icon::Right,
+        PREV | EARLIER | forecast::PREVIOUS => Icon::Left,
+        NEXT | LATER | forecast::NEXT => Icon::Right,
         REFRESH => Icon::Refresh,
         40 => Icon::Settings,
         CALENDAR | panel::DETACH => Icon::Detach,
@@ -1099,6 +1152,54 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
         let t = Theme::new(v.dark);
         let s = |n: i32| (n as f64 * v.factor).round() as i32;
         let id = item.CtlID as u16;
+        if (forecast::HOURLY..=forecast::NEXT).contains(&id) {
+            let selected = id <= forecast::DAILY && v.forecast.selected(id);
+            let hovered = !item.hwndItem.is_null()
+                && !GetPropW(item.hwndItem, wide("LiteTray.Hover").as_ptr()).is_null();
+            let background = if selected || hovered { t.tint } else { t.field };
+            fill(item.hDC, item.rcItem, t.field);
+            rounded(item.hDC, item.rcItem, background, background, s(7));
+            if id >= forecast::PREVIOUS {
+                icons::draw(
+                    item.hDC,
+                    button_icon(id).unwrap(),
+                    rect(
+                        item.rcItem.left + s(6),
+                        item.rcItem.top + s(6),
+                        s(18),
+                        s(18),
+                    ),
+                    t.text,
+                    background,
+                );
+                return;
+            }
+            text(
+                item.hDC,
+                if id == forecast::HOURLY {
+                    "逐小时"
+                } else {
+                    "三日"
+                },
+                item.rcItem,
+                v.fonts[0],
+                if selected { t.accent } else { t.muted },
+                DT_CENTER | DT_SINGLELINE | DT_VCENTER,
+            );
+            if item.itemState & ODS_FOCUS != 0 {
+                fill(
+                    item.hDC,
+                    rect(
+                        item.rcItem.left + s(12),
+                        item.rcItem.bottom - s(3),
+                        item.rcItem.right - item.rcItem.left - s(24),
+                        s(2),
+                    ),
+                    t.accent,
+                );
+            }
+            return;
+        }
         if (FIRST_ENTRY..FIRST_ENTRY + 3).contains(&id) {
             let hovered = !item.hwndItem.is_null()
                 && !GetPropW(item.hwndItem, wide("LiteTray.Hover").as_ptr()).is_null();
@@ -1422,14 +1523,14 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
             tx(
                 &format!("{:.0}°", w.temperature_c),
                 398,
-                144,
+                136,
                 204,
                 66,
                 3,
                 t.text,
             );
-            weather_icon(dc, r(638, 160, 44, 44), t.accent, &w.description);
-            tx(&w.description, 402, 218, 276, 25, 0, t.text);
+            weather_icon(dc, r(638, 152, 44, 44), t.accent, &w.description);
+            tx(&w.description, 402, 204, 276, 25, 0, t.text);
             tx(
                 &format!(
                     "体感 {}  ·  湿度 {}",
@@ -1441,7 +1542,7 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
                         .unwrap_or_else(|| "—".into())
                 ),
                 402,
-                250,
+                234,
                 276,
                 22,
                 1,
@@ -1455,41 +1556,15 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
                         .unwrap_or_else(|| "—".into())
                 ),
                 402,
-                280,
+                258,
                 276,
                 22,
                 1,
                 t.muted,
             );
-            fill(dc, r(400, 320, 280, 1), t.border);
-            if w.days.is_empty() {
-                tx("此来源暂无每日预报", 402, 340, 276, 24, 1, t.muted);
-            }
-            for (i, day) in w.days.iter().take(3).enumerate() {
-                let y = 338 + i as i32 * 36;
-                let name = NaiveDate::parse_from_str(&day.date, "%Y-%m-%d")
-                    .ok()
-                    .map(|date| {
-                        if date == now.date_naive() {
-                            "今天".into()
-                        } else if date == now.date_naive() + chrono::Duration::days(1) {
-                            "明天".into()
-                        } else {
-                            date.format("%-m/%-d").to_string()
-                        }
-                    })
-                    .unwrap_or_else(|| day.date.clone());
-                tx(&name, 402, y, 48, 24, 1, t.muted);
-                tx(&day.description, 456, y, 126, 24, 1, t.text);
-                text(
-                    dc,
-                    &format!("{:.0}° / {:.0}°", day.low_c, day.high_c),
-                    r(592, y, 86, 24),
-                    v.fonts[1],
-                    t.text,
-                    DT_RIGHT | DT_SINGLELINE | DT_VCENTER,
-                );
-            }
+            fill(dc, r(400, 282, 280, 1), t.border);
+            v.forecast
+                .render(dc, w, now.with_timezone(&Utc), v.factor, v.fonts, v.dark);
             status = if v.weather.as_ref().is_some_and(|r| r.cached) {
                 format!(
                     "离线缓存 · 非实时 · {}",
@@ -1527,7 +1602,7 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
             text(
                 dc,
                 if !v.enabled {
-                    "在设置中启用天气，即可查看温度和每日预报。"
+                    "在设置中启用天气，即可查看温度、小时与三日预报。"
                 } else {
                     "可刷新重试，或在设置中切换天气来源。"
                 },
@@ -1580,7 +1655,7 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
         );
     }
 }
-unsafe fn weather_icon(dc: HDC, r: RECT, color: u32, description: &str) {
+pub(super) unsafe fn weather_icon(dc: HDC, r: RECT, color: u32, description: &str) {
     unsafe {
         let size = r.right - r.left;
         let sx = |n| r.left + size * n / 48;
@@ -1645,6 +1720,125 @@ pub(super) unsafe fn with_borrowed_view(hwnd: HWND, action: impl FnOnce()) {
 #[cfg(test)]
 mod visual_checks {
     use super::*;
+    #[test]
+    fn hourly_forecast_switches_and_pages_without_rebuilding_calendar() {
+        super::super::visual_checks::on_isolated_desktop(|| unsafe {
+            let _ = RoInitialize(RO_INIT_SINGLETHREADED);
+            let now = Utc::now();
+            let start = now.timestamp() / 3600 * 3600;
+            let fixture = serde_json::json!({"utc_offset_seconds":28800,
+                "current":{"time":now.timestamp(),"temperature_2m":25,"weather_code":2,"relative_humidity_2m":68,"apparent_temperature":26,"wind_speed_10m":12},
+                "hourly":{"time":(0..48).map(|i|start+i*3600).collect::<Vec<_>>(),"temperature_2m":(0..48).map(|i|24-i%8).collect::<Vec<_>>(),
+                "weather_code":(0..48).map(|i|[2,0,61,3][i%4]).collect::<Vec<_>>(),"precipitation_probability":(0..48).map(|i|[0,10,75,20][i%4]).collect::<Vec<_>>()},
+                "daily":{"time":["2026-11-07","2026-11-08","2026-11-09"],"temperature_2m_min":[19,20,18],"temperature_2m_max":[26,27,24],"weather_code":[2,0,61]}});
+            let config = Config::default();
+            let w = weather::parse(Provider::OpenMeteo, &fixture, &config.weather, now).unwrap();
+            let result = Some(weather::WeatherResult {
+                weather: Some(w.clone()),
+                cached: false,
+                fallback: false,
+                attempts: vec![],
+                cache_error: None,
+            });
+            for dark in [false, true] {
+                for scale in [1., 1.5, 2.] {
+                    let width = (WIDTH as f64 * scale) as i32;
+                    let height = (HEIGHT as f64 * scale) as i32;
+                    let parent = CreateWindowExW(
+                        0,
+                        wide("STATIC").as_ptr(),
+                        wide("Hourly weather fixture").as_ptr(),
+                        WS_POPUP,
+                        0,
+                        0,
+                        width,
+                        height,
+                        null_mut(),
+                        null_mut(),
+                        GetModuleHandleW(null()),
+                        null(),
+                    );
+                    let hwnd = create(parent, rect(0, 0, width, height), dark, true);
+                    bind_store(
+                        hwnd,
+                        Rc::new(RefCell::new(organizer::Store::open(
+                            &std::env::temp_dir().join(format!(
+                                "litetray-hourly-unused-{}.json",
+                                std::process::id()
+                            )),
+                        ))),
+                    );
+                    update(hwnd, &config, &result, false);
+                    let cell = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RefCell<View>);
+                    let buttons = cell.borrow().buttons.clone();
+                    assert_eq!(cell.borrow().forecast.count, 24);
+                    let snapshot = |suffix: &str| {
+                        if let Some(output) = std::env::var_os("LITETRAY_HOURLY_RENDER_DIR") {
+                            let output = std::path::PathBuf::from(output);
+                            std::fs::create_dir_all(&output).unwrap();
+                            super::super::visual_checks::write_window(
+                                hwnd,
+                                &output.join(format!(
+                                    "hourly-{}-{}-{suffix}.bmp",
+                                    if dark { "dark" } else { "light" },
+                                    (scale * 100.) as i32
+                                )),
+                            );
+                        }
+                    };
+                    snapshot("hours");
+                    for i in 1..6 {
+                        SendMessageW(hwnd, WM_COMMAND, forecast::NEXT as usize, 0);
+                        assert_eq!(cell.borrow().forecast.page, i);
+                    }
+                    SendMessageW(hwnd, WM_COMMAND, forecast::NEXT as usize, 0);
+                    assert_eq!(cell.borrow().forecast.page, 5);
+                    assert_eq!(
+                        GetWindowLongW(GetDlgItem(hwnd, forecast::NEXT as i32), GWL_STYLE) as u32
+                            & WS_VISIBLE,
+                        0
+                    );
+                    SendMessageW(hwnd, WM_COMMAND, forecast::DAILY as usize, 0);
+                    assert!(cell.borrow().forecast.daily);
+                    snapshot("days");
+                    SendMessageW(hwnd, WM_COMMAND, forecast::HOURLY as usize, 0);
+                    assert!(!cell.borrow().forecast.daily);
+                    assert_eq!(cell.borrow().forecast.page, 5);
+                    assert_eq!(cell.borrow().buttons, buttons);
+                    SendMessageW(hwnd, WM_COMMAND, ADD_EVENT as usize, 0);
+                    for id in forecast::HOURLY..=forecast::NEXT {
+                        assert_eq!(
+                            GetWindowLongW(GetDlgItem(hwnd, id as i32), GWL_STYLE) as u32
+                                & WS_VISIBLE,
+                            0,
+                            "forecast control exposed over inline editor"
+                        );
+                    }
+                    dismiss_editor(hwnd);
+                    let mut missing = result.clone();
+                    missing
+                        .as_mut()
+                        .unwrap()
+                        .weather
+                        .as_mut()
+                        .unwrap()
+                        .hourly
+                        .clear();
+                    update(hwnd, &config, &missing, false);
+                    assert_eq!(cell.borrow().forecast.page, 0);
+                    assert_eq!(cell.borrow().forecast.count, 0);
+                    snapshot("unavailable");
+                    DestroyWindow(parent);
+                }
+            }
+            let mut state = forecast::State::default();
+            state.sync(Some(&w), now);
+            state.command(forecast::NEXT);
+            state.sync(Some(&w), now + chrono::Duration::hours(80));
+            assert_eq!(state.count, 0);
+            assert_eq!(state.page, 0);
+        });
+    }
     #[test]
     fn solar_terms_are_visible_without_hover_and_survive_month_navigation() {
         super::super::visual_checks::on_isolated_desktop(|| unsafe {
@@ -2396,12 +2590,14 @@ mod visual_checks {
                                     description: ["多云", "晴间多云", "小雨"][i as usize].into(),
                                 })
                                 .collect(),
+                            hourly: vec![],
                         }),
                         cached: false,
                         fallback: false,
                         attempts: vec![],
                         cache_error: None,
                     }),
+                    forecast: Default::default(),
                 };
                 let width = s(WIDTH);
                 let height = s(HEIGHT);

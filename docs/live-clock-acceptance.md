@@ -203,3 +203,9 @@
 日期格直接显示二十四节气，节气当天优先于农历和假日名称，休／班角标保留；今日标题和选中日期详情也显示节气。离线计算按中国历日，仅标记交节当天；关闭农历标签或黄历悬停均不隐藏节气。155 项自动测试及 Clippy 通过，已检查明暗原生渲染。
 
 14:23:22 已切换 5.8.1，宿主 PID 21856，EXE SHA256 FBC98080403E4181D9B3EDBD5F19339E2E399EC0F54FF7F6EA37A50B255DE213。运行目录仍为 dist/LiteTray-ui54-inline；Explorer 10960 未重启，两个 DLL 与用户配置哈希不变，主副屏任务栏无错误且输入 active=true。完整包 dist/LiteTray-ui581-terms，证据 local/ui581-deployment.json、local/ui581-live-taskbar.json、local/ui581-tests.txt、local/ui581-renders/。
+
+## 2026-11-07 · 开发版 5.9：免 Key 小时预报
+
+天气卡片增加逐小时／三日切换，每组四小时，箭头翻看未来 24 小时（含当前小时），显示天气、温度和降水概率。Open-Meteo 与 MET Norway 沿用既有请求提供小时数据，无需 Key；时间以 UTC 存储、本机时间显示，空概率为“—”，六小时数据不伪装成逐小时。切换和翻页复用日历与原生控件，内嵌日程编辑时隐藏天气操作按钮。
+
+160 项测试、Clippy 及两家来源的真实联网验证通过。已检查明暗界面及三个缩放比例，发布包三个设置入口首次打开成功、十页无外层滚动条。14:32:03 在原目录切换至 5.9（PID 15364），Explorer 10960 与适配 DLL 保持原样，用户配置哈希不变，主副屏检查无错误且输入代理 active=true。正式缓存已自动取得 58 个剩余小时和三日预报。源码与验收详见 docs/hourly-weather.md；完整包 dist/LiteTray-ui59-hourly，现场证据 local/ui59-deployment.json、ui59-live-weather.json、ui59-live-taskbar.json、ui59-live-windows.json。

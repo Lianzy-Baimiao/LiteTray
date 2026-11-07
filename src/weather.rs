@@ -6,6 +6,8 @@ use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, path::Path};
+mod hourly;
+pub use hourly::HourlyForecast;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DailyForecast {
@@ -29,8 +31,19 @@ pub struct Weather {
     pub description: String,
     pub kind: String,
     pub days: Vec<DailyForecast>,
+    #[serde(default)]
+    pub hourly: Vec<HourlyForecast>,
 }
 impl Weather {
+    pub fn upcoming_hours(&self, now: DateTime<Utc>) -> Vec<&HourlyForecast> {
+        self.hourly
+            .iter()
+            .filter(|hour| {
+                hour.at > now - Duration::hours(1) && hour.at < now + Duration::hours(24)
+            })
+            .take(24)
+            .collect()
+    }
     pub fn summary(&self) -> String {
         format!("{} {:.0}°C", self.description, self.temperature_c)
     }
@@ -175,7 +188,7 @@ pub fn load_cache(path: &Path, config: &WeatherConfig, now: DateTime<Utc>) -> Op
     if bytes.len() > 2 * 1024 * 1024 {
         return None;
     }
-    let w: Weather = serde_json::from_slice(&bytes).ok()?;
+    let mut w: Weather = serde_json::from_slice(&bytes).ok()?;
     if (w.latitude - config.latitude).abs() > 0.0001
         || (w.longitude - config.longitude).abs() > 0.0001
         || w.city != config.city
@@ -192,6 +205,7 @@ pub fn load_cache(path: &Path, config: &WeatherConfig, now: DateTime<Utc>) -> Op
     if !w.temperature_c.is_finite() || !(-100.0..=65.0).contains(&w.temperature_c) {
         return None;
     }
+    hourly::sanitize(&mut w.hourly, now);
     Some(w)
 }
 fn fetch(
@@ -224,7 +238,7 @@ fn fetch(
     let mut headers = Vec::new();
     match provider {
         Provider::OpenMeteo => {
-            url.query_pairs_mut().append_pair("latitude",&c.latitude.to_string()).append_pair("longitude",&c.longitude.to_string()).append_pair("current","temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m").append_pair("daily","temperature_2m_max,temperature_2m_min,weather_code").append_pair("timezone","auto").append_pair("forecast_days","3");
+            url.query_pairs_mut().append_pair("latitude",&c.latitude.to_string()).append_pair("longitude",&c.longitude.to_string()).append_pair("current","temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m").append_pair("daily","temperature_2m_max,temperature_2m_min,weather_code").append_pair("hourly","temperature_2m,weather_code,precipitation_probability").append_pair("timezone","auto").append_pair("timeformat","unixtime").append_pair("forecast_days","3");
         }
         Provider::MetNorway => {
             url.query_pairs_mut()
@@ -302,19 +316,16 @@ pub fn parse(
         description: String::new(),
         kind: "当前观测".into(),
         days: Vec::new(),
+        hourly: Vec::new(),
     };
     match provider {
         Provider::OpenMeteo => {
             let x = &v["current"];
-            let local = x["time"].as_str().ok_or("缺少数据时间")?;
-            let parsed = NaiveDateTime::parse_from_str(local, "%Y-%m-%dT%H:%M")
-                .or_else(|_| NaiveDateTime::parse_from_str(local, "%Y-%m-%dT%H:%M:%S"))
-                .map_err(|_| "数据时间无效")?;
             let offset = v["utc_offset_seconds"].as_i64().ok_or("缺少时区偏移")?;
-            if !(-86400..=86400).contains(&offset) {
+            if !(-86399..=86399).contains(&offset) {
                 return Err("时区偏移无效".into());
             }
-            w.data_at = parsed.and_utc() - Duration::seconds(offset);
+            w.data_at = hourly::meteo_time(&x["time"], offset).ok_or("数据时间无效")?;
             w.temperature_c = required(&x["temperature_2m"], "temperature_2m")?;
             w.feels_like_c = number(&x["apparent_temperature"]);
             w.humidity_percent = number(&x["relative_humidity_2m"]);
@@ -324,12 +335,18 @@ pub fn parse(
             if let Some(dates) = v["daily"]["time"].as_array() {
                 for (i, date) in dates.iter().take(7).enumerate() {
                     if let (Some(date), Some(low), Some(high)) = (
-                        date.as_str(),
+                        date.as_str().map(str::to_owned).or_else(|| {
+                            hourly::meteo_time(date, offset).map(|at| {
+                                (at + Duration::seconds(offset))
+                                    .format("%Y-%m-%d")
+                                    .to_string()
+                            })
+                        }),
                         number(&v["daily"]["temperature_2m_min"][i]),
                         number(&v["daily"]["temperature_2m_max"][i]),
                     ) {
                         w.days.push(DailyForecast {
-                            date: date.into(),
+                            date,
                             low_c: low,
                             high_c: high,
                             description: wmo(v["daily"]["weather_code"][i].as_i64().unwrap_or(-1))
@@ -338,6 +355,7 @@ pub fn parse(
                     }
                 }
             }
+            w.hourly = hourly::open_meteo(v, offset);
         }
         Provider::MetNorway => {
             let entries = v["properties"]["timeseries"]
@@ -364,6 +382,7 @@ pub fn parse(
             if now - updated > Duration::hours(12) {
                 return Err("预报模型更新时间超过 12 小时".into());
             }
+            w.hourly = hourly::met_norway(entries);
         }
         Provider::QWeather => {
             if v["code"].as_str() != Some("200") {
@@ -414,6 +433,7 @@ pub fn parse(
             }
         }
     }
+    hourly::sanitize(&mut w.hourly, now);
     Ok(w)
 }
 pub fn wmo(code: i64) -> &'static str {

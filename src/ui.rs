@@ -3,6 +3,7 @@ mod almanac_tip;
 mod calendar;
 mod dashboard;
 mod design;
+mod forecast;
 mod holiday_data;
 mod icons;
 mod page;
@@ -46,7 +47,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.8.1";
+const UI_REVISION: &str = "开发版 5.9";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
