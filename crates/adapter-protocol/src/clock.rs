@@ -82,6 +82,8 @@ pub struct Style {
     /// Zero lets the native layout measure the longest line.
     pub width: u32,
     #[serde(default)]
+    pub compact_two_lines: bool,
+    #[serde(default)]
     pub top_color: Option<String>,
     #[serde(default)]
     pub bottom_color: Option<String>,
@@ -391,6 +393,7 @@ mod tests {
                 font_family: "".into(),
                 font_size: 12,
                 width: 200,
+                compact_two_lines: false,
                 top_color: None,
                 bottom_color: None,
                 alignment: Default::default(),

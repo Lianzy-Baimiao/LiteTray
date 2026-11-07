@@ -1018,6 +1018,41 @@ fn volume_settings_switch_independently_and_survive_cache_and_save() {
     });
 }
 #[test]
+fn compact_clock_layout_choice_survives_navigation_save_and_frame_creation() {
+    on_isolated_desktop(|| unsafe {
+        let path =
+            std::env::temp_dir().join(format!("litetray-compact-{}.json", std::process::id()));
+        let mut app = app_for_check(false, 96, &path.with_extension("agenda"));
+        app.page = 1;
+        app.render();
+        assert_eq!(
+            app.selected(settings::COMPACT_LAYOUT),
+            0,
+            "old profiles default to single line"
+        );
+        for selected in [1, 0, 1] {
+            SendMessageW(
+                app.field(settings::COMPACT_LAYOUT),
+                CB_SETCURSEL,
+                selected,
+                0,
+            );
+            app.command(NAV + 7);
+            app.command(NAV + 1);
+            assert_eq!(app.selected(settings::COMPACT_LAYOUT), selected);
+            config::save(&path, &app.draft).unwrap();
+            let saved = config::load(&path).unwrap();
+            assert_eq!(saved.clock.compact_two_lines, selected == 1);
+            let frame = clock::frame(&saved.clock, "晴 24°C", Local::now());
+            assert_eq!(frame.style.compact_two_lines, selected == 1);
+            frame.validate().unwrap();
+        }
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+        std::fs::remove_file(path).unwrap();
+    });
+}
+#[test]
 fn settings_open_first_request_after_hidden_process_startup() {
     on_startup_desktop(SW_HIDE, || unsafe { startup_settings_case(false) });
 }

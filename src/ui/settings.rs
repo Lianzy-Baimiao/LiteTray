@@ -34,6 +34,7 @@ const WEATHER_SAMPLE: u16 = 225;
 pub(super) const OPEN_WEATHER_FORMAT: u16 = 226;
 pub(super) const VOLUME_SCROLL: u16 = 227;
 pub(super) const VOLUME_MUTE: u16 = 228;
+pub(super) const COMPACT_LAYOUT: u16 = 229;
 pub(super) const PRESETS: [(&str, &str, &str); 4] = [
     ("Windows 简洁", "%time%", "%date%"),
     ("日期与星期", "%time%", "%month2%/%day2% %weekday_short%"),
@@ -508,14 +509,24 @@ impl App {
                 SetPropW(hint, wide("LiteTray.Muted").as_ptr(), 1usize as HANDLE);
             }
             self.update_clock_samples();
-            self.label("点击时钟", 224, 426, half, 22);
+            let third = (total - 32) / 3;
+            self.label("点击时钟", 224, 426, third, 22);
             self.combo(
                 &["日历与天气", "系统日历"],
                 usize::from(c.clock.click_action == ClickAction::SystemCalendar),
                 208,
                 224,
                 453,
-                half,
+                third,
+            );
+            self.label("小型任务栏布局", 240 + third, 426, third, 22);
+            self.combo(
+                &["单行（默认）", "强制双行"],
+                usize::from(c.clock.compact_two_lines),
+                COMPACT_LAYOUT,
+                240 + third,
+                453,
+                third,
             );
             self.edit(
                 "时钟宽度 · 留空随内容",
@@ -525,9 +536,9 @@ impl App {
                     c.clock.width.to_string()
                 },
                 207,
-                right,
+                256 + third * 2,
                 426,
-                half,
+                third,
             );
             self.check("日历显示农历", c.clock.show_lunar, 204, 224, 492, half);
             self.check(

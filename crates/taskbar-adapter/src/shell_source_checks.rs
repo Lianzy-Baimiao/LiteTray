@@ -488,6 +488,7 @@ pub(crate) fn run() -> Result<serde_json::Value, String> {
             font_size: 12,
             font_family: "Segoe UI".into(),
             width: 240,
+            compact_two_lines: false,
             top_color: Some("#79C0FF".into()),
             bottom_color: Some("#FFCC88".into()),
             alignment: litetray_adapter_protocol::clock::Alignment::Center,

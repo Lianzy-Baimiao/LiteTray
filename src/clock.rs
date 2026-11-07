@@ -175,6 +175,7 @@ fn frame_using(config: &ClockConfig, render: impl Fn(&str) -> String) -> litetra
             font_family: config.font_family.clone(),
             font_size: config.font_size,
             width: config.width,
+            compact_two_lines: config.compact_two_lines,
             top_color: (!config.top_color.is_empty()).then(|| config.top_color.clone()),
             bottom_color: (!config.bottom_color.is_empty()).then(|| config.bottom_color.clone()),
             alignment: config.alignment,

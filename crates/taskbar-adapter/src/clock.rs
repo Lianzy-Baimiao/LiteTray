@@ -74,6 +74,7 @@ pub(crate) struct ClockLease {
     decorations: crate::clock_style::Decorations,
     native_text: Option<[crate::clock_text::TextLayer; 2]>,
     native_date: Option<Object>,
+    compact_two_lines: bool,
 }
 impl ClockLease {
     pub(crate) fn capture_native(
@@ -130,6 +131,7 @@ impl ClockLease {
                 decorations: crate::clock_style::Decorations::capture(time, date, container)?,
                 native_text: None,
                 native_date: None,
+                compact_two_lines: false,
             })
         }
     }
@@ -139,6 +141,7 @@ impl ClockLease {
         style_changed: bool,
     ) -> Result<(), String> {
         frame.validate()?;
+        self.compact_two_lines = frame.style.compact_two_lines;
         let result = (|| {
             let prepared = self.decorations.prepare(frame)?;
             if style_changed {
@@ -303,7 +306,7 @@ impl ClockLease {
                         .filter(|line| !line.is_empty())
                         .map(|line| line.replace(['\r', '\n'], " "))
                         .collect::<Vec<_>>()
-                        .join(" · "),
+                        .join(if self.compact_two_lines { "\n" } else { " · " }),
                 ))
             }
             None => Err("原生日期行可见性尚未就绪".into()),

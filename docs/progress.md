@@ -428,3 +428,13 @@ dist/Setup.exe 已更新为 5.11.0，BuildId 5.11.0-6310a1ec4012；安装、正�
 30 项协议测试、4 项适配器单元检查及 158 项发布包隔离 XAML 检查通过，Clippy 通过。已切换运行 5.11.5，宿主 PID 31856、Explorer PID 30276；主副屏均在 32 像素任务栏显示完整时间和天气，文字宽约 364.69、容器宽约 364.8 逻辑像素，无裁切。连续检查跨分钟持续走时、输入 active、托盘复制恢复、无结构或布局错误，QQ 兼容仍 disabled／hooks 0。正式配置及日程哈希不变，启动项及 Setup 已更新。
 
 证据：`local/ui5115-small-before.json`、`local/ui5115-small-red.txt`、`local/ui5115-native-red.txt`、`local/ui5115-release-xaml.txt`、`local/ui5115-deployment.json`、`local/ui5115-final-verified.json`。用户随后要求增加紧凑布局选择：默认单行，可强制双行，继续在后续版本实现。
+
+## 2026-11-08 · 开发版 5.11.6：可选小型任务栏双行
+
+“时钟显示”增加“小型任务栏布局”下拉选择，默认单行，也可强制双行；与点击行为、自动宽度并排，未增加页面高度。`clock.compact_two_lines` 缺省为 false，进入配置及原生帧。小型双行在可见时间 TextBlock 内显示两行，保留系统原有日期折叠状态；小型模式共用第一行文字样式，普通尺寸继续使用原来的两个文本控件及独立样式。修改选项保存后即时生效。
+
+64 项 UI 回归（含跨页缓存、保存、帧传递及页面布局）、30 项协议检查和 159 项发布包隔离 XAML 检查通过，Clippy 通过。新增原生回归验证强制双行、普通尺寸不产生多余行、再次切回小型时保持选择，以及无须重启切回单行。
+
+已实际切换 5.11.6，宿主 PID 6944、Explorer PID 31200。通过真实隐藏设置窗口选择双行并保存，在主副屏的 32 像素任务栏确认两行文字高度约 30.48、容器高约 31.2、宽约 205.6 逻辑像素，内容均在边界内，托盘输入继续 active。随后通过同一设置入口恢复默认单行并保存、关闭，无重复未保存提示。正式配置原有字段语义逐项比对不变，仅新增布局选项 false；日程保留。启动项和 `dist/Setup.exe` 已更新为 5.11.6。
+
+证据：`local/ui5116-ui-tests.txt`、`local/ui5116-release-xaml.txt`、`local/ui5116-deployment.json`、`local/ui5116-compact-two.json`、`local/ui5116-final-verified.json`。

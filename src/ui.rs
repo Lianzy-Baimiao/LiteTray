@@ -50,7 +50,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.11.5";
+const UI_REVISION: &str = "开发版 5.11.6";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -1061,6 +1061,7 @@ impl App {
                 c.clock.show_almanac = self.checked(220);
                 c.clock.volume_scroll = self.checked(settings::VOLUME_SCROLL);
                 c.clock.volume_mute = self.checked(settings::VOLUME_MUTE);
+                c.clock.compact_two_lines = self.selected(settings::COMPACT_LAYOUT) == 1;
                 c.clock.width = if self.text(207).trim().is_empty() {
                     0
                 } else {

@@ -89,6 +89,7 @@ fn frame() -> Frame {
             font_family: "Segoe UI".into(),
             font_size: 13,
             width: 260,
+            compact_two_lines: false,
             top_color: None,
             bottom_color: None,
             alignment: Default::default(),

@@ -113,6 +113,7 @@ pub(crate) fn run() -> Result<Vec<&'static str>, String> {
         "native_clock_drop_releases_text_override",
         "compact_clock_initial_display_and_live_size_switches",
         "compact_clock_preserves_native_visibility_and_restore",
+        "compact_clock_optional_two_lines_and_live_preference_changes",
     ])
 }
 
@@ -172,6 +173,48 @@ fn compact_display() -> Result<(), String> {
             "respect Shell's date visibility",
         )?;
     }
+    let mut frame: litetray_adapter_protocol::clock::Frame = serde_json::from_value(serde_json::json!({
+        "text": {"top": "12:34", "bottom": "晴 24°C"},
+        "style": {"font_family": "Segoe UI", "font_size": 12, "width": 0, "compact_two_lines": true}
+    })).map_err(|e| e.to_string())?;
+    lease.update(&frame, true)?;
+    require(
+        text(&time)? == "12:34\n晴 24°C",
+        "explicit compact two-line display",
+    )?;
+    unsafe {
+        let native = StringHandle::new("Latest native time")?;
+        check(
+            (time_text.table::<ITextBlock_Vtbl>().SetText)(time_text.raw(), native.0),
+            "native refresh with forced two lines",
+        )?;
+        check(
+            (element.table::<IUIElement_Vtbl>().SetVisibility)(element.raw(), Visibility(0)),
+            "return to regular taskbar",
+        )?;
+    }
+    lease.update(&frame, false)?;
+    require(
+        text(&time)? == "12:34" && text(&date)? == "晴 24°C",
+        "two-line option does not duplicate rows on regular taskbars",
+    )?;
+    unsafe {
+        check(
+            (element.table::<IUIElement_Vtbl>().SetVisibility)(element.raw(), Visibility(1)),
+            "return to compact taskbar",
+        )?;
+    }
+    lease.update(&frame, false)?;
+    require(
+        text(&time)? == "12:34\n晴 24°C",
+        "two-line preference survives size change",
+    )?;
+    frame.style.compact_two_lines = false;
+    lease.update(&frame, true)?;
+    require(
+        text(&time)? == "12:34 · 晴 24°C",
+        "switch back to single line without restarting",
+    )?;
     lease.tick("", "晴 25°C")?;
     require(text(&time)? == "晴 25°C", "compact bottom-only format")?;
     lease.restore()?;
