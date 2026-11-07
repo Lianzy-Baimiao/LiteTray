@@ -37,6 +37,7 @@ $documents += @('docs/hourly-weather.md','docs/images/hourly-weather-light.png')
 $documents += @('docs/text-rendering.md')
 $documents += @('docs/installer.md')
 $documents += @('docs/festivals.md')
+$documents += @('docs/weather-format.md')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null

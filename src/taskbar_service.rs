@@ -39,7 +39,7 @@ struct Pending<P> {
 }
 struct Driver<B: Backend> {
     config: Config,
-    weather: String,
+    weather: Option<crate::weather::WeatherResult>,
     enabled: bool,
     revision: u64,
     recovery: Recovery,
@@ -99,7 +99,7 @@ impl<B: Backend> Service<B> {
             driver: RefCell::new(Some(Driver {
                 enabled: config.tray.clock_enabled || config.tray.enabled && config.tray.show_icons,
                 config,
-                weather: "天气暂无数据".into(),
+                weather: None,
                 revision: 0,
                 recovery: Recovery::connecting(now),
                 connection: None,
@@ -151,9 +151,10 @@ impl<B: Backend> Service<B> {
             Ok(())
         })
     }
-    pub fn set_weather(&self, weather: &str) {
-        if let Some(driver) = self.driver.borrow_mut().as_mut() {
-            driver.weather = weather.chars().take(1024).collect();
+    pub fn set_weather(&self, weather: Option<&crate::weather::WeatherResult>) {
+        if let Some(driver) = self.driver.borrow_mut().as_mut()
+            && driver.weather.as_ref() != weather {
+            driver.weather = weather.cloned();
         }
     }
     /// Coalesce display/Explorer/power notifications, including modal dialogs.
@@ -284,7 +285,7 @@ impl<B: Backend> Driver<B> {
         if matches!(self.recovery.phase(), Phase::Running { .. })
             && let Some(connection) = &self.connection
         {
-            let frame = clock::frame(&self.config.clock, &self.weather, wall_time);
+            let frame = clock::frame_with_weather(&self.config.clock, self.weather.as_ref(), wall_time);
             match connection.update(&frame) {
                 Ok(()) => self.recovery.healthy(now),
                 Err(error) => self.recovery.fault(&error),
@@ -310,7 +311,7 @@ impl<B: Backend> Driver<B> {
                 && self.connection.is_none()
                 && self.recovery.ready(now)
             {
-                let frame = clock::frame(&self.config.clock, &self.weather, wall_time);
+                let frame = clock::frame_with_weather(&self.config.clock, self.weather.as_ref(), wall_time);
                 let connected = completed
                     .map_err(|error| ConnectFailure {
                         error,
@@ -455,7 +456,9 @@ mod tests {
     fn hidden_host_formats_and_updates_seconds_without_view_calls() {
         let (service, native, _) = fixture();
         connect(&service, &native);
-        service.set_weather("晴 26°C");
+        let mut weather = clock::weather_format::sample(time(0));
+        weather.weather.as_mut().unwrap().temperature_c = 26.;
+        service.set_weather(Some(&weather));
         for seconds in 1..=65 {
             service.tick(seconds * 1000, time(seconds as i64)).unwrap();
         }
@@ -465,6 +468,32 @@ mod tests {
         assert_eq!(frames[65].text.bottom, "晴 26°C");
         assert_eq!(service.snapshot().status, Status::Running);
         assert!(service.tick_millis(time(65)) <= 1000);
+    }
+    #[test]
+    fn structured_weather_reaches_both_lines_and_tooltip_without_reconnecting() {
+        let (service, native, mut config) = fixture();
+        config.clock.weather_format = "%weather_condition% %weather_temp:1% · 湿度 %weather_humidity%".into();
+        config.clock.top_line = "%time% %weather_temp%".into();
+        config.clock.tooltip_line = "%weather_city% %weather_source%\n%weather_wind_ms:1%".into();
+        service.configure(config.clone(), 0).unwrap();
+        let weather = clock::weather_format::sample(time(0));
+        service.set_weather(Some(&weather));
+        connect(&service, &native);
+        {
+            let frames = native.frames.borrow();
+            let frame = frames.last().unwrap();
+            assert!(frame.text.top.ends_with("23°C"));
+            assert_eq!(frame.text.bottom, "晴 23.4°C · 湿度 68%");
+            assert_eq!(frame.text.tooltip.as_deref(), Some("示例城市 Open-Meteo\n3.5 m/s"));
+        }
+        config.clock.weather_format = "体感 %weather_feels:1%".into();
+        service.configure(config, 2).unwrap();
+        service.tick(3, time(1)).unwrap();
+        assert_eq!(native.frames.borrow().last().unwrap().text.bottom, "体感 25.1°C");
+        assert_eq!(native.connects.get(), 1);
+        service.set_weather(None);
+        service.tick(4, time(2)).unwrap();
+        assert_eq!(native.frames.borrow().last().unwrap().text.bottom, "天气暂无数据");
     }
     #[test]
     fn disabling_during_preflight_prevents_late_start() {

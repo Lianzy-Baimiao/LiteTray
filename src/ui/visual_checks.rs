@@ -1066,7 +1066,7 @@ fn ui_audit_text_and_geometry_across_pages_and_timer_tabs() {
                             failures.push(format!("{tag}: unnecessary outer scrollbar"));
                         }
                         audit_native_layout(app.hwnd, &tag, &mut failures);
-                        if page >= 8 {
+                        if matches!(page, 8 | 9) {
                             for tab in 0..if page == 9 { 4 } else { 6 } {
                                 let view = app.field(agenda::ID);
                                 SendMessageW(
@@ -1187,7 +1187,7 @@ unsafe fn audit_native_layout(parent: HWND, tag: &str, failures: &mut Vec<String
                         } else if color_edit {
                             20
                         } else if is_button {
-                            if (100..110).contains(&id) { 58 } else { 20 }
+                            if (100..111).contains(&id) { 58 } else { 20 }
                         } else {
                             0
                         };
@@ -1544,6 +1544,52 @@ fn settings_switches_preserve_chrome_drafts_and_native_font_choices() {
 }
 
 #[test]
+fn weather_format_controls_preserve_selection_precision_and_saved_draft() {
+    on_isolated_desktop(|| unsafe {
+        let path = std::env::temp_dir().join(format!("litetray-weather-format-{}.json", std::process::id()));
+        let mut app = app_for_check(false, 96, &path.with_extension("agenda"));
+        app.page = 1;
+        app.render();
+        app.command(settings::OPEN_WEATHER_FORMAT);
+        assert_eq!(app.page, 10);
+        assert_eq!(app.text(settings::WEATHER_FORMAT), app.saved.clock.weather_format);
+        SendMessageW(app.field(settings::WEATHER_PRESET), CB_SETCURSEL, 2, 0);
+        app.choose_weather_format(settings::WEATHER_PRESET);
+        assert!(app.draft.clock.weather_format.contains("%weather_humidity%"));
+        SendMessageW(app.field(settings::WEATHER_PRECISION), CB_SETCURSEL, 2, 0);
+        app.choose_weather_format(settings::WEATHER_PRECISION);
+        assert!(app.draft.clock.weather_format.contains("%weather_temp:1%"));
+        set_text(app.field(settings::WEATHER_FORMAT), "前 后");
+        SendMessageW(app.field(settings::WEATHER_FORMAT), EM_SETSEL, 1, 2);
+        SendMessageW(app.field(settings::WEATHER_FIELD), CB_SETCURSEL, 2, 0);
+        app.choose_weather_format(settings::WEATHER_FIELD);
+        assert_eq!(app.draft.clock.weather_format, "前%weather_temp:1%后");
+        app.command(NAV + 7);
+        app.command(NAV + 10);
+        assert_eq!(app.text(settings::WEATHER_FORMAT), "前%weather_temp:1%后");
+        config::save(&path, &app.draft).unwrap();
+        assert_eq!(config::load(&path).unwrap().clock.weather_format, "前%weather_temp:1%后");
+        set_text(app.field(settings::WEATHER_FORMAT), "%weather%");
+        app.collect_page().unwrap();
+        assert!(app.draft.validate().is_err());
+        assert!(clock::validate_template("%weather_temp:1% %weather_rain% %weather_source%").is_ok());
+        std::fs::remove_file(path).unwrap();
+        if let Some(output) = std::env::var_os("LITETRAY_WEATHER_FORMAT_RENDER_DIR") {
+            let output = std::path::PathBuf::from(output);
+            std::fs::create_dir_all(&output).unwrap();
+            for dark in [false, true] {
+                app.draft.appearance = if dark { Appearance::Dark } else { Appearance::Light };
+                app.draft.clock.weather_format = clock::weather_format::PRESETS[1].1.into();
+                app.recreate_resources();
+                app.render();
+                write_window(app.hwnd, &output.join(format!("weather-format-{}.bmp", if dark { "dark" } else { "light" })));
+            }
+        }
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+    });
+}
+#[test]
 fn settings_date_patterns_preview_validate_and_survive_navigation() {
     on_isolated_desktop(|| unsafe {
         let mut app = app_for_check(
@@ -1817,7 +1863,7 @@ fn render_settings_artifacts() {
                         if dark { "dark" } else { "light" }
                     )),
                 );
-                if page >= 8 {
+                if matches!(page, 8 | 9) {
                     SendMessageW(app.page_host, WM_VSCROLL, SB_BOTTOM as usize, 0);
                     write_window(
                         app.hwnd,

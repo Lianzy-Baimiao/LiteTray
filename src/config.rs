@@ -48,6 +48,7 @@ pub struct ClockConfig {
     pub bottom_line: String,
     pub date_format: String,
     pub time_format: String,
+    pub weather_format: String,
     pub show_seconds: bool,
     pub show_lunar: bool,
     pub show_almanac: bool,
@@ -69,6 +70,7 @@ impl Default for ClockConfig {
             bottom_line: "%weather%".into(),
             date_format: "yyyy/MM/dd".into(),
             time_format: "HH:mm".into(),
+            weather_format: "%weather_condition% %weather_temp%".into(),
             show_seconds: true,
             show_lunar: true,
             show_almanac: true,
@@ -252,6 +254,7 @@ impl Config {
         litetray_adapter_protocol::clock::validate_font_family(&self.clock.font_family)?;
         crate::clock::validate_pattern(&self.clock.date_format, true)?;
         crate::clock::validate_pattern(&self.clock.time_format, false)?;
+        crate::clock::weather_format::validate(&self.clock.weather_format)?;
         self.clock.top_style.validate()?;
         self.clock.bottom_style.validate()?;
         if self.clock.top_line.len() > 1024

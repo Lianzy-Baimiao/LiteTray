@@ -11,7 +11,7 @@ pub(super) struct PageKey {
 }
 impl PageKey {
     pub fn new(page: usize, layout: (i32, i32, u32), config: &Config) -> Option<Self> {
-        matches!(page, 1 | 7).then(|| Self {
+        matches!(page, 1 | 7 | 10).then(|| Self {
             page,
             layout,
             clock: serde_json::to_vec(&config.clock).expect("clock settings are serializable"),
@@ -26,6 +26,12 @@ pub(super) struct CachedPage {
 }
 
 pub(super) const PRESET: u16 = 830;
+pub(super) const WEATHER_FORMAT: u16 = 221;
+pub(super) const WEATHER_PRESET: u16 = 222;
+pub(super) const WEATHER_FIELD: u16 = 223;
+pub(super) const WEATHER_PRECISION: u16 = 224;
+const WEATHER_SAMPLE: u16 = 225;
+pub(super) const OPEN_WEATHER_FORMAT: u16 = 226;
 pub(super) const PRESETS: [(&str, &str, &str); 4] = [
     ("Windows 简洁", "%time%", "%date%"),
     ("日期与星期", "%time%", "%month2%/%day2% %weekday_short%"),
@@ -444,12 +450,13 @@ impl App {
                 half,
             );
             self.caption(
-                "可组合 %time% 时间、%date% 日期、%weekday% 星期、%weather% 天气",
+                "%time% 时间 · %date% 日期 · %weekday% 星期 · %weather% 天气",
                 224,
                 278,
-                total,
+                total - 150,
                 22,
             );
+            self.button("设置天气格式", OPEN_WEATHER_FORMAT, width - 172, 274, 136);
             for (id, value, x) in [
                 (214, c.clock.date_format.clone(), 224),
                 (215, clock::effective_time_pattern(&c.clock), right),
@@ -577,6 +584,87 @@ impl App {
                         set_text(self.field(id + 2), &error);
                     }
                 }
+            }
+        }
+    }
+    pub(super) unsafe fn weather_format_settings(&mut self, c: &Config, width: i32) {
+        unsafe {
+            let total = width - 260;
+            let half = (total - 24) / 2;
+            self.clock_sample(c, width);
+            self.label("天气预设", 224, 178, 110, 22);
+            let mut presets = vec!["自定义"];
+            presets.extend(clock::weather_format::PRESETS.iter().map(|(name, _)| *name));
+            self.combo(&presets, 0, WEATHER_PRESET, 340, 173, 220);
+            self.caption("选择后可继续编辑，保存后应用到任务栏。", 578, 178, total - 354, 22);
+            self.edit("%weather% · 天气内容模板", &c.clock.weather_format, WEATHER_FORMAT, 224, 220, total);
+            SendMessageW(self.field(WEATHER_FORMAT), EM_SETLIMITTEXT, 1024, 0);
+            self.label("插入属性 · 添加到光标位置", 224, 294, half, 22);
+            let mut fields = vec!["选择天气属性".to_string()];
+            fields.extend(clock::weather_format::FIELDS.iter().map(|(token, label, _)| format!("{label}  %{token}%")));
+            self.combo(&fields.iter().map(String::as_str).collect::<Vec<_>>(), 0, WEATHER_FIELD, 224, 321, half);
+            SendMessageW(self.field(WEATHER_FIELD), CB_SETDROPPEDWIDTH, self.scale(470) as usize, 0);
+            SendMessageW(self.field(WEATHER_FIELD), CB_SETMINVISIBLE, 12, 0);
+            self.label("数值精度 · 也可单独写 :0、:1、:2", 248 + half, 294, half, 22);
+            self.combo(&["保留各属性精度", "整数", "1 位小数", "2 位小数"], 0,
+                WEATHER_PRECISION, 248 + half, 321, half);
+            self.control("STATIC", "", WEATHER_SAMPLE, SS_LEFT as u32 | SS_ENDELLIPSIS,
+                224, 369, total, 26);
+            self.divider(224, 411, total);
+            self.section("如何组合", 224, 429, total);
+            self.caption("文字、空格和分隔符都可以自由输入。数值自带单位，例如：", 224, 469, total, 24);
+            self.label("%weather_temp:1% → 23.4°C    %weather_humidity% → 68%", 224, 501, total, 24);
+            self.caption("这些属性也可直接放入时钟第一行、第二行或悬停提示。", 224, 537, total, 24);
+            self.caption("来源缺少的属性显示 —；今日温差与小时降雨取对应日期预报。", 224, 569, total, 24);
+            self.update_weather_sample();
+        }
+    }
+    pub(super) unsafe fn update_weather_sample(&self) {
+        if self.page != 10 { return; }
+        unsafe {
+            let template = self.text(WEATHER_FORMAT);
+            let summary = match clock::weather_format::validate(&template) {
+                Ok(()) => {
+                    let now = Local::now();
+                    format!("示例 · {}", clock::weather_format::format(&template,
+                        Some(&clock::weather_format::sample(now)), now))
+                }
+                Err(error) => error,
+            };
+            set_text(self.field(WEATHER_SAMPLE), &summary);
+            let preset = clock::weather_format::PRESETS.iter()
+                .position(|(_, value)| *value == template).map_or(0, |index| index + 1);
+            SendMessageW(self.field(WEATHER_PRESET), CB_SETCURSEL, preset, 0);
+        }
+    }
+    pub(super) unsafe fn choose_weather_format(&mut self, id: u16) {
+        unsafe {
+            let index = self.selected(id);
+            match id {
+                WEATHER_PRESET => {
+                    if let Some((_, template)) = index.checked_sub(1).and_then(|i| clock::weather_format::PRESETS.get(i)) {
+                        set_text(self.field(WEATHER_FORMAT), template);
+                    }
+                }
+                WEATHER_FIELD => {
+                    if let Some((token, _, numeric)) = index.checked_sub(1).and_then(|i| clock::weather_format::FIELDS.get(i)) {
+                        let precision = self.selected(WEATHER_PRECISION);
+                        let token = if *numeric && precision > 0 { format!("%{token}:{}%", precision - 1) }
+                            else { format!("%{token}%") };
+                        SendMessageW(self.field(WEATHER_FORMAT), EM_REPLACESEL, 1, wide(&token).as_ptr() as isize);
+                        SetFocus(self.field(WEATHER_FORMAT));
+                    }
+                    SendMessageW(self.field(WEATHER_FIELD), CB_SETCURSEL, 0, 0);
+                }
+                WEATHER_PRECISION if index > 0 => {
+                    let template = clock::weather_format::with_precision(&self.text(WEATHER_FORMAT), index - 1);
+                    set_text(self.field(WEATHER_FORMAT), &template);
+                }
+                _ => {}
+            }
+            if self.collect_page().is_ok() {
+                widgets::update_preview(self.field(widgets::PREVIEW), &self.draft.clock);
+                self.update_weather_sample();
             }
         }
     }

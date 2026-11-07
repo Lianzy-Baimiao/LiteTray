@@ -1,5 +1,6 @@
 use crate::config::ClockConfig;
 use chrono::{DateTime, Datelike, Local, Timelike};
+pub mod weather_format;
 const TOKENS: [&str; 18] = [
     "date",
     "time",
@@ -151,13 +152,24 @@ pub fn frame(
     weather: &str,
     now: DateTime<Local>,
 ) -> litetray_adapter_protocol::clock::Frame {
+    frame_using(config, |template| format(template, config, now, weather))
+}
+pub fn frame_with_weather(
+    config: &ClockConfig,
+    weather: Option<&crate::weather::WeatherResult>,
+    now: DateTime<Local>,
+) -> litetray_adapter_protocol::clock::Frame {
+    let summary = weather_format::format(&config.weather_format, weather, now);
+    frame_using(config, |template| format_using(template, config, now, &summary, weather))
+}
+fn frame_using(config: &ClockConfig, render: impl Fn(&str) -> String) -> litetray_adapter_protocol::clock::Frame {
     use litetray_adapter_protocol::clock::{Frame, Style, Text};
     Frame {
         text: Text {
-            top: format(&config.top_line, config, now, weather),
-            bottom: format(&config.bottom_line, config, now, weather),
+            top: render(&config.top_line),
+            bottom: render(&config.bottom_line),
             tooltip: (!config.tooltip_line.is_empty())
-                .then(|| format(&config.tooltip_line, config, now, weather)),
+                .then(|| render(&config.tooltip_line)),
         },
         style: Style {
             font_family: config.font_family.clone(),
@@ -181,7 +193,7 @@ pub fn validate_template(template: &str) -> Result<(), String> {
         let tail = &rest[start + 1..];
         let end = tail.find('%').ok_or("模板中的 % 未闭合")?;
         let token = &tail[..end];
-        if !TOKENS.contains(&token) {
+        if !TOKENS.contains(&token) && !weather_format::supports(token) {
             return Err(format!("暂不支持模板变量 %{token}%"));
         }
         rest = &tail[end + 1..];
@@ -189,6 +201,10 @@ pub fn validate_template(template: &str) -> Result<(), String> {
     Ok(())
 }
 pub fn format(template: &str, config: &ClockConfig, now: DateTime<Local>, weather: &str) -> String {
+    format_using(template, config, now, weather, None)
+}
+fn format_using(template: &str, config: &ClockConfig, now: DateTime<Local>, weather: &str,
+    result: Option<&crate::weather::WeatherResult>) -> String {
     let weekday = [
         "星期一",
         "星期二",
@@ -198,17 +214,9 @@ pub fn format(template: &str, config: &ClockConfig, now: DateTime<Local>, weathe
         "星期六",
         "星期日",
     ][now.weekday().num_days_from_monday() as usize];
-    // A single pass keeps percent signs in provider text from becoming template code.
-    let mut out = String::new();
-    let mut rest = template;
-    while let Some(start) = rest.find('%') {
-        out.push_str(&rest[..start]);
-        let tail = &rest[start + 1..];
-        let Some(end) = tail.find('%') else {
-            out.push_str(&rest[start..]);
-            return out;
-        };
-        match &tail[..end] {
+    substitute(template, |token| {
+        let mut out = String::new();
+        match token {
             "date" => out.push_str(&format_pattern(&config.date_format, true, now)),
             "time" => {
                 out.push_str(&format_pattern(&config.time_format, false, now));
@@ -235,8 +243,24 @@ pub fn format(template: &str, config: &ClockConfig, now: DateTime<Local>, weathe
             ),
             "percent" => out.push('%'),
             "newline" => out.push('\n'),
-            _ => out.push_str(&rest[start..start + end + 2]),
+            token if weather_format::supports(token) => out.push_str(&weather_format::value(token, result, now)),
+            _ => out.push_str(&format!("%{token}%")),
         }
+        out
+    })
+}
+fn substitute(template: &str, mut value: impl FnMut(&str) -> String) -> String {
+    // A single pass keeps percent signs in provider text from becoming template code.
+    let mut out = String::new();
+    let mut rest = template;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start + 1..];
+        let Some(end) = tail.find('%') else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        out.push_str(&value(&tail[..end]));
         rest = &tail[end + 1..];
     }
     out.push_str(rest);

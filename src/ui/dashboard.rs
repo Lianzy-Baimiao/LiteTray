@@ -2666,6 +2666,9 @@ mod visual_checks {
                             feels_like_c: Some(26.),
                             humidity_percent: Some(68.),
                             wind_kmh: Some(12.),
+                            wind_degrees: Some(135.),
+                            pressure_hpa: Some(1013.),
+                            visibility_km: None,
                             description: "多云".into(),
                             kind: "界面验证示例".into(),
                             days: (0..3)

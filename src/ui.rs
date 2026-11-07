@@ -48,7 +48,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.9.2";
+const UI_REVISION: &str = "开发版 5.10";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -67,7 +67,7 @@ const UPDATE: u16 = 31;
 const OPEN_RELEASE: u16 = 32;
 const EXIT: u16 = 33;
 const CALENDAR: u16 = 34;
-const PAGES: [&str; 10] = [
+const PAGES: [&str; 11] = [
     "日历与天气",
     "时钟显示",
     "多屏托盘",
@@ -78,6 +78,7 @@ const PAGES: [&str; 10] = [
     "时钟样式",
     "日程与待办",
     "闹钟与专注",
+    "天气格式",
 ];
 thread_local! {static STATE:RefCell<Option<App>>=const{RefCell::new(None)};}
 // Independent of App's modal-dialog borrow. Each native call retains its own
@@ -163,6 +164,7 @@ fn secondary_page() -> usize {
         Some("agenda") => 9,
         Some("timers") => 10,
         Some("clock") => 2,
+        Some("weather-format") => 11,
         Some("appearance") => 5,
         _ => 0,
     }
@@ -881,22 +883,23 @@ impl App {
                 SendMessageW(brand, WM_SETFONT, self.title_font as usize, 1);
                 self.label("你的时间与桌面", 26, 72, 194, 25);
                 for (i, y) in [
-                    (0, 138),
-                    (8, 180),
-                    (9, 222),
-                    (1, 316),
-                    (7, 358),
-                    (2, 400),
+                    (0, 132),
+                    (8, 170),
+                    (9, 208),
+                    (1, 290),
+                    (7, 328),
+                    (10, 366),
+                    (2, 404),
                     (3, 442),
-                    (4, 536),
-                    (5, 578),
-                    (6, 620),
+                    (4, 530),
+                    (5, 568),
+                    (6, 606),
                 ] {
                     self.button(PAGES[i], NAV + i as u16, 16, y, 208);
                 }
                 self.label("日常", 28, 108, 170, 22);
-                self.label("任务栏", 28, 286, 170, 22);
-                self.label("应用", 28, 506, 170, 22);
+                self.label("任务栏", 28, 260, 170, 22);
+                self.label("应用", 28, 500, 170, 22);
                 self.label(
                     &format!("{UI_REVISION}  v{}", env!("CARGO_PKG_VERSION")),
                     24,
@@ -933,6 +936,7 @@ impl App {
                 "调整每一行的字体、颜色和对齐方式。",
                 "记录待办、日程和重要日期。点击保存后保存在本机。",
                 "专注计时、定时提醒与最近提醒记录。",
+                "组合天气属性，决定任务栏里 %weather% 的显示内容。",
             ];
             set_text(self.field(902), descriptions[self.page]);
             let c = self.draft.clone();
@@ -958,6 +962,7 @@ impl App {
                         }
                     }
                     1 => self.clock_settings(&c, width),
+                    10 => self.weather_format_settings(&c, width),
                     2 => self.tray_settings(&c, width),
                     3 => self.weather_settings(&c, width),
                     4 => self.general_settings(&c, width),
@@ -1004,9 +1009,9 @@ impl App {
             );
             ShowWindow(
                 self.field(SAVE),
-                if self.page < 8 { SW_SHOWNA } else { SW_HIDE },
+                if matches!(self.page, 8 | 9) { SW_HIDE } else { SW_SHOWNA },
             );
-            if (1..8).contains(&self.page) && !reused {
+            if ((1..8).contains(&self.page) || self.page == 10) && !reused {
                 page::finish(self.page_host);
             }
             self.update_views();
@@ -1061,6 +1066,7 @@ impl App {
                     ClickAction::SystemCalendar
                 };
             }
+            10 => c.clock.weather_format = self.text(settings::WEATHER_FORMAT),
             2 => {
                 c.tray.scope = match self.selected(301) {
                     0 => MonitorScope::All,
@@ -1231,12 +1237,9 @@ impl App {
         unsafe {
             agenda::tick(self.field(agenda::ID));
             self.update_clock_samples();
-            let summary = self
-                .weather
-                .as_ref()
-                .and_then(|r| r.weather.as_ref())
-                .map(|w| w.summary())
-                .unwrap_or_else(|| "天气暂无数据".into());
+            let weather = self.saved.weather.enabled.then_some(self.weather.as_ref()).flatten()
+                .filter(|r| r.weather.as_ref().is_none_or(|w| w.city == self.saved.weather.city
+                    && w.latitude == self.saved.weather.latitude && w.longitude == self.saved.weather.longitude));
             if self.page == 0 {
                 dashboard::update(
                     self.field(dashboard::ID),
@@ -1246,10 +1249,10 @@ impl App {
                 );
             }
             if let Some(preview) = &self.preview {
-                let _ = preview.update(&clock_preview::frame(&self.draft.clock, &summary));
+                let _ = preview.update(&clock::frame_with_weather(&self.draft.clock, weather, Local::now()));
             }
             if let Some(taskbar) = &self.taskbar {
-                taskbar.set_weather(&summary);
+                taskbar.set_weather(weather);
                 if self.page == 1 {
                     let state = taskbar.snapshot();
                     set_text(
@@ -1726,6 +1729,7 @@ impl App {
                 return false;
             }
             match id {
+                settings::OPEN_WEATHER_FORMAT => { self.command(NAV + 10); }
                 weather_location::SEARCH | weather_location::NEARBY if self.page == 3 => {
                     self.start_location(id == weather_location::NEARBY);
                 }
@@ -1862,18 +1866,13 @@ impl App {
                         self.set_status(e);
                         return false;
                     }
-                    let summary = self
-                        .weather
-                        .as_ref()
-                        .and_then(|r| r.weather.as_ref())
-                        .map(|w| w.summary())
-                        .unwrap_or_else(|| "天气暂无数据".into());
+                    let weather = self.saved.weather.enabled.then_some(self.weather.as_ref()).flatten();
                     if let Some(preview) = &self.preview {
                         preview.show();
                     } else {
                         match clock_preview::Preview::open(
                             self.hwnd,
-                            clock_preview::frame(&self.draft.clock, &summary),
+                            clock::frame_with_weather(&self.draft.clock, weather, Local::now()),
                         ) {
                             Ok(preview) => {
                                 let preview = Rc::new(preview);
@@ -2345,6 +2344,11 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 }
                 WM_COMMAND => {
                     let id = (w & 0xffff) as u16;
+                    if app.page == 10 && (w >> 16) as u32 == CBN_SELCHANGE
+                        && matches!(id, settings::WEATHER_PRESET | settings::WEATHER_FIELD | settings::WEATHER_PRECISION) {
+                        app.choose_weather_format(id);
+                        return Some(0);
+                    }
                     if app.page == 3
                         && id == weather_location::QUERY
                         && (w >> 16) as u32 == EN_CHANGE
@@ -2359,12 +2363,13 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                         app.choose_location();
                         return Some(0);
                     }
-                    if matches!(app.page, 1 | 7)
+                    if matches!(app.page, 1 | 7 | 10)
                         && matches!((w >> 16) as u32, EN_CHANGE | CBN_SELCHANGE)
                     {
                         if app.collect_page().is_ok() {
                             widgets::update_preview(app.field(widgets::PREVIEW), &app.draft.clock);
                             app.update_clock_samples();
+                            app.update_weather_sample();
                         }
                         return Some(0);
                     }
@@ -2730,9 +2735,9 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                 design::rounded(item.hDC, item.rcItem, color, border, s(10));
                 let mut rect = item.rcItem;
                 if nav {
-                    let icons = [
+                    let icons: [&str; PAGES.len()] = [
                         "\u{e787}", "\u{e823}", "\u{e7f4}", "\u{e753}", "\u{e713}", "\u{e946}",
-                        "\u{e8b5}", "\u{e790}", "\u{e8fd}", "\u{e916}",
+                        "\u{e8b5}", "\u{e790}", "\u{e8fd}", "\u{e916}", "\u{e753}",
                     ];
                     let icon_font = make_font(s(17), 400, "Segoe MDL2 Assets");
                     design::text(

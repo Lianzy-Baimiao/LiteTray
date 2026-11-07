@@ -28,6 +28,12 @@ pub struct Weather {
     pub feels_like_c: Option<f64>,
     pub humidity_percent: Option<f64>,
     pub wind_kmh: Option<f64>,
+    #[serde(default)]
+    pub wind_degrees: Option<f64>,
+    #[serde(default)]
+    pub pressure_hpa: Option<f64>,
+    #[serde(default)]
+    pub visibility_km: Option<f64>,
     pub description: String,
     pub kind: String,
     pub days: Vec<DailyForecast>,
@@ -238,7 +244,7 @@ fn fetch(
     let mut headers = Vec::new();
     match provider {
         Provider::OpenMeteo => {
-            url.query_pairs_mut().append_pair("latitude",&c.latitude.to_string()).append_pair("longitude",&c.longitude.to_string()).append_pair("current","temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m").append_pair("daily","temperature_2m_max,temperature_2m_min,weather_code").append_pair("hourly","temperature_2m,weather_code,precipitation_probability").append_pair("timezone","auto").append_pair("timeformat","unixtime").append_pair("forecast_days","3");
+            url.query_pairs_mut().append_pair("latitude",&c.latitude.to_string()).append_pair("longitude",&c.longitude.to_string()).append_pair("current","temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,pressure_msl").append_pair("daily","temperature_2m_max,temperature_2m_min,weather_code").append_pair("hourly","temperature_2m,weather_code,precipitation_probability").append_pair("timezone","auto").append_pair("timeformat","unixtime").append_pair("forecast_days","3");
         }
         Provider::MetNorway => {
             url.query_pairs_mut()
@@ -313,6 +319,9 @@ pub fn parse(
         feels_like_c: None,
         humidity_percent: None,
         wind_kmh: None,
+        wind_degrees: None,
+        pressure_hpa: None,
+        visibility_km: None,
         description: String::new(),
         kind: "当前观测".into(),
         days: Vec::new(),
@@ -330,6 +339,8 @@ pub fn parse(
             w.feels_like_c = number(&x["apparent_temperature"]);
             w.humidity_percent = number(&x["relative_humidity_2m"]);
             w.wind_kmh = number(&x["wind_speed_10m"]);
+            w.wind_degrees = number(&x["wind_direction_10m"]);
+            w.pressure_hpa = number(&x["pressure_msl"]);
             w.description = wmo(x["weather_code"].as_i64().unwrap_or(-1)).into();
             w.kind = "当前预估".into();
             if let Some(dates) = v["daily"]["time"].as_array() {
@@ -371,6 +382,8 @@ pub fn parse(
             w.temperature_c = required(&d["air_temperature"], "air_temperature")?;
             w.humidity_percent = number(&d["relative_humidity"]);
             w.wind_kmh = number(&d["wind_speed"]).map(|x| x * 3.6);
+            w.wind_degrees = number(&d["wind_from_direction"]);
+            w.pressure_hpa = number(&d["air_pressure_at_sea_level"]);
             w.kind = "逐小时预报".into();
             let symbol = x["data"]["next_1_hours"]["summary"]["symbol_code"]
                 .as_str()
@@ -394,6 +407,9 @@ pub fn parse(
             w.feels_like_c = number(&x["feelsLike"]);
             w.humidity_percent = number(&x["humidity"]);
             w.wind_kmh = number(&x["windSpeed"]);
+            w.wind_degrees = number(&x["wind360"]);
+            w.pressure_hpa = number(&x["pressure"]);
+            w.visibility_km = number(&x["vis"]);
             w.description = x["text"].as_str().unwrap_or("天气未知").into();
         }
         Provider::OpenWeather => {
@@ -405,6 +421,9 @@ pub fn parse(
             w.feels_like_c = number(&v["main"]["feels_like"]);
             w.humidity_percent = number(&v["main"]["humidity"]);
             w.wind_kmh = number(&v["wind"]["speed"]).map(|x| x * 3.6);
+            w.wind_degrees = number(&v["wind"]["deg"]);
+            w.pressure_hpa = number(&v["main"]["pressure"]);
+            w.visibility_km = number(&v["visibility"]).map(|x| x / 1000.);
             w.description = v["weather"][0]["description"]
                 .as_str()
                 .unwrap_or("天气未知")
@@ -416,6 +435,9 @@ pub fn parse(
             w.feels_like_c = number(&x["FeelsLikeC"]);
             w.humidity_percent = number(&x["humidity"]);
             w.wind_kmh = number(&x["windspeedKmph"]);
+            w.wind_degrees = number(&x["winddirDegree"]);
+            w.pressure_hpa = number(&x["pressure"]);
+            w.visibility_km = number(&x["visibility"]);
             w.description = x["lang_zh-cn"][0]["value"]
                 .as_str()
                 .or_else(|| x["weatherDesc"][0]["value"].as_str())
@@ -494,6 +516,23 @@ mod tests {
     }
     fn openmeteo(time: &str) -> Value {
         serde_json::json!({"utc_offset_seconds":28800,"current":{"time":time,"temperature_2m":24.2,"relative_humidity_2m":80,"weather_code":2}})
+    }
+    #[test]
+    fn optional_weather_details_keep_units_and_legacy_caches() {
+        let now = Utc::now();
+        let c = WeatherConfig::default();
+        let open = serde_json::json!({"dt":now.timestamp(),"main":{"temp":23,"pressure":1013},"wind":{"speed":3.5,"deg":135},"visibility":16000,"weather":[{"description":"晴"}]});
+        let w = parse(Provider::OpenWeather, &open, &c, now).unwrap();
+        assert_eq!(w.wind_kmh, Some(12.6));
+        assert_eq!(w.wind_degrees, Some(135.));
+        assert_eq!(w.pressure_hpa, Some(1013.));
+        assert_eq!(w.visibility_km, Some(16.));
+        let mut legacy = serde_json::to_value(&w).unwrap();
+        for field in ["wind_degrees", "pressure_hpa", "visibility_km"] {
+            legacy.as_object_mut().unwrap().remove(field);
+        }
+        let old: Weather = serde_json::from_value(legacy).unwrap();
+        assert!(old.wind_degrees.is_none() && old.pressure_hpa.is_none() && old.visibility_km.is_none());
     }
     #[test]
     fn converts_source_timezone() {
