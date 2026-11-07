@@ -1866,14 +1866,28 @@ fn settings_cached_pages_preserve_edits_and_invalidate_after_presets_theme_and_r
         app.render();
         app.command(NAV + 7);
         assert!(!GetPropW(app.field(806), wide("LiteTray.ControlDark").as_ptr()).is_null());
+        // A hosted runner's small desktop can clamp the fixture's initial
+        // dimensions to the old fixed resize target. Resize relative to the
+        // actual native window, and prove the client area really changed.
+        let mut before: RECT = std::mem::zeroed();
+        let mut outer: RECT = std::mem::zeroed();
+        GetClientRect(app.hwnd, &mut before);
+        GetWindowRect(app.hwnd, &mut outer);
         SetWindowPos(
             app.hwnd,
             null_mut(),
             0,
             0,
-            app.scale(1060),
-            app.scale(820),
-            SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
+            outer.right - outer.left + app.scale(64),
+            outer.bottom - outer.top + app.scale(48),
+            SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOSENDCHANGING,
+        );
+        let mut after: RECT = std::mem::zeroed();
+        GetClientRect(app.hwnd, &mut after);
+        assert_ne!(
+            (before.right, before.bottom),
+            (after.right, after.bottom),
+            "resize fixture must change the native client area"
         );
         app.render();
         assert!(
