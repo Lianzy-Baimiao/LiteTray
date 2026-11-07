@@ -1,6 +1,10 @@
 # LiteTray · 轻托盘
 
-Rust 原生 Windows 任务栏工具，目标是替代 Windhawk 的 Taskbar Clock Customization 和 Taskbar multi-tray，提供可配置时钟、日历天气、日程与计时提醒。私有开发仓库，当前版本为 **开发版 5.11.6**。
+Rust 原生 Windows 任务栏工具，目标是替代 Windhawk 的 Taskbar Clock Customization 和 Taskbar multi-tray，提供可配置时钟、日历天气、日程与计时提醒。公开开发仓库，当前版本为 **开发版 5.11.6**。
+
+安装包与校验文件见 [GitHub Releases](https://github.com/Lianzy-Baimiao/LiteTray/releases)。当前为开发预览版，安装包尚未数字签名；原位时钟与多屏托盘仅支持已核对的 Windows 11 26300.9711 x64 系统模块，其他版本会拒绝接管，不能视为通用 Windows 11 支持。
+
+已收到“存在 Windows 系统通知时点击可能崩溃”的反馈，尚未取得可复现步骤及故障转储，**5.11.6 未包含此问题的修复**。任务栏接入方式与 Microsoft Store 发布限制见 [技术说明](docs/taskbar-integration-and-store.md)。
 
 ## 当前能做什么
 
@@ -14,7 +18,7 @@ Rust 原生 Windows 任务栏工具，目标是替代 Windhawk 的 Taskbar Clock
 | 天气 | 五种来源、顺序切换、失败托底、城市绑定的离线缓存、Windows 凭据管理器 |
 | 任务栏原位时钟 | **已在真实 Explorer 副屏验证写入、持续走时、停止恢复与进程意外退出恢复**；仅接受当前核对的系统模块 |
 | 多屏托盘 | 应用图标、系统指示区、网络/音量及显示桌面区域已复制；主副屏实际顺序、尺寸与右侧位置对齐通过；悬停与菜单仍需应用级交互验收 |
-| 关于与更新 | 无需密钥的 GitHub Releases / Tags 检查，语义版本排序与预览版过滤；私有开发仓库显示暂不可公开访问 |
+| 关于与更新 | 无需密钥的 GitHub Releases / Tags 检查，语义版本排序与预览版过滤；开发版需启用预览版检查 |
 
 **当前仍不能认定为两个 Windhawk 模块的完整替代品。** 独立时钟预览和离屏界面图都不证明任务栏替换成功。
 
