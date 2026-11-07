@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.88"
 description = "Native Windows taskbar, clock, calendar and weather companion"
 repository = "https://github.com/Lianzy-Baimiao/LiteTray"
+license = "Apache-2.0"
 publish = false
 
 [workspace]

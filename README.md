@@ -2,18 +2,21 @@
 
 [![Windows CI](https://github.com/Lianzy-Baimiao/LiteTray/actions/workflows/ci.yml/badge.svg)](https://github.com/Lianzy-Baimiao/LiteTray/actions/workflows/ci.yml)
 [![下载](https://img.shields.io/github/v/release/Lianzy-Baimiao/LiteTray?include_prereleases&label=下载)](https://github.com/Lianzy-Baimiao/LiteTray/releases)
-[![协议待指定](https://img.shields.io/badge/License-待指定-lightgrey)](docs/licensing.md)
+[![Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue)](LICENSE)
 [![赞赏 爱发电](https://img.shields.io/badge/赞赏-爱发电-946ce6)](https://ifdian.net/a/lianzy)
 
 **简体中文** · [English](README.en.md)
 
 让每块屏幕都有顺手的时钟、托盘与日历。Rust 原生 Windows 桌面工具，提供任务栏时钟定制、多屏托盘复制、天气和本地日程管理。
 
-![副屏实际任务栏：复制的托盘图标与两行自定义时钟](docs/images/taskbar-secondary.png)
+![5.12.0 副屏实际任务栏：复制的托盘图标与两行自定义时钟](docs/images/taskbar-5.12.0.png)
 
-![日历、农历与天气面板](docs/images/panel-light.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/calendar-5.12.0-zh-dark.png">
+  <img alt="5.12.0 日历：农历、节气、节日、逐小时天气与日程" src="docs/images/calendar-5.12.0-zh-light.png">
+</picture>
 
-上图任务栏为实际运行截图；日历图为原生界面渲染预览，天气与日程使用示例数据。
+5.12.0 预览，更新于 2026-11-08：任务栏为副屏实拍；日历由当前版本原生控件渲染，天气与日程使用示例数据。配图跟随页面明暗主题。
 
 ## 下载安装
 
@@ -51,4 +54,6 @@
 
 需要 Rust stable 和 Windows C++ 工具链。构建入口：`tools/Invoke-Cargo.ps1`；安装包入口：`tools/Build-Setup.ps1`。
 
-[提交问题](https://github.com/Lianzy-Baimiao/LiteTray/issues) · [爱发电支持作者](https://ifdian.net/a/lianzy) · [项目许可状态](docs/licensing.md) · [第三方声明](THIRD-PARTY-NOTICES.md)
+采用 [Apache License 2.0](LICENSE) 开源，第三方组件保留各自许可。
+
+[提交问题](https://github.com/Lianzy-Baimiao/LiteTray/issues) · [爱发电支持作者](https://ifdian.net/a/lianzy) · [许可说明](docs/licensing.md) · [第三方声明](THIRD-PARTY-NOTICES.md)

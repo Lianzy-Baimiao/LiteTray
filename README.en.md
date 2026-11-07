@@ -2,18 +2,21 @@
 
 [![Windows CI](https://github.com/Lianzy-Baimiao/LiteTray/actions/workflows/ci.yml/badge.svg)](https://github.com/Lianzy-Baimiao/LiteTray/actions/workflows/ci.yml)
 [![Download](https://img.shields.io/github/v/release/Lianzy-Baimiao/LiteTray?include_prereleases&label=download)](https://github.com/Lianzy-Baimiao/LiteTray/releases)
-[![License pending](https://img.shields.io/badge/License-pending-lightgrey)](docs/licensing.md)
+[![Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue)](LICENSE)
 [![Support on Afdian](https://img.shields.io/badge/Support-Afdian-946ce6)](https://ifdian.net/a/lianzy)
 
 [简体中文](README.md) · **English**
 
 A useful clock, tray and calendar on every monitor. A native Windows desktop app built with Rust, with customizable taskbar clocks, mirrored tray icons, weather and local schedules.
 
-![Live secondary taskbar with mirrored icons and a two-line custom clock](docs/images/taskbar-secondary.png)
+![5.12.0 live secondary taskbar with mirrored icons and a two-line custom clock](docs/images/taskbar-5.12.0.png)
 
-![Calendar, lunar dates and weather panel](docs/images/panel-light.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/calendar-5.12.0-en-dark.png">
+  <img alt="5.12.0 calendar with lunar dates, festivals, hourly weather and schedules" src="docs/images/calendar-5.12.0-en-light.png">
+</picture>
 
-The taskbar image is a live capture. The calendar is a native UI rendering preview with sample weather and schedule data; these previews show the Chinese interface.
+5.12.0 previews, refreshed on 2026-11-08. The taskbar is a live secondary-monitor capture using the user's Chinese clock template. The calendar uses the current native controls with sample weather and schedule data; lunar text and sample entry titles retain their original language. Images follow the page's light or dark theme.
 
 ## Download
 
@@ -51,4 +54,6 @@ A reported crash when clicking with Windows notifications present is still await
 
 Requires Rust stable and Windows C++ build tools. Build with `tools/Invoke-Cargo.ps1`; package the installer with `tools/Build-Setup.ps1`.
 
-[Report an issue](https://github.com/Lianzy-Baimiao/LiteTray/issues) · [Support on Afdian](https://ifdian.net/a/lianzy) · [License status](docs/licensing.md) · [Third-party notices](THIRD-PARTY-NOTICES.md)
+Licensed under the [Apache License 2.0](LICENSE). Third-party components retain their respective licenses.
+
+[Report an issue](https://github.com/Lianzy-Baimiao/LiteTray/issues) · [Support on Afdian](https://ifdian.net/a/lianzy) · [License details](docs/licensing.md) · [Third-party notices](THIRD-PARTY-NOTICES.md)

@@ -2637,12 +2637,69 @@ fn render_settings_artifacts() {
         let previous_dpi = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         for dark in [false, true] {
             let mut app = app_for_check(dark, 120, &output.join("unused-agenda.json"));
-            if std::env::var("LITETRAY_RENDER_LANGUAGE").as_deref() == Ok("en") {
+            let english = std::env::var("LITETRAY_RENDER_LANGUAGE").as_deref() == Ok("en");
+            if english {
                 app.saved.language = Language::En;
                 app.draft.language = Language::En;
                 app.status = "UI preview · sample entries · no reminders".into();
                 app.recreate_resources();
             }
+            // Public documentation previews use synthetic data, never the live
+            // profile or a network request. Exercise the current hourly UI too.
+            app.saved.weather.enabled = true;
+            app.saved.weather.city = if english {
+                "Shenzhen (sample)"
+            } else {
+                "示例 · 深圳"
+            }
+            .into();
+            app.draft.weather = app.saved.weather.clone();
+            let now = Utc::now();
+            let hour = chrono::DateTime::from_timestamp(now.timestamp() / 3600 * 3600, 0).unwrap();
+            app.weather = Some(weather::WeatherResult {
+                weather: Some(weather::Weather {
+                    provider: config::Provider::OpenMeteo,
+                    city: app.saved.weather.city.clone(),
+                    latitude: 22.6,
+                    longitude: 114.0,
+                    data_at: hour,
+                    fetched_at: now,
+                    temperature_c: 24.0,
+                    feels_like_c: Some(26.0),
+                    humidity_percent: Some(68.0),
+                    wind_kmh: Some(12.0),
+                    wind_degrees: Some(135.0),
+                    pressure_hpa: Some(1013.0),
+                    visibility_km: Some(20.0),
+                    description: "多云".into(),
+                    kind: if english {
+                        "Sample data"
+                    } else {
+                        "示例数据"
+                    }
+                    .into(),
+                    days: (0..3)
+                        .map(|i| weather::DailyForecast {
+                            date: (Local::now().date_naive() + Days::new(i)).to_string(),
+                            low_c: 21.0 + i as f64,
+                            high_c: 27.0 + i as f64,
+                            description: "多云".into(),
+                        })
+                        .collect(),
+                    hourly: (0..24)
+                        .map(|i| weather::HourlyForecast {
+                            at: hour + chrono::Duration::hours(i),
+                            temperature_c: 24.0 + (i % 3) as f64,
+                            description: ["多云", "晴", "晴间多云", "小雨"][i as usize % 4].into(),
+                            precipitation_probability: Some([10.0, 0.0, 5.0, 65.0][i as usize % 4]),
+                        })
+                        .collect(),
+                }),
+                cached: false,
+                fallback: false,
+                attempts: vec![],
+                cache_error: None,
+            });
             for page in 0..PAGES.len() {
                 let (width, height) = (1060, 820);
                 SetWindowPos(

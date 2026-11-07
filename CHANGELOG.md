@@ -2,6 +2,12 @@
 
 [返回项目介绍](README.md) · [GitHub Releases](https://github.com/Lianzy-Baimiao/LiteTray/releases)
 
+## 未发布 / Unreleased
+
+- 项目采用 Apache License 2.0，新增 LICENSE、NOTICE 和 Rust 项目许可元数据，保留第三方许可声明。
+- 中英文 README 更新为 5.12.0 的副屏任务栏实拍与当前日历预览，按页面明暗主题切换图片；日历包含离线示例小时天气与日程。
+- 便携包与安装包加入项目许可证；安装包同时补齐英文 README 和独立更新记录。
+
 ## 5.12.0
 
 - 软件界面新增简体中文与 English，默认跟随 Windows 显示语言；常规设置可手动选择，保存后刷新导航、设置及日历面板。用户模板和日程文本保留原文。

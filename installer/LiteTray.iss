@@ -58,6 +58,10 @@ Source: "{#PayloadDir}\LiteTray.exe"; DestDir: "{app}\versions\{#BuildId}"; Flag
 Source: "{#PayloadDir}\litetray_taskbar_adapter.dll"; DestDir: "{app}\versions\{#BuildId}"; Flags: ignoreversion; Check: NeedsBinary('litetray_taskbar_adapter.dll', '{#AdapterHash}')
 Source: "{#PayloadDir}\litetray_popup_hook.dll"; DestDir: "{app}\versions\{#BuildId}"; Flags: ignoreversion; Check: NeedsBinary('litetray_popup_hook.dll', '{#HookHash}')
 Source: "{#PayloadDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\README.en.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\NOTICE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\docs\*"; DestDir: "{app}\docs"; Flags: ignoreversion recursesubdirs
 Source: "{#PayloadDir}\crates\*"; DestDir: "{app}\crates"; Flags: ignoreversion recursesubdirs
