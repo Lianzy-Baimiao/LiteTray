@@ -513,9 +513,25 @@ impl App {
                 half,
             );
             self.check("日历显示农历", c.clock.show_lunar, 204, 224, 522, half);
-            self.button("预览原生时钟", 209, right, 518, half);
-            self.button("启用任务栏时钟", 212, 224, 564, half);
-            self.button("恢复系统时钟", 213, right, 564, half);
+            self.check(
+                "日期悬停显示黄历",
+                c.clock.show_almanac,
+                220,
+                right,
+                522,
+                half,
+            );
+            let button = (total - 32) / 3;
+            for (i, (label, id)) in [
+                ("预览原生时钟", 209),
+                ("启用任务栏时钟", 212),
+                ("恢复系统时钟", 213),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                self.button(label, id, 224 + i as i32 * (button + 16), 564, button);
+            }
             // The persistent footer carries connection status; a long adapter
             // diagnostic must not push the actual settings out of the page.
         }

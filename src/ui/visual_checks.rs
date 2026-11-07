@@ -4,6 +4,30 @@ use super::*;
 use chrono::Days;
 
 #[test]
+fn almanac_setting_survives_page_cache_and_saved_config() {
+    on_isolated_desktop(|| unsafe {
+        let path =
+            std::env::temp_dir().join(format!("litetray-almanac-{}.json", std::process::id()));
+        let mut app = app_for_check(false, 96, &path.with_extension("agenda"));
+        app.page = 1;
+        app.render();
+        assert!(app.checked(220));
+        SendMessageW(app.field(220), BM_SETCHECK, BST_UNCHECKED as usize, 0);
+        app.command(NAV + 7);
+        app.command(NAV + 1);
+        assert!(!app.checked(220));
+        app.collect_page().unwrap();
+        config::save(&path, &app.draft).unwrap();
+        let restored = config::load(&path).unwrap();
+        assert!(!restored.clock.show_almanac);
+        assert!(restored.clock.show_lunar);
+        std::fs::remove_file(&path).unwrap();
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+    });
+}
+
+#[test]
 #[ignore = "Explicit live network search on a non-input desktop, no profile writes"]
 fn live_city_search_populates_native_choices_without_blocking_navigation() {
     on_isolated_desktop(|| unsafe {
@@ -223,7 +247,7 @@ fn selected_calendar_day_has_antialiased_corners() {
 
 // Exercise real ShowWindow/restore and message routing without showing any
 // test window on the user's input desktop. Never call SwitchDesktop.
-fn on_isolated_desktop(check: impl FnOnce() + Send + 'static) {
+pub(super) fn on_isolated_desktop(check: impl FnOnce() + Send + 'static) {
     // WinRT/UISettings and registered native classes may keep process-wide
     // desktop state after earlier UI tests. Start a fresh process before
     // creating an alternate desktop instead of mixing both in one process.
@@ -869,7 +893,7 @@ fn settings_clock_navigation_stays_responsive() {
 
 #[test]
 fn settings_pages_fit_the_minimum_window_without_outer_scrollbars() {
-    unsafe {
+    on_isolated_desktop(|| unsafe {
         let mut app = app_for_check(
             false,
             96,
@@ -923,7 +947,7 @@ fn settings_pages_fit_the_minimum_window_without_outer_scrollbars() {
         DestroyWindow(app.hwnd);
         app.release_resources();
         assert!(failures.is_empty(), "{}", failures.join("\n"));
-    }
+    });
 }
 
 #[test]
@@ -1311,7 +1335,7 @@ fn ui_audit_keyboard_tabs_only_visit_active_page_and_native_choices_work() {
 
 #[test]
 fn settings_cached_pages_preserve_edits_and_invalidate_after_presets_theme_and_resize() {
-    unsafe {
+    on_isolated_desktop(|| unsafe {
         let mut app = app_for_check(
             false,
             96,
@@ -1379,12 +1403,12 @@ fn settings_cached_pages_preserve_edits_and_invalidate_after_presets_theme_and_r
         assert!(app.settings_cache.len() <= 2);
         DestroyWindow(app.hwnd);
         app.release_resources();
-    }
+    });
 }
 
 #[test]
 fn settings_switches_preserve_chrome_drafts_and_native_font_choices() {
-    unsafe {
+    on_isolated_desktop(|| unsafe {
         let mut app = app_for_check(
             false,
             96,
@@ -1435,7 +1459,7 @@ fn settings_switches_preserve_chrome_drafts_and_native_font_choices() {
         );
         DestroyWindow(app.hwnd);
         app.release_resources();
-    }
+    });
 }
 
 #[test]
@@ -1762,103 +1786,105 @@ fn render_settings_artifacts() {
 
 #[test]
 fn native_agenda_editor_persists_six_types_and_timer_actions() {
-    use litetray::organizer::{Kind, Store};
-    unsafe {
-        let directory = std::env::temp_dir().join(format!(
-            "litetray-ui-{}-{}",
-            std::process::id(),
-            Utc::now().timestamp_nanos_opt().unwrap()
-        ));
-        let file = directory.join("agenda.json");
-        let mut app = app_for_check(false, 96, &file);
-        app.organizer.borrow_mut().data.entries.clear();
-        app.page = 8;
-        app.render();
-        let view = app.field(agenda::ID);
-        assert_eq!(GetWindow(view, GW_CHILD), GetDlgItem(view, 4005));
-        assert_eq!(
-            GetWindowLongW(GetDlgItem(view, 4000), GWL_STYLE) as u32 & WS_VISIBLE,
-            0
-        );
-        assert!(GetDlgItem(view, 4011).is_null());
-        assert_eq!(window_text(GetDlgItem(view, 4201)), "日程");
-        assert_eq!(window_text(GetDlgItem(view, 4015)), "准时");
-        SetWindowTextW(GetDlgItem(view, 4010), wide("未保存的日程").as_ptr());
-        SendMessageW(view, WM_COMMAND, 4200, 0);
-        SetWindowTextW(GetDlgItem(view, 4010), wide("未保存的待办").as_ptr());
-        SendMessageW(view, WM_COMMAND, 4201, 0);
-        assert_eq!(window_text(GetDlgItem(view, 4010)), "未保存的日程");
-        SendMessageW(view, WM_COMMAND, 4200, 0);
-        assert_eq!(window_text(GetDlgItem(view, 4010)), "未保存的待办");
-        for (index, kind) in Kind::ALL.into_iter().enumerate() {
-            SendMessageW(view, WM_COMMAND, 4200 + index, 0);
-            SendMessageW(view, WM_COMMAND, 4001, 0);
-            SetWindowTextW(
-                GetDlgItem(view, 4010),
-                wide(&format!("测试{}", kind.label())).as_ptr(),
-            );
-            SetWindowTextW(
-                GetDlgItem(view, 4012),
-                wide(&(Local::now().date_naive() + Days::new(1)).to_string()).as_ptr(),
-            );
-            SendMessageW(view, WM_COMMAND, 4020, 0);
+    on_isolated_desktop(|| {
+        use litetray::organizer::{Kind, Store};
+        unsafe {
+            let directory = std::env::temp_dir().join(format!(
+                "litetray-ui-{}-{}",
+                std::process::id(),
+                Utc::now().timestamp_nanos_opt().unwrap()
+            ));
+            let file = directory.join("agenda.json");
+            let mut app = app_for_check(false, 96, &file);
+            app.organizer.borrow_mut().data.entries.clear();
+            app.page = 8;
+            app.render();
+            let view = app.field(agenda::ID);
+            assert_eq!(GetWindow(view, GW_CHILD), GetDlgItem(view, 4005));
             assert_eq!(
-                app.organizer.borrow().data.entries.len(),
-                index + 1,
-                "{}",
-                window_text(GetDlgItem(view, 4022))
+                GetWindowLongW(GetDlgItem(view, 4000), GWL_STYLE) as u32 & WS_VISIBLE,
+                0
             );
+            assert!(GetDlgItem(view, 4011).is_null());
+            assert_eq!(window_text(GetDlgItem(view, 4201)), "日程");
+            assert_eq!(window_text(GetDlgItem(view, 4015)), "准时");
+            SetWindowTextW(GetDlgItem(view, 4010), wide("未保存的日程").as_ptr());
+            SendMessageW(view, WM_COMMAND, 4200, 0);
+            SetWindowTextW(GetDlgItem(view, 4010), wide("未保存的待办").as_ptr());
+            SendMessageW(view, WM_COMMAND, 4201, 0);
+            assert_eq!(window_text(GetDlgItem(view, 4010)), "未保存的日程");
+            SendMessageW(view, WM_COMMAND, 4200, 0);
+            assert_eq!(window_text(GetDlgItem(view, 4010)), "未保存的待办");
+            for (index, kind) in Kind::ALL.into_iter().enumerate() {
+                SendMessageW(view, WM_COMMAND, 4200 + index, 0);
+                SendMessageW(view, WM_COMMAND, 4001, 0);
+                SetWindowTextW(
+                    GetDlgItem(view, 4010),
+                    wide(&format!("测试{}", kind.label())).as_ptr(),
+                );
+                SetWindowTextW(
+                    GetDlgItem(view, 4012),
+                    wide(&(Local::now().date_naive() + Days::new(1)).to_string()).as_ptr(),
+                );
+                SendMessageW(view, WM_COMMAND, 4020, 0);
+                assert_eq!(
+                    app.organizer.borrow().data.entries.len(),
+                    index + 1,
+                    "{}",
+                    window_text(GetDlgItem(view, 4022))
+                );
+            }
+            let restored = Store::open(&file);
+            assert!(restored.error.is_none());
+            assert_eq!(restored.data.entries.len(), 6);
+            app.page = 9;
+            app.render();
+            let view = app.field(agenda::ID);
+            SendMessageW(view, WM_COMMAND, 4301, 0);
+            assert_eq!(
+                GetWindowLongW(GetDlgItem(view, 4000), GWL_STYLE) as u32 & WS_VISIBLE,
+                0
+            );
+            SendMessageW(view, WM_COMMAND, 4122, 0);
+            assert!(app.organizer.borrow().data.timers[0].due.is_some());
+            SendMessageW(view, WM_COMMAND, 4123, 0);
+            assert!(app.organizer.borrow().data.timers[0].due.is_none());
+            SendMessageW(view, WM_COMMAND, 4123, 0);
+            assert!(app.organizer.borrow().data.timers[0].due.is_some());
+            SendMessageW(view, WM_COMMAND, 4102, 0);
+            assert_eq!(app.organizer.borrow().data.timers.len(), 2);
+            SendMessageW(view, WM_COMMAND, 4303, 0);
+            // A local WAV also works on CI hosts without Windows' bundled Media
+            // files. This exercises selection/persistence without playing audio.
+            let sound_file = directory.join("test.wav");
+            std::fs::write(&sound_file, b"RIFF\x24\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x40\x1f\0\0\x80\x3e\0\0\x02\0\x10\0data\0\0\0\0").unwrap();
+            SendMessageW(GetDlgItem(view, 4400), CB_SETCURSEL, 11, 0);
+            SetWindowTextW(
+                GetDlgItem(view, 4401),
+                wide(&sound_file.to_string_lossy()).as_ptr(),
+            );
+            SetWindowTextW(GetDlgItem(view, 4402), wide("45").as_ptr());
+            SendMessageW(view, WM_COMMAND, 4405, 0);
+            let restored = Store::open(&file);
+            assert!(restored.error.is_none());
+            assert_eq!(restored.data.sound.tone, 11);
+            assert_eq!(
+                restored.data.sound.custom_file,
+                sound_file.to_string_lossy()
+            );
+            assert_eq!(restored.data.sound.seconds, 45);
+            DestroyWindow(app.hwnd);
+            app.release_resources();
+            std::fs::remove_file(file).unwrap();
+            std::fs::remove_file(sound_file).unwrap();
+            std::fs::remove_dir(directory).unwrap();
         }
-        let restored = Store::open(&file);
-        assert!(restored.error.is_none());
-        assert_eq!(restored.data.entries.len(), 6);
-        app.page = 9;
-        app.render();
-        let view = app.field(agenda::ID);
-        SendMessageW(view, WM_COMMAND, 4301, 0);
-        assert_eq!(
-            GetWindowLongW(GetDlgItem(view, 4000), GWL_STYLE) as u32 & WS_VISIBLE,
-            0
-        );
-        SendMessageW(view, WM_COMMAND, 4122, 0);
-        assert!(app.organizer.borrow().data.timers[0].due.is_some());
-        SendMessageW(view, WM_COMMAND, 4123, 0);
-        assert!(app.organizer.borrow().data.timers[0].due.is_none());
-        SendMessageW(view, WM_COMMAND, 4123, 0);
-        assert!(app.organizer.borrow().data.timers[0].due.is_some());
-        SendMessageW(view, WM_COMMAND, 4102, 0);
-        assert_eq!(app.organizer.borrow().data.timers.len(), 2);
-        SendMessageW(view, WM_COMMAND, 4303, 0);
-        // A local WAV also works on CI hosts without Windows' bundled Media
-        // files. This exercises selection/persistence without playing audio.
-        let sound_file = directory.join("test.wav");
-        std::fs::write(&sound_file, b"RIFF\x24\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x40\x1f\0\0\x80\x3e\0\0\x02\0\x10\0data\0\0\0\0").unwrap();
-        SendMessageW(GetDlgItem(view, 4400), CB_SETCURSEL, 11, 0);
-        SetWindowTextW(
-            GetDlgItem(view, 4401),
-            wide(&sound_file.to_string_lossy()).as_ptr(),
-        );
-        SetWindowTextW(GetDlgItem(view, 4402), wide("45").as_ptr());
-        SendMessageW(view, WM_COMMAND, 4405, 0);
-        let restored = Store::open(&file);
-        assert!(restored.error.is_none());
-        assert_eq!(restored.data.sound.tone, 11);
-        assert_eq!(
-            restored.data.sound.custom_file,
-            sound_file.to_string_lossy()
-        );
-        assert_eq!(restored.data.sound.seconds, 45);
-        DestroyWindow(app.hwnd);
-        app.release_resources();
-        std::fs::remove_file(file).unwrap();
-        std::fs::remove_file(sound_file).unwrap();
-        std::fs::remove_dir(directory).unwrap();
-    }
+    });
 }
 
 #[test]
 fn organizer_pages_fit_the_viewport_without_page_scrollbars() {
-    unsafe {
+    on_isolated_desktop(|| unsafe {
         let mut app = app_for_check(
             true,
             96,
@@ -1939,73 +1965,75 @@ fn organizer_pages_fit_the_viewport_without_page_scrollbars() {
         }
         DestroyWindow(app.hwnd);
         app.release_resources();
-    }
+    });
 }
 
 #[test]
 fn inline_draft_survives_hidden_flyout_theme_refresh_and_failed_save() {
-    unsafe {
-        let mut app = app_for_check(
-            false,
-            96,
-            &std::env::temp_dir().join("litetray-inline-unused.json"),
-        );
-        app.prewarm_panels();
-        let popup = app.panel_cache[0];
-        let view = GetDlgItem(popup, dashboard::ID as i32);
-        SendMessageW(view, WM_COMMAND, 1103, 0);
-        let editor = GetDlgItem(view, quick_agenda::ID as i32);
-        let title = GetDlgItem(editor, 4610);
-        set_text(title, "未保存的弹层草稿");
-        panel::hide(popup);
-        app.draft.appearance = Appearance::Dark;
-        app.recreate_resources();
-        assert_ne!(
-            IsWindow(popup),
-            0,
-            "theme refresh must preserve an editing flyout"
-        );
-        assert_eq!(
-            GetDlgItem(
-                GetDlgItem(popup, dashboard::ID as i32),
-                quick_agenda::ID as i32
-            ),
-            editor
-        );
-        assert_eq!(window_text(title), "未保存的弹层草稿");
-        let count = app.organizer.borrow().data.entries.len();
-        app.organizer.borrow_mut().error = Some("日程文件读取失败，原文件已保留".into());
-        SendMessageW(editor, WM_COMMAND, 4620, 0);
-        assert_eq!(app.organizer.borrow().data.entries.len(), count);
-        assert_eq!(window_text(title), "未保存的弹层草稿");
-        assert!(dashboard::editing(view));
-        // Esc dismisses the editor first, including in a detached popup.
-        panel::set_detached(popup, true);
-        SendMessageW(popup, WM_COMMAND, IDCANCEL as usize, 0);
-        let mut message: MSG = std::mem::zeroed();
-        while PeekMessageW(
-            &mut message,
-            view,
-            quick_agenda::CLOSED,
-            quick_agenda::SAVED,
-            PM_REMOVE,
-        ) != 0
-        {
-            DispatchMessageW(&message);
+    on_isolated_desktop(|| {
+        unsafe {
+            let mut app = app_for_check(
+                false,
+                96,
+                &std::env::temp_dir().join("litetray-inline-unused.json"),
+            );
+            app.prewarm_panels();
+            let popup = app.panel_cache[0];
+            let view = GetDlgItem(popup, dashboard::ID as i32);
+            SendMessageW(view, WM_COMMAND, 1103, 0);
+            let editor = GetDlgItem(view, quick_agenda::ID as i32);
+            let title = GetDlgItem(editor, 4610);
+            set_text(title, "未保存的弹层草稿");
+            panel::hide(popup);
+            app.draft.appearance = Appearance::Dark;
+            app.recreate_resources();
+            assert_ne!(
+                IsWindow(popup),
+                0,
+                "theme refresh must preserve an editing flyout"
+            );
+            assert_eq!(
+                GetDlgItem(
+                    GetDlgItem(popup, dashboard::ID as i32),
+                    quick_agenda::ID as i32
+                ),
+                editor
+            );
+            assert_eq!(window_text(title), "未保存的弹层草稿");
+            let count = app.organizer.borrow().data.entries.len();
+            app.organizer.borrow_mut().error = Some("日程文件读取失败，原文件已保留".into());
+            SendMessageW(editor, WM_COMMAND, 4620, 0);
+            assert_eq!(app.organizer.borrow().data.entries.len(), count);
+            assert_eq!(window_text(title), "未保存的弹层草稿");
+            assert!(dashboard::editing(view));
+            // Esc dismisses the editor first, including in a detached popup.
+            panel::set_detached(popup, true);
+            SendMessageW(popup, WM_COMMAND, IDCANCEL as usize, 0);
+            let mut message: MSG = std::mem::zeroed();
+            while PeekMessageW(
+                &mut message,
+                view,
+                quick_agenda::CLOSED,
+                quick_agenda::SAVED,
+                PM_REMOVE,
+            ) != 0
+            {
+                DispatchMessageW(&message);
+            }
+            assert!(!dashboard::editing(view));
+            assert!(panel::detached(popup));
+            assert_eq!(IsWindowVisible(popup), 0);
+            app.close_panel();
+            DestroyWindow(app.hwnd);
+            app.release_resources();
+            assert_external_foreground();
         }
-        assert!(!dashboard::editing(view));
-        assert!(panel::detached(popup));
-        assert_eq!(IsWindowVisible(popup), 0);
-        app.close_panel();
-        DestroyWindow(app.hwnd);
-        app.release_resources();
-        assert_external_foreground();
-    }
+    });
 }
 
 #[test]
 fn hidden_calendar_cache_reuses_controls_and_tracks_new_anchor() {
-    unsafe {
+    on_isolated_desktop(|| unsafe {
         let mut app = app_for_check(
             false,
             96,
@@ -2070,49 +2098,51 @@ fn hidden_calendar_cache_reuses_controls_and_tracks_new_anchor() {
         assert_eq!(IsWindow(panel), 0);
         DestroyWindow(app.hwnd);
         app.release_resources();
-    }
+    });
 }
 
 #[test]
 fn opening_focus_bounce_does_not_hide_calendar_and_popup_is_topmost() {
-    unsafe {
-        let mut app = app_for_check(
-            false,
-            96,
-            &std::env::temp_dir().join("litetray-panel-focus-unused.json"),
-        );
-        app.prewarm_panels();
-        let panel = app.panel;
-        // Visible-style lifecycle test stays outside every desktop and never
-        // asks for foreground, focus or physical input.
-        SetWindowPos(
-            panel,
-            null_mut(),
-            -30000,
-            -30000,
-            0,
-            0,
-            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-        );
+    on_isolated_desktop(|| {
+        unsafe {
+            let mut app = app_for_check(
+                false,
+                96,
+                &std::env::temp_dir().join("litetray-panel-focus-unused.json"),
+            );
+            app.prewarm_panels();
+            let panel = app.panel;
+            // Visible-style lifecycle test stays outside every desktop and never
+            // asks for foreground, focus or physical input.
+            SetWindowPos(
+                panel,
+                null_mut(),
+                -30000,
+                -30000,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
 
-        SendMessageW(panel, WM_ACTIVATE, WA_INACTIVE as usize, 0);
-        let visible = IsWindowVisible(panel) != 0;
-        let topmost = GetWindowLongW(panel, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST != 0;
-        assert_external_foreground();
-        app.close_panel();
-        DestroyWindow(app.hwnd);
-        app.release_resources();
-        assert!(
-            visible,
-            "a delayed opening deactivation immediately hid the new calendar"
-        );
-        assert!(topmost, "the taskbar popup must be topmost");
-    }
+            SendMessageW(panel, WM_ACTIVATE, WA_INACTIVE as usize, 0);
+            let visible = IsWindowVisible(panel) != 0;
+            let topmost = GetWindowLongW(panel, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST != 0;
+            assert_external_foreground();
+            app.close_panel();
+            DestroyWindow(app.hwnd);
+            app.release_resources();
+            assert!(
+                visible,
+                "a delayed opening deactivation immediately hid the new calendar"
+            );
+            assert!(topmost, "the taskbar popup must be topmost");
+        }
+    });
 }
 
 #[test]
 fn detached_calendar_keeps_its_position_and_lifetime_until_close() {
-    unsafe {
+    on_isolated_desktop(|| unsafe {
         let mut app = app_for_check(
             false,
             96,
@@ -2195,5 +2225,5 @@ fn detached_calendar_keeps_its_position_and_lifetime_until_close() {
         app.close_panel();
         DestroyWindow(app.hwnd);
         app.release_resources();
-    }
+    });
 }

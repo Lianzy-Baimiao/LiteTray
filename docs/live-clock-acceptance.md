@@ -191,3 +191,9 @@
 04:54 部署 5.6.1 导航边框修正；05:05:31 再切换至包含两项修改的 5.7。运行目录 `dist/LiteTray-ui54-inline`，宿主 PID 9140，窗口标题确认为开发版 5.7，设置窗口保持隐藏。EXE SHA256 `5A74B034FCCAA1AB9B7EE6C2A3B7EDF481486185DDD8B15E2A466C940BBCFEF3`。
 
 任务栏适配器和 QQ 弹窗钩子的 DLL 未变化；Explorer PID 34284、启动时间 03:02:21，QQ PID 20412、启动时间 02:55:22，均保持原样。主副屏任务栏只读检查的 `error`、`geometry_error` 均为空，`tray_input.active=true`。没有向正式桌面注入输入，也没有修改用户天气位置。测试覆盖范围与独立发布包验证见 [天气位置说明](weather-location.md)。现场证据为 `local/ui57-deployment.json`、`local/ui57-live-summary.json`、`local/ui57-live-taskbar.json`。
+
+## 2026-11-07 · 日期悬停黄历 5.8
+
+14:16:22 后台启动新版（PID 2568），沿用 `dist/LiteTray-ui54-inline`，标题开发版 5.8，设置保持隐藏。启动前没有运行中的 LiteTray；Explorer 10960 保持不变，适配器与 QQ 钩子 DLL 哈希未变化，正式配置哈希一致。只读检查两个任务栏的 `error`、`geometry_error` 均为空，`tray_input.active=true`。
+
+黄历使用离线数据、400ms 悬停延迟及独立开关。验证覆盖窗口不激活、同屏定位、关闭与切月清理，发布 EXE 三个设置入口首次打开正常。测试未移动鼠标或切换输入桌面；真实鼠标体验仍以用户使用结果为准。详情与哈希见 [黄历使用与验证](almanac-hover.md)，现场证据 `local/ui58-deployment.json`、`local/ui58-live-taskbar.json`。

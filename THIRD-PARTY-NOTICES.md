@@ -246,3 +246,33 @@ LiteTray retains the chosen city and coordinates, not the returned IP address.
 
 Public endpoints remain subject to their providers' current usage terms and
 availability. IP location is approximate and can identify a proxy/VPN exit.
+
+## Tyme offline almanac
+
+LiteTray uses tyme4rs 1.5.1 by 6tail for local traditional almanac calculations.
+Source: https://github.com/6tail/tyme4rs
+Documentation: https://6tail.cn/tyme.html
+The library calculates lunar dates, solar-term-based year/month stems and
+branches, daily traditional suitable/avoid lists, clash and direction. The
+almanac is independent from official public-holiday and make-up-workday data.
+MIT License
+
+Copyright (c) 2024 6tail
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

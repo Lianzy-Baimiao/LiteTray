@@ -1,6 +1,6 @@
 # LiteTray · 轻托盘
 
-Rust 原生 Windows 任务栏工具，目标是替代 Windhawk 的 Taskbar Clock Customization 和 Taskbar multi-tray，提供可配置时钟、日历天气、日程与计时提醒。私有开发仓库，当前版本为 **开发版 5.7**。
+Rust 原生 Windows 任务栏工具，目标是替代 Windhawk 的 Taskbar Clock Customization 和 Taskbar multi-tray，提供可配置时钟、日历天气、日程与计时提醒。私有开发仓库，当前版本为 **开发版 5.8**。
 
 ## 当前能做什么
 
@@ -19,6 +19,8 @@ Rust 原生 Windows 任务栏工具，目标是替代 Windhawk 的 Taskbar Clock
 **当前仍不能认定为两个 Windhawk 模块的完整替代品。** 独立时钟预览和离屏界面图都不证明任务栏替换成功。
 
 ## 开发版 5
+
+5.8 日历日期悬停约 0.4 秒显示黄历：农历、干支、宜忌、冲煞与建除值日。设置 → 时钟显示 →“日期悬停显示黄历”提供独立开关，默认开启，保存后生效。黄历由开源 Tyme 离线计算，卡片跟随明暗配色并留在日期所在显示器；离开日期、切月、点击日期或关闭开关即收起。适用于日历弹层、分离日历和设置内日历。[使用与验证说明](docs/almanac-hover.md)。
 
 5.7 天气位置增加“获取当地”与城市搜索，移除日常表单的经纬度输入。Open-Meteo／GeoNames 返回同名城市与行政区信息，选择后自动填写坐标；IPWHOIS 按公网 IP 获取近似位置，失败后使用开源 GeoJS。查询在后台执行，失败保留原位置，新搜索或位置修改后忽略旧回复。搜索与定位均无需密钥，选择结果后点击“保存设置”应用。详情见 [天气位置说明](docs/weather-location.md)。
 
@@ -92,7 +94,7 @@ Rust 原生 Windows 任务栏工具，目标是替代 Windhawk 的 Taskbar Clock
 
 实验原位路径当前只接受 Windows 11 build 26300.9711 x64 已核对的 taskbar.dll 与 twinui.pcshell.dll 哈希。其他系统版本拒绝套用私有偏移。Windows 10、系统升级、多屏热插拔、混合 DPI、自动隐藏与原系统点击行为仍需兼容验证。DLL 为保证回调生命周期，会固定加载到 Explorer 结束；停止成功后释放本次时钟属性、点击及私有宿主引用。
 
-开发版标题包含“开发版 5.7”。从其他目录运行的旧 LiteTray 不会自动升级；新版检测到旧实例时会明确显示双方路径，避免静默打开旧界面。`LITETRAY_DATA_DIR` 可指定独立开发配置目录，凭据管理器仍按 Windows 用户共享。
+开发版标题包含“开发版 5.8”。从其他目录运行的旧 LiteTray 不会自动升级；新版检测到旧实例时会明确显示双方路径，避免静默打开旧界面。`LITETRAY_DATA_DIR` 可指定独立开发配置目录，凭据管理器仍按 Windows 用户共享。
 
 ## 天气来源
 

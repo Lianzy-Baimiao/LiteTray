@@ -1,4 +1,5 @@
 mod agenda;
+mod almanac_tip;
 mod calendar;
 mod dashboard;
 mod design;
@@ -45,7 +46,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.7";
+const UI_REVISION: &str = "开发版 5.8";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -1044,6 +1045,7 @@ impl App {
                     c.clock.show_seconds = false;
                 }
                 c.clock.show_lunar = self.checked(204);
+                c.clock.show_almanac = self.checked(220);
                 c.clock.width = if self.text(207).trim().is_empty() {
                     0
                 } else {

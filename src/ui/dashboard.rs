@@ -29,6 +29,8 @@ struct View {
     enabled: bool,
     busy: bool,
     lunar: bool,
+    almanac: bool,
+    almanac_hover: almanac_tip::Hover,
     seconds: bool,
     flyout: bool,
     detached: bool,
@@ -101,6 +103,8 @@ pub(super) unsafe fn create(parent: HWND, bounds: RECT, dark: bool, flyout: bool
             enabled: true,
             busy: false,
             lunar: true,
+            almanac: true,
+            almanac_hover: Default::default(),
             seconds: true,
             flyout,
             detached: false,
@@ -335,6 +339,10 @@ pub(super) unsafe fn update(
         view.busy = busy;
         view.weather = weather.clone();
         view.lunar = config.clock.show_lunar;
+        view.almanac = config.clock.show_almanac;
+        if !view.almanac {
+            view.almanac_hover.hide();
+        }
         view.seconds = clock::needs_second_ticks(&config.clock);
         let changed = view
             .store
@@ -530,6 +538,9 @@ unsafe fn layout(hwnd: HWND) {
             .min(r.bottom as f64 / HEIGHT as f64)
             .max(0.01);
         let resized = v.fonts[0].is_null() || (factor - v.factor).abs() > f64::EPSILON;
+        if resized || month_changed || selection_changed {
+            v.almanac_hover.hide();
+        }
         v.factor = factor;
         let s = |n: i32| (n as f64 * factor).round() as i32;
         let old_fonts = v.fonts;
@@ -738,6 +749,29 @@ unsafe extern "system" fn button_proc(
 ) -> LRESULT {
     unsafe {
         let id = GetDlgCtrlID(hwnd) as u16;
+        if (FIRST..FIRST + 42).contains(&id)
+            && matches!(
+                msg,
+                WM_MOUSEMOVE | WM_MOUSELEAVE | WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_KEYDOWN
+            )
+        {
+            let owner = GetParent(hwnd);
+            if let Some(cell) =
+                (GetWindowLongPtrW(owner, GWLP_USERDATA) as *const RefCell<View>).as_ref()
+                && let Ok(mut view) = cell.try_borrow_mut()
+            {
+                match msg {
+                    WM_MOUSEMOVE if view.almanac => {
+                        if let Some(date) = view.days.get((id - FIRST) as usize).copied() {
+                            view.almanac_hover.begin(owner, hwnd, date);
+                        }
+                    }
+                    WM_MOUSELEAVE => view.almanac_hover.leave(hwnd),
+                    WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_KEYDOWN => view.almanac_hover.hide(),
+                    _ => {}
+                }
+            }
+        }
         if (FIRST..FIRST + 42).contains(&id) && msg == WM_GETDLGCODE {
             return DefSubclassProc(hwnd, msg, w, l) | DLGC_WANTARROWS as isize;
         }
@@ -782,6 +816,13 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             return DefWindowProcW(hwnd, msg, w, l);
         }
         match msg {
+            WM_TIMER if w == almanac_tip::TIMER => {
+                if let Ok(mut v) = (*raw).try_borrow_mut() {
+                    let dark = v.dark;
+                    v.almanac_hover.tick(dark);
+                }
+                0
+            }
             WM_COMMAND if w & 0xffff == 40 && w >> 16 == BN_CLICKED as usize => {
                 // Opening settings does not depend on the calendar's paint or
                 // data state. Never discard this command during a view borrow.
@@ -1566,6 +1607,58 @@ pub(super) unsafe fn with_borrowed_view(hwnd: HWND, action: impl FnOnce()) {
 #[cfg(test)]
 mod visual_checks {
     use super::*;
+    #[test]
+    fn almanac_toggle_and_month_navigation_cancel_pending_hover() {
+        super::super::visual_checks::on_isolated_desktop(|| unsafe {
+            let _ = RoInitialize(RO_INIT_SINGLETHREADED);
+            let parent = CreateWindowExW(
+                0,
+                wide("STATIC").as_ptr(),
+                wide("Almanac calendar").as_ptr(),
+                WS_POPUP,
+                0,
+                0,
+                WIDTH,
+                HEIGHT,
+                null_mut(),
+                null_mut(),
+                GetModuleHandleW(null()),
+                null(),
+            );
+            let hwnd = create(parent, rect(0, 0, WIDTH, HEIGHT), false, true);
+            let cell = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RefCell<View>);
+            let button = GetDlgItem(hwnd, FIRST as i32);
+            let selected = cell.borrow().calendar.selected;
+            SendMessageW(button, WM_MOUSEMOVE, 0, 0);
+            assert!(cell.borrow().almanac_hover.is_pending());
+            assert_eq!(cell.borrow().calendar.selected, selected);
+            let mut config = Config::default();
+            config.clock.show_almanac = false;
+            update(hwnd, &config, &None, false);
+            assert!(!cell.borrow().almanac_hover.is_pending());
+            SendMessageW(button, WM_MOUSEMOVE, 0, 0);
+            assert!(!cell.borrow().almanac_hover.is_pending());
+            config.clock.show_almanac = true;
+            config.clock.show_lunar = false;
+            update(hwnd, &config, &None, false);
+            SendMessageW(button, WM_MOUSEMOVE, 0, 0);
+            assert!(
+                cell.borrow().almanac_hover.is_pending(),
+                "almanac must be independent of date cell lunar labels"
+            );
+            SendMessageW(hwnd, WM_COMMAND, NEXT as usize, 0);
+            assert!(!cell.borrow().almanac_hover.is_pending());
+            assert_eq!(
+                GetDlgItem(hwnd, FIRST as i32),
+                button,
+                "hover support recreated date cells"
+            );
+            SendMessageW(button, WM_MOUSEMOVE, 0, 0);
+            SendMessageW(button, WM_LBUTTONDOWN, 0, 0);
+            assert!(!cell.borrow().almanac_hover.is_pending());
+            DestroyWindow(parent);
+        });
+    }
     unsafe fn flush_editor(hwnd: HWND) {
         unsafe {
             let mut message: MSG = std::mem::zeroed();
@@ -1583,7 +1676,7 @@ mod visual_checks {
     }
     #[test]
     fn inline_editor_saves_six_kinds_without_opening_settings_and_preserves_drafts() {
-        unsafe {
+        super::super::visual_checks::on_isolated_desktop(|| unsafe {
             let _ = RoInitialize(RO_INIT_SINGLETHREADED);
             let path = std::env::temp_dir().join(format!(
                 "litetray-inline-{}-{}.json",
@@ -1724,7 +1817,7 @@ mod visual_checks {
             DestroyWindow(parent);
             super::super::visual_checks::assert_external_foreground();
             std::fs::remove_file(path).unwrap();
-        }
+        });
     }
 
     #[test]
@@ -1807,7 +1900,7 @@ mod visual_checks {
 
     #[test]
     fn holiday_updates_keep_native_dates_without_source_button() {
-        unsafe {
+        super::super::visual_checks::on_isolated_desktop(|| unsafe {
             let parent = CreateWindowExW(
                 0,
                 wide("STATIC").as_ptr(),
@@ -1883,7 +1976,7 @@ mod visual_checks {
             assert_eq!(IsWindowVisible(parent), 0);
             DestroyWindow(parent);
             super::super::visual_checks::assert_external_foreground();
-        }
+        });
     }
 
     unsafe extern "system" fn count_destroyed(
@@ -1906,13 +1999,18 @@ mod visual_checks {
 
     #[test]
     fn changing_date_preserves_calendar_controls_and_weather() {
-        for dark in [false, true] {
-            for flyout in [false, true] {
-                unsafe {
-                    check_date_repaints(dark, flyout);
+        // Each Rust test has its own STA thread. WinRT's process-wide factory
+        // cache can outlive an exited apartment; use the same fresh-process,
+        // non-input desktop harness as the other native window tests.
+        super::super::visual_checks::on_isolated_desktop(|| {
+            for dark in [false, true] {
+                for flyout in [false, true] {
+                    unsafe {
+                        check_date_repaints(dark, flyout);
+                    }
                 }
             }
-        }
+        });
     }
 
     unsafe fn check_date_repaints(dark: bool, flyout: bool) {
@@ -2131,6 +2229,8 @@ mod visual_checks {
                     enabled: true,
                     busy: false,
                     lunar: true,
+                    almanac: true,
+                    almanac_hover: Default::default(),
                     seconds: true,
                     flyout: true,
                     detached: false,
