@@ -115,12 +115,13 @@ unsafe fn prepare(request: &Prepare) -> Result<Reply, String> {
         } else {
             None
         };
-        let watchdog = if request.custom_calendar {
-            routing::attach_interactive(
+        let watchdog = if request.custom_calendar || request.volume_scroll || request.volume_mute {
+            routing::attach_with_options(
                 &plan,
                 &bound,
                 request.owner.clone(),
                 GetTickCount64(),
+                request.input_options(),
                 move |event| {
                     let Ok(bytes) = serde_json::to_vec(&event) else {
                         return false;

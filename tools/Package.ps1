@@ -39,6 +39,7 @@ $documents += @('docs/installer.md')
 $documents += @('docs/festivals.md')
 $documents += @('docs/weather-format.md')
 $documents += @('docs/weather-icons.md','assets/icons/weather/README.md')
+$documents += @('docs/clock-input-5.11.md')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null

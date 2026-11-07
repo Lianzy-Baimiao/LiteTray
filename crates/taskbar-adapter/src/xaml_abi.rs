@@ -631,6 +631,111 @@ pub struct IPanelStatics_Vtbl {
     IsItemsHostProperty: usize,
     ChildrenTransitionsProperty: usize,
 }
+pub const IID_IPointerPoint: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0xe995317d_7296_42d9_8233_c5be73b74a4a);
+#[repr(C)]
+pub struct IPointerPoint_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    PointerDevice: usize,
+    pub Position:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut Point) -> windows_sys::core::HRESULT,
+    pub RawPosition:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut Point) -> windows_sys::core::HRESULT,
+    pub PointerId:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32) -> windows_sys::core::HRESULT,
+    pub FrameId:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32) -> windows_sys::core::HRESULT,
+    pub Timestamp:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u64) -> windows_sys::core::HRESULT,
+    pub IsInContact:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub Properties: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+}
+pub const IID_IPointerPointProperties: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0xc79d8a4b_c163_4ee7_803f_67ce79f9972d);
+#[repr(C)]
+pub struct IPointerPointProperties_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    pub Pressure:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut f32) -> windows_sys::core::HRESULT,
+    pub IsInverted:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub IsEraser:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub Orientation:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut f32) -> windows_sys::core::HRESULT,
+    pub XTilt:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut f32) -> windows_sys::core::HRESULT,
+    pub YTilt:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut f32) -> windows_sys::core::HRESULT,
+    pub Twist:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut f32) -> windows_sys::core::HRESULT,
+    pub ContactRect:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut Rect) -> windows_sys::core::HRESULT,
+    pub ContactRectRaw:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut Rect) -> windows_sys::core::HRESULT,
+    pub TouchConfidence:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub IsLeftButtonPressed:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub IsRightButtonPressed:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub IsMiddleButtonPressed:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub MouseWheelDelta:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut i32) -> windows_sys::core::HRESULT,
+    pub IsHorizontalMouseWheel:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub IsPrimary:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub IsInRange:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub IsCanceled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub IsBarrelButtonPressed:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub IsXButton1Pressed:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub IsXButton2Pressed:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub PointerUpdateKind: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut PointerUpdateKind,
+    ) -> windows_sys::core::HRESULT,
+    pub HasUsage: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        u32,
+        u32,
+        *mut bool,
+    ) -> windows_sys::core::HRESULT,
+    pub GetUsageValue: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        u32,
+        u32,
+        *mut i32,
+    ) -> windows_sys::core::HRESULT,
+}
+pub const IID_IPointerRoutedEventArgs: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0xda628f0a_9752_49e2_bde2_49eccab9194d);
+#[repr(C)]
+pub struct IPointerRoutedEventArgs_Vtbl {
+    pub base__: windows_sys::core::IInspectable_Vtbl,
+    Pointer: usize,
+    KeyModifiers: usize,
+    pub Handled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_sys::core::HRESULT,
+    pub SetHandled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_sys::core::HRESULT,
+    pub GetCurrentPoint: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_sys::core::HRESULT,
+    GetIntermediatePoints: usize,
+}
 pub const IID_IPropertyValue: windows_sys::core::GUID =
     windows_sys::core::GUID::from_u128(0x4bd682dd_7554_40e9_9a9b_82654ede7e62);
 #[repr(C)]
@@ -1218,7 +1323,11 @@ pub struct IUIElement_Vtbl {
     Drop: usize,
     pub RemoveDrop:
         unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
-    PointerPressed: usize,
+    pub PointerPressed: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut i64,
+    ) -> windows_sys::core::HRESULT,
     pub RemovePointerPressed:
         unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
     PointerMoved: usize,
@@ -1239,7 +1348,11 @@ pub struct IUIElement_Vtbl {
     PointerCanceled: usize,
     pub RemovePointerCanceled:
         unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
-    PointerWheelChanged: usize,
+    pub PointerWheelChanged: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut i64,
+    ) -> windows_sys::core::HRESULT,
     pub RemovePointerWheelChanged:
         unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_sys::core::HRESULT,
     pub Tapped: unsafe extern "system" fn(
@@ -1460,6 +1573,22 @@ pub struct IXamlRoot_Vtbl {
 pub struct Point {
     pub X: f32,
     pub Y: f32,
+}
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct PointerUpdateKind(pub i32);
+impl PointerUpdateKind {
+    pub const Other: Self = Self(0i32);
+    pub const LeftButtonPressed: Self = Self(1i32);
+    pub const LeftButtonReleased: Self = Self(2i32);
+    pub const RightButtonPressed: Self = Self(3i32);
+    pub const RightButtonReleased: Self = Self(4i32);
+    pub const MiddleButtonPressed: Self = Self(5i32);
+    pub const MiddleButtonReleased: Self = Self(6i32);
+    pub const XButton1Pressed: Self = Self(7i32);
+    pub const XButton1Released: Self = Self(8i32);
+    pub const XButton2Pressed: Self = Self(9i32);
+    pub const XButton2Released: Self = Self(10i32);
 }
 #[repr(transparent)]
 #[derive(Clone, Copy)]

@@ -80,6 +80,8 @@ pub struct Preflight {
     layout: HostLayout,
     routes: Vec<Route>,
     custom_calendar: bool,
+    volume_scroll: bool,
+    volume_mute: bool,
     source: Option<Route>,
     clocks: bool,
     mirror_icons: bool,
@@ -129,6 +131,8 @@ pub fn preflight(config: &Config) -> Result<Preflight, String> {
         layout,
         routes: plan.targets.into_iter().map(|t| t.route).collect(),
         custom_calendar: config.clock.click_action == ClickAction::CalendarWeather,
+        volume_scroll: config.clock.volume_scroll,
+        volume_mute: config.clock.volume_mute,
         source: plan.source,
         clocks: config.tray.clock_enabled,
         mirror_icons: config.tray.enabled && config.tray.show_icons,
@@ -200,6 +204,8 @@ impl Connection {
                     layout: preflight.layout,
                     routes: preflight.routes,
                     custom_calendar: preflight.custom_calendar,
+                    volume_scroll: preflight.volume_scroll,
+                    volume_mute: preflight.volume_mute,
                     source: preflight.source,
                     clocks: preflight.clocks,
                     mirror_icons: preflight.mirror_icons,
@@ -559,15 +565,19 @@ unsafe extern "system" fn receive(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             *context.reply.borrow_mut() = Some(reply);
             return 1;
         }
-        if copy.dwData == EVENT_TAG
-            && bytes.len() <= MAX_EVENT
-            && context.active.get()
-            && context.pending.borrow().is_none()
-        {
+        if copy.dwData == EVENT_TAG && bytes.len() <= MAX_EVENT && context.active.get() {
             let Ok(event) = Activation::decode(bytes) else {
                 return 0;
             };
-            if event.source_window != w as u64 {
+            let calendar = matches!(
+                event.input,
+                litetray_adapter_protocol::activation::Input::Pointer
+                    | litetray_adapter_protocol::activation::Input::Keyboard
+            );
+            if event.source_window != w as u64
+                || !context.request.input_options().allows(event.input)
+                || calendar && context.pending.borrow().is_some()
+            {
                 return 0;
             }
             let Ok(mut gate) = context.gate.try_borrow_mut() else {
@@ -579,6 +589,9 @@ unsafe extern "system" fn receive(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             let Ok(event) = gate.accept(bytes) else {
                 return 0;
             };
+            if !calendar {
+                return super::volume::dispatch(event.input) as isize;
+            }
             if PostMessageW(context.main, WM_ACTIVATED, 0, 0) == 0 {
                 return 0;
             }
@@ -662,6 +675,8 @@ mod activation_checks {
                     },
                     routes: vec![],
                     custom_calendar: true,
+                    volume_scroll: false,
+                    volume_mute: false,
                     source: None,
                     clocks: true,
                     mirror_icons: false,

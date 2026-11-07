@@ -24,6 +24,10 @@ fn main() {
         "Windows.UI.Xaml.Visibility",
         "Windows.UI.Xaml.Input.ITappedRoutedEventArgs",
         "Windows.UI.Xaml.Input.IKeyRoutedEventArgs",
+        "Windows.UI.Xaml.Input.IPointerRoutedEventArgs",
+        "Windows.UI.Input.IPointerPoint",
+        "Windows.UI.Input.IPointerPointProperties",
+        "Windows.UI.Input.PointerUpdateKind",
         "Windows.UI.Xaml.Hosting.IDesktopWindowXamlSource",
         "Windows.UI.Xaml.Media.IGeneralTransform",
         "Windows.Foundation.Point",
@@ -71,11 +75,30 @@ fn main() {
     let mut source = std::fs::read_to_string(&output).unwrap();
     let getter = "unsafe extern \"system\" fn(*mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> windows_sys::core::HRESULT";
     for (method, signature) in [
-        ("AddHandler", "*mut core::ffi::c_void, *mut core::ffi::c_void, *mut core::ffi::c_void, bool"),
-        ("RemoveHandler", "*mut core::ffi::c_void, *mut core::ffi::c_void, *mut core::ffi::c_void"),
-        ("TappedEvent", "*mut core::ffi::c_void, *mut *mut core::ffi::c_void"),
-        ("RegisterPropertyChangedCallback", "*mut core::ffi::c_void, *mut core::ffi::c_void, *mut core::ffi::c_void, *mut i64"),
-        ("UnregisterPropertyChangedCallback", "*mut core::ffi::c_void, *mut core::ffi::c_void, i64"),
+        (
+            "GetCurrentPoint",
+            "*mut core::ffi::c_void, *mut core::ffi::c_void, *mut *mut core::ffi::c_void",
+        ),
+        (
+            "AddHandler",
+            "*mut core::ffi::c_void, *mut core::ffi::c_void, *mut core::ffi::c_void, bool",
+        ),
+        (
+            "RemoveHandler",
+            "*mut core::ffi::c_void, *mut core::ffi::c_void, *mut core::ffi::c_void",
+        ),
+        (
+            "TappedEvent",
+            "*mut core::ffi::c_void, *mut *mut core::ffi::c_void",
+        ),
+        (
+            "RegisterPropertyChangedCallback",
+            "*mut core::ffi::c_void, *mut core::ffi::c_void, *mut core::ffi::c_void, *mut i64",
+        ),
+        (
+            "UnregisterPropertyChangedCallback",
+            "*mut core::ffi::c_void, *mut core::ffi::c_void, i64",
+        ),
     ] {
         let before = format!("    {method}: usize,");
         assert_eq!(source.matches(&before).count(), 1);
@@ -103,17 +126,34 @@ fn main() {
     ];
     // These getters occur on UIElement/FlyoutBase and ItemsControl/MenuFlyout.
     for method in ["XamlRoot", "Items"] {
-        source = source.replace(&format!("    {method}: usize,"), &format!("    pub {method}: {getter},"));
+        source = source.replace(
+            &format!("    {method}: usize,"),
+            &format!("    pub {method}: {getter},"),
+        );
     }
     for (method, signature) in [
         ("ShowAt", "*mut core::ffi::c_void, *mut core::ffi::c_void"),
-        ("ShowAtWithOptions", "*mut core::ffi::c_void, *mut core::ffi::c_void, *mut core::ffi::c_void"),
-        ("SetXamlRoot", "*mut core::ffi::c_void, *mut core::ffi::c_void"),
+        (
+            "ShowAtWithOptions",
+            "*mut core::ffi::c_void, *mut core::ffi::c_void, *mut core::ffi::c_void",
+        ),
+        (
+            "SetXamlRoot",
+            "*mut core::ffi::c_void, *mut core::ffi::c_void",
+        ),
     ] {
         source = source.replace(&format!("    {method}: usize,"), &format!("    pub {method}: unsafe extern \"system\" fn({signature}) -> windows_sys::core::HRESULT,"));
     }
-    for method in ["OpacityProperty", "IsHitTestVisibleProperty", "MinWidthProperty", "BackgroundProperty"] {
-        source = source.replace(&format!("    {method}: usize,"), &format!("    pub {method}: {getter},"));
+    for method in [
+        "OpacityProperty",
+        "IsHitTestVisibleProperty",
+        "MinWidthProperty",
+        "BackgroundProperty",
+    ] {
+        source = source.replace(
+            &format!("    {method}: usize,"),
+            &format!("    pub {method}: {getter},"),
+        );
     }
     let start = source.find("pub struct IFlyoutBase5_Vtbl").unwrap();
     let end = start + source[start..].find("pub const IID_IFlyoutBase6").unwrap();
@@ -169,10 +209,15 @@ fn main() {
         assert_eq!(source.matches(&before).count(), 1);
         source=source.replace(&before,&format!("    pub {method}: unsafe extern \"system\" fn({signature}) -> windows_sys::core::HRESULT,"));
     }
-    for method in ["Tapped", "KeyDown"] {
+    for method in ["Tapped", "KeyDown", "PointerPressed", "PointerWheelChanged"] {
         let before = format!("    {method}: usize,");
         assert_eq!(source.matches(&before).count(), 1);
         source = source.replace(&before, &format!("    pub {method}: unsafe extern \"system\" fn(*mut core::ffi::c_void, *mut core::ffi::c_void, *mut i64) -> windows_sys::core::HRESULT,"));
+    }
+    for method in ["Properties"] {
+        let before = format!("    {method}: usize,");
+        assert_eq!(source.matches(&before).count(), 1);
+        source = source.replace(&before, &format!("    pub {method}: {getter},"));
     }
     let before = "    TransformToVisual: usize,";
     assert_eq!(source.matches(before).count(), 1);

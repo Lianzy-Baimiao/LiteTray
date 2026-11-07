@@ -56,6 +56,8 @@ pub struct ClockConfig {
     pub font_size: u32,
     pub width: u32,
     pub click_action: ClickAction,
+    pub volume_scroll: bool,
+    pub volume_mute: bool,
     pub top_color: String,
     pub bottom_color: String,
     pub alignment: litetray_adapter_protocol::clock::Alignment,
@@ -78,6 +80,8 @@ impl Default for ClockConfig {
             font_size: 12,
             width: 0,
             click_action: ClickAction::CalendarWeather,
+            volume_scroll: true,
+            volume_mute: true,
             top_color: String::new(),
             bottom_color: String::new(),
             alignment: Default::default(),
@@ -103,6 +107,8 @@ pub struct TrayConfig {
     pub scope: MonitorScope,
     pub selected_devices: Vec<String>,
     pub show_icons: bool,
+    /// Opt-in because this correction loads a hook DLL into QQ's tray thread.
+    pub qq_popup_compatibility: bool,
     pub show_control_center: bool,
     pub copied_taskbars_only: bool,
 }
@@ -114,6 +120,7 @@ impl Default for TrayConfig {
             scope: MonitorScope::All,
             selected_devices: vec![],
             show_icons: true,
+            qq_popup_compatibility: false,
             show_control_center: true,
             copied_taskbars_only: false,
         }
@@ -420,6 +427,14 @@ mod tests {
         Config::default().validate().unwrap();
         let c: Config = serde_json::from_str("{}").unwrap();
         c.validate().unwrap();
+        assert!(!c.tray.qq_popup_compatibility);
+        let old: Config =
+            serde_json::from_str(r#"{"tray":{"enabled":true,"show_icons":true}}"#).unwrap();
+        assert!(
+            !old.tray.qq_popup_compatibility,
+            "existing tray mirroring must not opt into QQ injection"
+        );
+        assert!(old.clock.volume_scroll && old.clock.volume_mute);
     }
     #[test]
     fn rejects_invalid_coords_and_duplicate_providers() {

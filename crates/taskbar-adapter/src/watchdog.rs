@@ -225,9 +225,17 @@ impl Watchdog {
         targets: Vec<InputTarget>,
         publish: impl Fn(litetray_adapter_protocol::activation::Activation) -> bool + 'static,
     ) -> Result<(), String> {
+        self.prepare_inputs_with_options(targets, Default::default(), publish)
+    }
+    pub fn prepare_inputs_with_options(
+        &self,
+        targets: Vec<InputTarget>,
+        options: litetray_adapter_protocol::activation::Options,
+        publish: impl Fn(litetray_adapter_protocol::activation::Activation) -> bool + 'static,
+    ) -> Result<(), String> {
         let context = Rc::downgrade(&self.context);
         self.context.with_session(|session| {
-            session.prepare_inputs(targets, move |event| {
+            session.prepare_inputs_with_options(targets, options, move |event| {
                 let Some(context) = context.upgrade() else {
                     return false;
                 };

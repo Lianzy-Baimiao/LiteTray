@@ -28,6 +28,36 @@ impl Rect {
 pub enum Input {
     Pointer,
     Keyboard,
+    VolumeWheel(i32),
+    VolumeMute,
+}
+/// Only subscribed clock elements can produce these actions. A disabled action
+/// remains available to the shell and is never acknowledged as handled.
+#[derive(Clone, Copy)]
+pub struct Options {
+    pub calendar: bool,
+    pub volume_scroll: bool,
+    pub volume_mute: bool,
+}
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            calendar: true,
+            volume_scroll: false,
+            volume_mute: false,
+        }
+    }
+}
+impl Options {
+    pub fn allows(self, input: Input) -> bool {
+        match input {
+            Input::Pointer | Input::Keyboard => self.calendar,
+            Input::VolumeWheel(delta) => {
+                self.volume_scroll && delta != 0 && (-32768..=32767).contains(&delta)
+            }
+            Input::VolumeMute => self.volume_mute,
+        }
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,6 +76,7 @@ impl Activation {
             || self.sequence == 0
             || self.clock_id == 0
             || self.source_window == 0
+            || matches!(self.input, Input::VolumeWheel(delta) if delta == 0 || !(-32768..=32767).contains(&delta))
         {
             return Err("时钟点击身份无效".into());
         }
@@ -150,5 +181,37 @@ mod tests {
         let mut json = serde_json::to_value(event()).unwrap();
         json["execute"] = "anything".into();
         assert!(Activation::decode(&serde_json::to_vec(&json).unwrap()).is_err());
+    }
+    #[test]
+    fn volume_controls_are_independent_authenticated_and_reject_invalid_deltas() {
+        let mut e = event();
+        let mut gate = Gate::new(e.owner.clone(), vec![(4, 5)]).unwrap();
+        let options = Options {
+            calendar: false,
+            volume_scroll: true,
+            volume_mute: false,
+        };
+        assert!(!options.allows(Input::Pointer));
+        assert!(!options.allows(Input::Keyboard));
+        assert!(!options.allows(Input::VolumeMute));
+        for delta in [120, -120, 30, -30, 32767, -32768] {
+            e.sequence += 1;
+            e.input = Input::VolumeWheel(delta);
+            assert!(options.allows(e.input));
+            assert_eq!(
+                gate.accept(&serde_json::to_vec(&e).unwrap()).unwrap().input,
+                e.input
+            );
+        }
+        for delta in [0, 32768, -32769, i32::MAX, i32::MIN] {
+            e.input = Input::VolumeWheel(delta);
+            assert!(!options.allows(e.input));
+            assert!(e.validate().is_err());
+        }
+        e.sequence += 1;
+        e.input = Input::VolumeMute;
+        let bytes = serde_json::to_vec(&e).unwrap();
+        assert_eq!(gate.accept(&bytes).unwrap().input, Input::VolumeMute);
+        assert!(gate.accept(&bytes).is_err());
     }
 }

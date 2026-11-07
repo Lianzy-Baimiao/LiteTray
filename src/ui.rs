@@ -14,8 +14,8 @@ mod settings_open;
 mod typography;
 #[cfg(test)]
 mod visual_checks;
-mod weather_location;
 mod weather_icons;
+mod weather_location;
 mod widgets;
 use chrono::{Local, Utc};
 use litetray::{
@@ -49,7 +49,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.10.1";
+const UI_REVISION: &str = "开发版 5.11.0";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -1010,7 +1010,11 @@ impl App {
             );
             ShowWindow(
                 self.field(SAVE),
-                if matches!(self.page, 8 | 9) { SW_HIDE } else { SW_SHOWNA },
+                if matches!(self.page, 8 | 9) {
+                    SW_HIDE
+                } else {
+                    SW_SHOWNA
+                },
             );
             if ((1..8).contains(&self.page) || self.page == 10) && !reused {
                 page::finish(self.page_host);
@@ -1054,6 +1058,8 @@ impl App {
                 }
                 c.clock.show_lunar = self.checked(204);
                 c.clock.show_almanac = self.checked(220);
+                c.clock.volume_scroll = self.checked(settings::VOLUME_SCROLL);
+                c.clock.volume_mute = self.checked(settings::VOLUME_MUTE);
                 c.clock.width = if self.text(207).trim().is_empty() {
                     0
                 } else {
@@ -1076,6 +1082,7 @@ impl App {
                 };
                 c.tray.enabled = self.checked(308);
                 c.tray.show_icons = self.checked(308);
+                c.tray.qq_popup_compatibility = self.checked(309);
                 let selected = (0..self.monitor_rows.len())
                     .map(|i| unsafe { SendMessageW(self.field(305), LB_GETSEL, i, 0) > 0 })
                     .collect::<Vec<_>>();
@@ -1238,9 +1245,19 @@ impl App {
         unsafe {
             agenda::tick(self.field(agenda::ID));
             self.update_clock_samples();
-            let weather = self.saved.weather.enabled.then_some(self.weather.as_ref()).flatten()
-                .filter(|r| r.weather.as_ref().is_none_or(|w| w.city == self.saved.weather.city
-                    && w.latitude == self.saved.weather.latitude && w.longitude == self.saved.weather.longitude));
+            let weather = self
+                .saved
+                .weather
+                .enabled
+                .then_some(self.weather.as_ref())
+                .flatten()
+                .filter(|r| {
+                    r.weather.as_ref().is_none_or(|w| {
+                        w.city == self.saved.weather.city
+                            && w.latitude == self.saved.weather.latitude
+                            && w.longitude == self.saved.weather.longitude
+                    })
+                });
             if self.page == 0 {
                 dashboard::update(
                     self.field(dashboard::ID),
@@ -1250,7 +1267,11 @@ impl App {
                 );
             }
             if let Some(preview) = &self.preview {
-                let _ = preview.update(&clock::frame_with_weather(&self.draft.clock, weather, Local::now()));
+                let _ = preview.update(&clock::frame_with_weather(
+                    &self.draft.clock,
+                    weather,
+                    Local::now(),
+                ));
             }
             if let Some(taskbar) = &self.taskbar {
                 taskbar.set_weather(weather);
@@ -1730,7 +1751,9 @@ impl App {
                 return false;
             }
             match id {
-                settings::OPEN_WEATHER_FORMAT => { self.command(NAV + 10); }
+                settings::OPEN_WEATHER_FORMAT => {
+                    self.command(NAV + 10);
+                }
                 weather_location::SEARCH | weather_location::NEARBY if self.page == 3 => {
                     self.start_location(id == weather_location::NEARBY);
                 }
@@ -1867,7 +1890,12 @@ impl App {
                         self.set_status(e);
                         return false;
                     }
-                    let weather = self.saved.weather.enabled.then_some(self.weather.as_ref()).flatten();
+                    let weather = self
+                        .saved
+                        .weather
+                        .enabled
+                        .then_some(self.weather.as_ref())
+                        .flatten();
                     if let Some(preview) = &self.preview {
                         preview.show();
                     } else {
@@ -2253,34 +2281,6 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     app.schedule_tick();
                     Some(0)
                 }
-                agenda::OPEN_DATE => {
-                    app.hide_panel();
-                    app.agenda_scope = chrono::NaiveDate::from_num_days_from_ce_opt(w as i32);
-                    app.agenda_state[0] = None;
-                    app.page = 8;
-                    app.render();
-                    if let Some(date) = app.agenda_scope {
-                        agenda::open_date(app.field(agenda::ID), date);
-                    }
-                    ShowWindow(hwnd, SW_SHOW);
-                    SetForegroundWindow(hwnd);
-                    Some(0)
-                }
-                agenda::OPEN_ENTRY => {
-                    app.hide_panel();
-                    app.page = 8;
-                    app.render();
-                    agenda::open_entry(app.field(agenda::ID), w as u64);
-                    ShowWindow(hwnd, SW_SHOW);
-                    SetForegroundWindow(hwnd);
-                    Some(0)
-                }
-                agenda::OPEN_ALARMS => {
-                    app.page = 8;
-                    app.render();
-                    agenda::open_alarms(app.field(agenda::ID));
-                    Some(0)
-                }
                 taskbar_clock::WM_ACTIVATED | WM_TIMER
                     if msg == taskbar_clock::WM_ACTIVATED || w == 3 =>
                 {
@@ -2345,8 +2345,15 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 }
                 WM_COMMAND => {
                     let id = (w & 0xffff) as u16;
-                    if app.page == 10 && (w >> 16) as u32 == CBN_SELCHANGE
-                        && matches!(id, settings::WEATHER_PRESET | settings::WEATHER_FIELD | settings::WEATHER_PRECISION) {
+                    if app.page == 10
+                        && (w >> 16) as u32 == CBN_SELCHANGE
+                        && matches!(
+                            id,
+                            settings::WEATHER_PRESET
+                                | settings::WEATHER_FIELD
+                                | settings::WEATHER_PRECISION
+                        )
+                    {
                         app.choose_weather_format(id);
                         return Some(0);
                     }
@@ -2466,12 +2473,6 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     match l as u32 {
                         WM_LBUTTONUP => app.show_panel(),
                         WM_RBUTTONUP | WM_CONTEXTMENU => app.tray_menu(),
-                        NIN_BALLOONUSERCLICK => {
-                            app.page = 9;
-                            app.render();
-                            ShowWindow(hwnd, SW_SHOW);
-                            SetForegroundWindow(hwnd);
-                        }
                         _ => {}
                     }
                     Some(0)

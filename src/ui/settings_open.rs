@@ -1,18 +1,38 @@
-//! Settings activation survives nested native message loops. Keep the request
+//! All main-window entry points share one activation path. Keep the request
 //! outside App's RefCell so a modal/reentrant borrow cannot consume the click.
 use super::*;
 const RETRY: usize = 74;
+pub(super) const OPEN_FOCUS: u32 = WM_APP + 88;
+#[derive(Clone, Copy)]
+enum Target {
+    Current,
+    Date(i32),
+    Entry(u64),
+    Alarms,
+    Focus,
+}
 #[derive(Clone, Copy)]
 struct Request {
     window: HWND,
     source: HWND,
     started: Instant,
+    target: Target,
 }
 thread_local! {static PENDING:Cell<Option<Request>>=const {Cell::new(None)};}
 pub(super) unsafe fn message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LRESULT> {
     unsafe {
-        let request = msg == WM_SHOW_SETTINGS
-            || msg == WM_COMMAND && w & 0xffff == 40 && w >> 16 == BN_CLICKED as usize;
+        let target = match msg {
+            WM_SHOW_SETTINGS => Some(Target::Current),
+            WM_COMMAND if w & 0xffff == 40 && w >> 16 == BN_CLICKED as usize => {
+                Some(Target::Current)
+            }
+            agenda::OPEN_DATE => Some(Target::Date(w as i32)),
+            agenda::OPEN_ENTRY => Some(Target::Entry(w as u64)),
+            agenda::OPEN_ALARMS => Some(Target::Alarms),
+            OPEN_FOCUS => Some(Target::Focus),
+            WM_TRAY if l as u32 == NIN_BALLOONUSERCLICK => Some(Target::Focus),
+            _ => None,
+        };
         if msg == WM_NCDESTROY || msg == WM_CLOSE {
             if PENDING.with(|p| p.get().is_some_and(|r| r.window == hwnd)) {
                 PENDING.with(|p| p.set(None));
@@ -20,10 +40,10 @@ pub(super) unsafe fn message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Opti
             KillTimer(hwnd, RETRY);
             return None;
         }
-        if !request && !(msg == WM_TIMER && w == RETRY) {
+        if target.is_none() && !(msg == WM_TIMER && w == RETRY) {
             return None;
         }
-        if request {
+        if let Some(target) = target {
             // WM_COMMAND carries the clicked native button in lParam. The
             // single-instance WM_SHOW_SETTINGS has no source popup.
             let source = owned_source(hwnd, l as HWND);
@@ -32,6 +52,7 @@ pub(super) unsafe fn message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Opti
                     window: hwnd,
                     source,
                     started: Instant::now(),
+                    target,
                 }))
             });
             increment(hwnd, "LiteTray.SettingsOpen.Requested");
@@ -41,12 +62,37 @@ pub(super) unsafe fn message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Opti
             return Some(0);
         };
         let ready = STATE.with(|state| {
-            let Ok(state) = state.try_borrow() else {
+            let Ok(mut state) = state.try_borrow_mut() else {
                 return None;
             };
-            let app = state.as_ref()?;
+            let app = state.as_mut()?;
             if app.hwnd != hwnd || IsWindowEnabled(hwnd) == 0 {
                 return None;
+            }
+            // Preserve settings drafts before navigating; invalid text stays
+            // in its existing controls and the visible window shows the error.
+            if !matches!(pending.target, Target::Current) {
+                if let Err(error) = app.collect_page() {
+                    app.set_status(error);
+                } else {
+                    app.page = if matches!(pending.target, Target::Focus) {
+                        9
+                    } else {
+                        8
+                    };
+                    app.render();
+                    match pending.target {
+                        Target::Date(days) => {
+                            if let Some(date) = chrono::NaiveDate::from_num_days_from_ce_opt(days) {
+                                app.agenda_scope = Some(date);
+                                agenda::open_date(app.field(agenda::ID), date);
+                            }
+                        }
+                        Target::Entry(id) => agenda::open_entry(app.field(agenda::ID), id),
+                        Target::Alarms => agenda::open_alarms(app.field(agenda::ID)),
+                        _ => {}
+                    }
+                }
             }
             app.schedule_tick();
             Some(if pending.source.is_null() {

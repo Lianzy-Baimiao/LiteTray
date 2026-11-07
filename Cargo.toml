@@ -36,7 +36,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_UI_WindowsAndMessaging", "Win32_UI_Controls", "Win32_UI_Controls_Dialogs", "Win32_UI_Shell",
   "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Accessibility"
 ] }
-windows = { version = "0.62", features = ["Foundation", "Globalization", "UI_ViewManagement", "Win32_System_WinRT", "Win32_Graphics_DirectWrite", "Win32_Graphics_Gdi"] }
+windows = { version = "0.62", features = ["Foundation", "Globalization", "UI_ViewManagement", "Win32_System_WinRT", "Win32_Graphics_DirectWrite", "Win32_Graphics_Gdi", "Win32_Media_Audio_Endpoints", "Win32_System_Com_StructuredStorage", "Win32_System_Variant"] }
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_StationsAndDesktops"] }

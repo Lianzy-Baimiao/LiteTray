@@ -35,6 +35,22 @@ impl Drop for Worker {
 }
 impl Router {
     pub fn configure(&mut self, config: &TrayConfig, owner: HWND) {
+        if !config.qq_popup_compatibility || !config.enabled || !config.show_icons {
+            // Joining sends the empty lease and removes any installed hooks.
+            // No worker, QQ enumeration or DLL loading in the default mode.
+            self.worker = None;
+            let report = serde_json::json!({"mode":"disabled","hooks":0,"reason":"qq_popup_compatibility_off"});
+            if let Ok(bytes) = serde_json::to_vec_pretty(&report) {
+                let _ = crate::config::atomic_write(
+                    &crate::config::data_dir().join("popup-placement.json"),
+                    &bytes,
+                );
+            }
+            if let Ok(mut slot) = REPORT.lock() {
+                *slot = Some(report);
+            }
+            return;
+        }
         if self.worker.is_none() {
             let (tx, rx) = mpsc::channel();
             self.worker = Some(Worker {

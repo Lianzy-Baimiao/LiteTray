@@ -22,6 +22,10 @@ pub struct Prepare {
     pub routes: Vec<Route>,
     pub custom_calendar: bool,
     #[serde(default)]
+    pub volume_scroll: bool,
+    #[serde(default)]
+    pub volume_mute: bool,
+    #[serde(default)]
     pub source: Option<Route>,
     #[serde(default = "clocks_default")]
     pub clocks: bool,
@@ -32,6 +36,13 @@ fn clocks_default() -> bool {
     true
 }
 impl Prepare {
+    pub fn input_options(&self) -> crate::activation::Options {
+        crate::activation::Options {
+            calendar: self.custom_calendar,
+            volume_scroll: self.volume_scroll,
+            volume_mute: self.volume_mute,
+        }
+    }
     pub fn plan(&self) -> Result<Plan, String> {
         if self.version != VERSION || self.routes.is_empty() {
             return Err("任务栏准备请求无效".into());
@@ -148,6 +159,8 @@ mod tests {
                 device: "DISPLAY1".into(),
             }],
             custom_calendar: true,
+            volume_scroll: false,
+            volume_mute: false,
             clocks: true,
             mirror_icons: false,
             source: None,

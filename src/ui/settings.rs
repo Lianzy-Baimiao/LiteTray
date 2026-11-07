@@ -32,6 +32,8 @@ pub(super) const WEATHER_FIELD: u16 = 223;
 pub(super) const WEATHER_PRECISION: u16 = 224;
 const WEATHER_SAMPLE: u16 = 225;
 pub(super) const OPEN_WEATHER_FORMAT: u16 = 226;
+pub(super) const VOLUME_SCROLL: u16 = 227;
+pub(super) const VOLUME_MUTE: u16 = 228;
 pub(super) const PRESETS: [(&str, &str, &str); 4] = [
     ("Windows 简洁", "%time%", "%date%"),
     ("日期与星期", "%time%", "%month2%/%day2% %weekday_short%"),
@@ -72,13 +74,22 @@ impl App {
                 total,
                 24,
             );
-            self.divider(224, 273, total);
-            self.section("选择显示器", 224, 292, total - 160);
-            self.button("刷新", 307, 224 + total - 112, 286, 112);
+            self.check(
+                "QQ 悬停卡片副屏定位 · 实验性",
+                c.tray.qq_popup_compatibility,
+                309,
+                224,
+                257,
+                total,
+            );
+            self.caption("开启后会把定位 DLL 加载到 QQ 进程，无法保证不触发其安全检测。\r\n默认关闭；关闭后已加载的模块在 QQ 下次退出时释放。", 224, 292, total, 44);
+            self.divider(224, 350, total);
+            self.section("选择显示器", 224, 365, total - 160);
+            self.button("刷新", 307, 224 + total - 112, 359, 112);
             self.caption(
                 "使用“指定显示器”时，在下面选择需要显示时钟的屏幕。",
                 224,
-                335,
+                408,
                 total,
                 24,
             );
@@ -89,9 +100,9 @@ impl App {
                 305,
                 WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY as u32 | LBS_MULTIPLESEL as u32,
                 224,
-                377,
+                446,
                 total,
-                132,
+                70,
             );
             for (index, row) in self.monitor_rows.iter().enumerate() {
                 SendMessageW(list, LB_ADDSTRING, 0, wide(&row.label).as_ptr() as isize);
@@ -497,14 +508,13 @@ impl App {
                 SetPropW(hint, wide("LiteTray.Muted").as_ptr(), 1usize as HANDLE);
             }
             self.update_clock_samples();
-            self.divider(224, 434, total);
-            self.label("点击时钟", 224, 449, half, 22);
+            self.label("点击时钟", 224, 426, half, 22);
             self.combo(
                 &["日历与天气", "系统日历"],
                 usize::from(c.clock.click_action == ClickAction::SystemCalendar),
                 208,
                 224,
-                476,
+                453,
                 half,
             );
             self.edit(
@@ -516,16 +526,16 @@ impl App {
                 },
                 207,
                 right,
-                449,
+                426,
                 half,
             );
-            self.check("日历显示农历", c.clock.show_lunar, 204, 224, 522, half);
+            self.check("日历显示农历", c.clock.show_lunar, 204, 224, 492, half);
             self.check(
                 "日期悬停显示黄历",
                 c.clock.show_almanac,
                 220,
                 right,
-                522,
+                492,
                 half,
             );
             let button = (total - 32) / 3;
@@ -539,6 +549,22 @@ impl App {
             {
                 self.button(label, id, 224 + i as i32 * (button + 16), 564, button);
             }
+            self.check(
+                "时钟滚轮调音量 · 每格 2%",
+                c.clock.volume_scroll,
+                VOLUME_SCROLL,
+                224,
+                526,
+                half,
+            );
+            self.check(
+                "时钟中键静音 / 恢复",
+                c.clock.volume_mute,
+                VOLUME_MUTE,
+                right,
+                526,
+                half,
+            );
             // The persistent footer carries connection status; a long adapter
             // diagnostic must not push the actual settings out of the page.
         }
@@ -596,44 +622,127 @@ impl App {
             let mut presets = vec!["自定义"];
             presets.extend(clock::weather_format::PRESETS.iter().map(|(name, _)| *name));
             self.combo(&presets, 0, WEATHER_PRESET, 340, 173, 220);
-            self.caption("选择后可继续编辑，保存后应用到任务栏。", 578, 178, total - 354, 22);
-            self.edit("%weather% · 天气内容模板", &c.clock.weather_format, WEATHER_FORMAT, 224, 220, total);
+            self.caption(
+                "选择后可继续编辑，保存后应用到任务栏。",
+                578,
+                178,
+                total - 354,
+                22,
+            );
+            self.edit(
+                "%weather% · 天气内容模板",
+                &c.clock.weather_format,
+                WEATHER_FORMAT,
+                224,
+                220,
+                total,
+            );
             SendMessageW(self.field(WEATHER_FORMAT), EM_SETLIMITTEXT, 1024, 0);
             self.label("插入属性 · 添加到光标位置", 224, 294, half, 22);
             let mut fields = vec!["选择天气属性".to_string()];
-            fields.extend(clock::weather_format::FIELDS.iter().map(|(token, label, _)| format!("{label}  %{token}%")));
-            self.combo(&fields.iter().map(String::as_str).collect::<Vec<_>>(), 0, WEATHER_FIELD, 224, 321, half);
-            SendMessageW(self.field(WEATHER_FIELD), CB_SETDROPPEDWIDTH, self.scale(470) as usize, 0);
+            fields.extend(
+                clock::weather_format::FIELDS
+                    .iter()
+                    .map(|(token, label, _)| format!("{label}  %{token}%")),
+            );
+            self.combo(
+                &fields.iter().map(String::as_str).collect::<Vec<_>>(),
+                0,
+                WEATHER_FIELD,
+                224,
+                321,
+                half,
+            );
+            SendMessageW(
+                self.field(WEATHER_FIELD),
+                CB_SETDROPPEDWIDTH,
+                self.scale(470) as usize,
+                0,
+            );
             SendMessageW(self.field(WEATHER_FIELD), CB_SETMINVISIBLE, 12, 0);
-            self.label("数值精度 · 也可单独写 :0、:1、:2", 248 + half, 294, half, 22);
-            self.combo(&["保留各属性精度", "整数", "1 位小数", "2 位小数"], 0,
-                WEATHER_PRECISION, 248 + half, 321, half);
-            self.control("STATIC", "", WEATHER_SAMPLE, SS_LEFT as u32 | SS_ENDELLIPSIS,
-                224, 369, total, 26);
+            self.label(
+                "数值精度 · 也可单独写 :0、:1、:2",
+                248 + half,
+                294,
+                half,
+                22,
+            );
+            self.combo(
+                &["保留各属性精度", "整数", "1 位小数", "2 位小数"],
+                0,
+                WEATHER_PRECISION,
+                248 + half,
+                321,
+                half,
+            );
+            self.control(
+                "STATIC",
+                "",
+                WEATHER_SAMPLE,
+                SS_LEFT as u32 | SS_ENDELLIPSIS,
+                224,
+                369,
+                total,
+                26,
+            );
             self.divider(224, 411, total);
             self.section("如何组合", 224, 429, total);
-            self.caption("文字、空格和分隔符都可以自由输入。数值自带单位，例如：", 224, 469, total, 24);
-            self.label("%weather_temp:1% → 23.4°C    %weather_humidity% → 68%", 224, 501, total, 24);
-            self.caption("这些属性也可直接放入时钟第一行、第二行或悬停提示。", 224, 537, total, 24);
-            self.caption("来源缺少的属性显示 —；今日温差与小时降雨取对应日期预报。", 224, 569, total, 24);
+            self.caption(
+                "文字、空格和分隔符都可以自由输入。数值自带单位，例如：",
+                224,
+                469,
+                total,
+                24,
+            );
+            self.label(
+                "%weather_temp:1% → 23.4°C    %weather_humidity% → 68%",
+                224,
+                501,
+                total,
+                24,
+            );
+            self.caption(
+                "这些属性也可直接放入时钟第一行、第二行或悬停提示。",
+                224,
+                537,
+                total,
+                24,
+            );
+            self.caption(
+                "来源缺少的属性显示 —；今日温差与小时降雨取对应日期预报。",
+                224,
+                569,
+                total,
+                24,
+            );
             self.update_weather_sample();
         }
     }
     pub(super) unsafe fn update_weather_sample(&self) {
-        if self.page != 10 { return; }
+        if self.page != 10 {
+            return;
+        }
         unsafe {
             let template = self.text(WEATHER_FORMAT);
             let summary = match clock::weather_format::validate(&template) {
                 Ok(()) => {
                     let now = Local::now();
-                    format!("示例 · {}", clock::weather_format::format(&template,
-                        Some(&clock::weather_format::sample(now)), now))
+                    format!(
+                        "示例 · {}",
+                        clock::weather_format::format(
+                            &template,
+                            Some(&clock::weather_format::sample(now)),
+                            now
+                        )
+                    )
                 }
                 Err(error) => error,
             };
             set_text(self.field(WEATHER_SAMPLE), &summary);
-            let preset = clock::weather_format::PRESETS.iter()
-                .position(|(_, value)| *value == template).map_or(0, |index| index + 1);
+            let preset = clock::weather_format::PRESETS
+                .iter()
+                .position(|(_, value)| *value == template)
+                .map_or(0, |index| index + 1);
             SendMessageW(self.field(WEATHER_PRESET), CB_SETCURSEL, preset, 0);
         }
     }
@@ -642,22 +751,39 @@ impl App {
             let index = self.selected(id);
             match id {
                 WEATHER_PRESET => {
-                    if let Some((_, template)) = index.checked_sub(1).and_then(|i| clock::weather_format::PRESETS.get(i)) {
+                    if let Some((_, template)) = index
+                        .checked_sub(1)
+                        .and_then(|i| clock::weather_format::PRESETS.get(i))
+                    {
                         set_text(self.field(WEATHER_FORMAT), template);
                     }
                 }
                 WEATHER_FIELD => {
-                    if let Some((token, _, numeric)) = index.checked_sub(1).and_then(|i| clock::weather_format::FIELDS.get(i)) {
+                    if let Some((token, _, numeric)) = index
+                        .checked_sub(1)
+                        .and_then(|i| clock::weather_format::FIELDS.get(i))
+                    {
                         let precision = self.selected(WEATHER_PRECISION);
-                        let token = if *numeric && precision > 0 { format!("%{token}:{}%", precision - 1) }
-                            else { format!("%{token}%") };
-                        SendMessageW(self.field(WEATHER_FORMAT), EM_REPLACESEL, 1, wide(&token).as_ptr() as isize);
+                        let token = if *numeric && precision > 0 {
+                            format!("%{token}:{}%", precision - 1)
+                        } else {
+                            format!("%{token}%")
+                        };
+                        SendMessageW(
+                            self.field(WEATHER_FORMAT),
+                            EM_REPLACESEL,
+                            1,
+                            wide(&token).as_ptr() as isize,
+                        );
                         SetFocus(self.field(WEATHER_FORMAT));
                     }
                     SendMessageW(self.field(WEATHER_FIELD), CB_SETCURSEL, 0, 0);
                 }
                 WEATHER_PRECISION if index > 0 => {
-                    let template = clock::weather_format::with_precision(&self.text(WEATHER_FORMAT), index - 1);
+                    let template = clock::weather_format::with_precision(
+                        &self.text(WEATHER_FORMAT),
+                        index - 1,
+                    );
                     set_text(self.field(WEATHER_FORMAT), &template);
                 }
                 _ => {}

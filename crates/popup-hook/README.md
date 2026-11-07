@@ -1,5 +1,7 @@
 # QQNT 悬停卡片定位
 
+从 5.11 起默认关闭。仅在“多屏托盘 → QQ 悬停卡片副屏定位 · 实验性”显式开启后安装。此实现把 DLL 加载进 QQ 进程，无法保证不会触发 QQ 的安全检测；常规图标复制、时钟、日历、音量操作不依赖它。
+
 旧版使用进程外 WinEvent，在收到 SHOW 时窗口已经显示，因此主屏闪现无法靠随后移动消除。本 DLL 使用 Windows 的线程级 `WH_CALLWNDPROC`，由宿主只安装到已核对的 `QQ.exe` 的 `Electron_NotifyIconHostWindow` 所属线程。
 
 钩子只给符合已采集卡片特征的 `Chrome_WidgetWin_1` 添加窗口子类：分层、置顶、无子窗口/可调整边框/最大化样式，宽高在限定范围内。子类先执行 QQ 原来的 `WM_WINDOWPOSCHANGING`，再修正最终 `WINDOWPOS`，让 Windows 首次应用的位置就在副屏。没有 API detour，不读聊天内容，不生成鼠标或键盘输入。

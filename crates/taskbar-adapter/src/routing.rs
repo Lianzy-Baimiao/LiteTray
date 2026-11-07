@@ -176,6 +176,16 @@ pub(crate) fn attach_interactive(
     now: u64,
     publish: impl Fn(litetray_adapter_protocol::activation::Activation) -> bool + 'static,
 ) -> Result<crate::watchdog::Watchdog, String> {
+    attach_with_options(plan, views, owner, now, Default::default(), publish)
+}
+pub(crate) fn attach_with_options(
+    plan: &Plan,
+    views: &[BoundView<'_>],
+    owner: Owner,
+    now: u64,
+    options: litetray_adapter_protocol::activation::Options,
+    publish: impl Fn(litetray_adapter_protocol::activation::Activation) -> bool + 'static,
+) -> Result<crate::watchdog::Watchdog, String> {
     let session = prepare(plan, views, owner, now)?;
     let watchdog = crate::watchdog::Watchdog::attach(session)?;
     let mut inputs = Vec::new();
@@ -188,7 +198,7 @@ pub(crate) fn attach_interactive(
         );
     }
     if !inputs.is_empty() {
-        watchdog.prepare_inputs(inputs, publish)?;
+        watchdog.prepare_inputs_with_options(inputs, options, publish)?;
     }
     Ok(watchdog)
 }

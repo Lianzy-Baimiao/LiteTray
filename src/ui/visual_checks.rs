@@ -1,6 +1,7 @@
 //! Real native controls rendered to a memory DC. This creates only hidden
 //! owned windows; it has no Explorer connection, profile, tray icon or network.
 use super::*;
+use chrono::Datelike;
 use chrono::Days;
 
 #[test]
@@ -15,34 +16,61 @@ fn weather_icons_have_smooth_edges_and_solid_strokes_at_actual_sizes() {
                 let mut info: BITMAPINFO = std::mem::zeroed();
                 info.bmiHeader = BITMAPINFOHEADER {
                     biSize: size_of::<BITMAPINFOHEADER>() as u32,
-                    biWidth: extent, biHeight: -extent, biPlanes: 1, biBitCount: 32,
-                    biCompression: BI_RGB, ..std::mem::zeroed()
+                    biWidth: extent,
+                    biHeight: -extent,
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB,
+                    ..std::mem::zeroed()
                 };
                 let mut bits = null_mut();
                 let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
                 assert!(!bitmap.is_null());
                 let old = SelectObject(dc, bitmap);
                 for (name, description) in [
-                    ("sun", "晴"), ("partly-cloudy", "晴间多云"), ("cloud", "阴"),
-                    ("rain", "小雨"), ("thunder", "雷阵雨"), ("snow", "雪"),
-                    ("sleet", "雨夹雪"), ("fog", "雾"), ("hail", "冰雹"), ("unknown", "未知"),
+                    ("sun", "晴"),
+                    ("partly-cloudy", "晴间多云"),
+                    ("cloud", "阴"),
+                    ("rain", "小雨"),
+                    ("thunder", "雷阵雨"),
+                    ("snow", "雪"),
+                    ("sleet", "雨夹雪"),
+                    ("fog", "雾"),
+                    ("hail", "冰雹"),
+                    ("unknown", "未知"),
                 ] {
                     for dark in [false, true] {
                         let (bg, fg) = if dark { (30, 240) } else { (250, 30) };
                         design::fill(dc, design::rect(0, 0, extent, extent), rgb(bg, bg, bg));
-                        dashboard::weather_icon(dc, design::rect(4, 4, size, size), rgb(fg, fg, fg), description);
+                        dashboard::weather_icon(
+                            dc,
+                            design::rect(4, 4, size, size),
+                            rgb(fg, fg, fg),
+                            description,
+                        );
                         GdiFlush();
-                        let pixels = std::slice::from_raw_parts(bits.cast::<u8>(), (extent * extent * 4) as usize);
+                        let pixels = std::slice::from_raw_parts(
+                            bits.cast::<u8>(),
+                            (extent * extent * 4) as usize,
+                        );
                         let mut mixed = 0;
                         let mut solid = 0;
                         let mut spill = 0;
                         for (i, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
-                            assert!(pixel[0] == pixel[1] && pixel[1] == pixel[2], "colored antialias fringe");
+                            assert!(
+                                pixel[0] == pixel[1] && pixel[1] == pixel[2],
+                                "colored antialias fringe"
+                            );
                             if pixel[0] != bg as u8 {
                                 let (x, y) = (i as i32 % extent, i as i32 / extent);
-                                if x < 4 || x >= size + 4 || y < 4 || y >= size + 4 { spill += 1; }
-                                if pixel[0].abs_diff(fg as u8) <= 2 { solid += 1; }
-                                else { mixed += 1; }
+                                if x < 4 || x >= size + 4 || y < 4 || y >= size + 4 {
+                                    spill += 1;
+                                }
+                                if pixel[0].abs_diff(fg as u8) <= 2 {
+                                    solid += 1;
+                                } else {
+                                    mixed += 1;
+                                }
                             }
                         }
                         if mixed < 8 || solid < 8 || spill != 0 {
@@ -63,7 +91,14 @@ fn weather_icons_have_smooth_edges_and_solid_strokes_at_actual_sizes() {
                             bytes.extend_from_slice(&32u16.to_le_bytes());
                             bytes.extend_from_slice(&[0; 24]);
                             bytes.extend_from_slice(pixels);
-                            std::fs::write(dir.join(format!("{name}-{logical}-{dpi}-{}.bmp", if dark { "dark" } else { "light" })), bytes).unwrap();
+                            std::fs::write(
+                                dir.join(format!(
+                                    "{name}-{logical}-{dpi}-{}.bmp",
+                                    if dark { "dark" } else { "light" }
+                                )),
+                                bytes,
+                            )
+                            .unwrap();
                         }
                     }
                 }
@@ -562,7 +597,15 @@ unsafe fn dispatch_settings_requests() {
         // must not run the production weather or holiday timer workers.
         for _ in 0..8 {
             let mut dispatched = false;
-            for kind in [WM_COMMAND, WM_SHOW_SETTINGS] {
+            for kind in [
+                WM_COMMAND,
+                WM_SHOW_SETTINGS,
+                agenda::OPEN_DATE,
+                agenda::OPEN_ENTRY,
+                agenda::OPEN_ALARMS,
+                settings_open::OPEN_FOCUS,
+                WM_TRAY,
+            ] {
                 let mut message: MSG = std::mem::zeroed();
                 while PeekMessageW(&mut message, null_mut(), kind, kind, PM_REMOVE) != 0 {
                     DispatchMessageW(&message);
@@ -723,6 +766,256 @@ unsafe fn startup_settings_case(from_calendar: bool) {
 #[test]
 fn settings_open_first_click_after_hidden_process_startup() {
     on_startup_desktop(SW_HIDE, || unsafe { startup_settings_case(true) });
+}
+unsafe fn startup_organizer_case(entry: u32, busy: u8) {
+    unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-organizer-open-unused.json"),
+        );
+        app.render();
+        app.prewarm_panels();
+        let hwnd = app.hwnd;
+        let popup = app.panel_cache[0];
+        app.panel = popup;
+        panel::open(
+            popup,
+            popup::Rect {
+                left: 0,
+                top: 0,
+                right: 100,
+                bottom: 40,
+            },
+            false,
+        );
+        let view = GetDlgItem(popup, dashboard::ID as i32);
+        STATE.with(|s| *s.borrow_mut() = Some(app));
+        let click = || {
+            if entry == agenda::OPEN_DATE || entry == settings_open::OPEN_FOCUS {
+                SendMessageW(
+                    GetDlgItem(
+                        view,
+                        if entry == agenda::OPEN_DATE {
+                            1106
+                        } else {
+                            1104
+                        },
+                    ),
+                    BM_CLICK,
+                    0,
+                    0,
+                );
+            } else {
+                SendMessageW(
+                    hwnd,
+                    entry,
+                    0,
+                    if entry == WM_TRAY {
+                        NIN_BALLOONUSERCLICK as isize
+                    } else {
+                        0
+                    },
+                );
+            }
+            dispatch_settings_requests();
+        };
+        if busy == 1 {
+            STATE.with(|s| {
+                let _held = s.borrow_mut();
+                click();
+            });
+        } else if busy == 2 {
+            dashboard::with_borrowed_view(view, click);
+            // The command was retained by the view's retry timer.
+            SendMessageW(view, WM_TIMER, 1106, 0);
+        } else {
+            click();
+        }
+        wait_settings(hwnd);
+        let shown = IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) == 0;
+        let page = STATE.with(|s| s.borrow().as_ref().unwrap().page);
+        STATE.with(|s| {
+            let mut app = s.borrow_mut().take().unwrap();
+            app.close_panel();
+            DestroyWindow(hwnd);
+            app.release_resources();
+        });
+        RoUninitialize();
+        assert!(
+            shown,
+            "one organizer click failed to open usable window: entry={entry}, busy={busy}, page={page}"
+        );
+        assert_eq!(
+            page,
+            if entry == WM_TRAY || entry == settings_open::OPEN_FOCUS {
+                9
+            } else {
+                8
+            }
+        );
+    }
+}
+#[test]
+fn main_open_manage_first_click_after_hidden_process_startup() {
+    on_startup_desktop(SW_HIDE, || unsafe {
+        startup_organizer_case(agenda::OPEN_DATE, 0)
+    });
+}
+#[test]
+fn main_open_manage_first_click_survives_reentrant_dispatch() {
+    on_startup_desktop(SW_HIDE, || unsafe {
+        startup_organizer_case(agenda::OPEN_DATE, 1)
+    });
+}
+#[test]
+fn main_open_alarms_first_click_after_hidden_process_startup() {
+    on_startup_desktop(SW_HIDE, || unsafe {
+        startup_organizer_case(agenda::OPEN_ALARMS, 0)
+    });
+}
+#[test]
+fn main_open_entry_first_click_after_hidden_process_startup() {
+    on_startup_desktop(SW_HIDE, || unsafe {
+        startup_organizer_case(agenda::OPEN_ENTRY, 0)
+    });
+}
+#[test]
+fn main_open_notification_first_click_after_hidden_process_startup() {
+    on_startup_desktop(SW_HIDE, || unsafe { startup_organizer_case(WM_TRAY, 0) });
+}
+#[test]
+fn main_open_manage_survives_calendar_borrow() {
+    on_startup_desktop(SW_HIDE, || unsafe {
+        startup_organizer_case(agenda::OPEN_DATE, 2)
+    });
+}
+#[test]
+fn main_open_focus_first_click_after_hidden_process_startup() {
+    on_startup_desktop(SW_HIDE, || unsafe {
+        startup_organizer_case(settings_open::OPEN_FOCUS, 1)
+    });
+}
+#[test]
+fn main_open_manage_restores_minimized_startup() {
+    on_startup_desktop(SW_SHOWMINIMIZED, || unsafe {
+        startup_organizer_case(agenda::OPEN_DATE, 0)
+    });
+}
+#[test]
+fn main_open_mixed_entries_restore_once_and_preserve_settings_drafts() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-mixed-open-unused.json"),
+        );
+        app.page = 1;
+        app.render();
+        set_text(app.field(201), "%time% · 跨入口草稿");
+        let hwnd = app.hwnd;
+        STATE.with(|s| *s.borrow_mut() = Some(app));
+        for (index, msg) in [
+            agenda::OPEN_DATE,
+            agenda::OPEN_ENTRY,
+            agenda::OPEN_ALARMS,
+            settings_open::OPEN_FOCUS,
+            WM_SHOW_SETTINGS,
+        ]
+        .into_iter()
+        .cycle()
+        .take(35)
+        .enumerate()
+        {
+            ShowWindow(hwnd, SW_SHOWMINNOACTIVE);
+            ShowWindow(hwnd, SW_HIDE);
+            STATE.with(|s| {
+                let _held = s.borrow_mut();
+                SendMessageW(
+                    hwnd,
+                    msg,
+                    if msg == agenda::OPEN_DATE {
+                        Local::now().date_naive().num_days_from_ce() as usize
+                    } else {
+                        0
+                    },
+                    0,
+                );
+            });
+            wait_settings(hwnd);
+            assert_ne!(IsWindowVisible(hwnd), 0, "entry {index} lost");
+            assert_eq!(IsIconic(hwnd), 0);
+            assert_eq!(
+                GetPropW(hwnd, wide("LiteTray.SettingsOpen.Completed").as_ptr()) as usize,
+                index + 1
+            );
+        }
+        STATE.with(|s| {
+            let mut app = s.borrow_mut().take().unwrap();
+            app.command(NAV + 1);
+            assert_eq!(app.text(201), "%time% · 跨入口草稿");
+            DestroyWindow(hwnd);
+            app.release_resources();
+        });
+        RoUninitialize();
+    });
+}
+#[test]
+fn volume_settings_switch_independently_and_survive_cache_and_save() {
+    on_isolated_desktop(|| unsafe {
+        let path =
+            std::env::temp_dir().join(format!("litetray-volume-{}.json", std::process::id()));
+        let mut app = app_for_check(false, 96, &path.with_extension("agenda"));
+        app.page = 1;
+        app.render();
+        for (scroll, mute) in [(true, false), (false, true), (false, false), (true, true)] {
+            SendMessageW(
+                app.field(settings::VOLUME_SCROLL),
+                BM_SETCHECK,
+                scroll as usize,
+                0,
+            );
+            SendMessageW(
+                app.field(settings::VOLUME_MUTE),
+                BM_SETCHECK,
+                mute as usize,
+                0,
+            );
+            app.command(NAV + 7);
+            app.command(NAV + 1);
+            assert_eq!(app.checked(settings::VOLUME_SCROLL), scroll);
+            assert_eq!(app.checked(settings::VOLUME_MUTE), mute);
+            config::save(&path, &app.draft).unwrap();
+            let saved = config::load(&path).unwrap();
+            assert_eq!(
+                (saved.clock.volume_scroll, saved.clock.volume_mute),
+                (scroll, mute)
+            );
+        }
+        if let Some(output) = std::env::var_os("LITETRAY_VOLUME_RENDER_DIR") {
+            let output = std::path::PathBuf::from(output);
+            std::fs::create_dir_all(&output).unwrap();
+            for dark in [false, true] {
+                app.draft.appearance = if dark {
+                    Appearance::Dark
+                } else {
+                    Appearance::Light
+                };
+                app.recreate_resources();
+                app.render();
+                write_window(
+                    app.hwnd,
+                    &output.join(format!(
+                        "volume-{}.bmp",
+                        if dark { "dark" } else { "light" }
+                    )),
+                );
+            }
+        }
+        std::fs::remove_file(path).unwrap();
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+    });
 }
 #[test]
 fn settings_open_first_request_after_hidden_process_startup() {
@@ -1619,16 +1912,27 @@ fn settings_switches_preserve_chrome_drafts_and_native_font_choices() {
 #[test]
 fn weather_format_controls_preserve_selection_precision_and_saved_draft() {
     on_isolated_desktop(|| unsafe {
-        let path = std::env::temp_dir().join(format!("litetray-weather-format-{}.json", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "litetray-weather-format-{}.json",
+            std::process::id()
+        ));
         let mut app = app_for_check(false, 96, &path.with_extension("agenda"));
         app.page = 1;
         app.render();
         app.command(settings::OPEN_WEATHER_FORMAT);
         assert_eq!(app.page, 10);
-        assert_eq!(app.text(settings::WEATHER_FORMAT), app.saved.clock.weather_format);
+        assert_eq!(
+            app.text(settings::WEATHER_FORMAT),
+            app.saved.clock.weather_format
+        );
         SendMessageW(app.field(settings::WEATHER_PRESET), CB_SETCURSEL, 2, 0);
         app.choose_weather_format(settings::WEATHER_PRESET);
-        assert!(app.draft.clock.weather_format.contains("%weather_humidity%"));
+        assert!(
+            app.draft
+                .clock
+                .weather_format
+                .contains("%weather_humidity%")
+        );
         SendMessageW(app.field(settings::WEATHER_PRECISION), CB_SETCURSEL, 2, 0);
         app.choose_weather_format(settings::WEATHER_PRECISION);
         assert!(app.draft.clock.weather_format.contains("%weather_temp:1%"));
@@ -1641,21 +1945,36 @@ fn weather_format_controls_preserve_selection_precision_and_saved_draft() {
         app.command(NAV + 10);
         assert_eq!(app.text(settings::WEATHER_FORMAT), "前%weather_temp:1%后");
         config::save(&path, &app.draft).unwrap();
-        assert_eq!(config::load(&path).unwrap().clock.weather_format, "前%weather_temp:1%后");
+        assert_eq!(
+            config::load(&path).unwrap().clock.weather_format,
+            "前%weather_temp:1%后"
+        );
         set_text(app.field(settings::WEATHER_FORMAT), "%weather%");
         app.collect_page().unwrap();
         assert!(app.draft.validate().is_err());
-        assert!(clock::validate_template("%weather_temp:1% %weather_rain% %weather_source%").is_ok());
+        assert!(
+            clock::validate_template("%weather_temp:1% %weather_rain% %weather_source%").is_ok()
+        );
         std::fs::remove_file(path).unwrap();
         if let Some(output) = std::env::var_os("LITETRAY_WEATHER_FORMAT_RENDER_DIR") {
             let output = std::path::PathBuf::from(output);
             std::fs::create_dir_all(&output).unwrap();
             for dark in [false, true] {
-                app.draft.appearance = if dark { Appearance::Dark } else { Appearance::Light };
+                app.draft.appearance = if dark {
+                    Appearance::Dark
+                } else {
+                    Appearance::Light
+                };
                 app.draft.clock.weather_format = clock::weather_format::PRESETS[1].1.into();
                 app.recreate_resources();
                 app.render();
-                write_window(app.hwnd, &output.join(format!("weather-format-{}.bmp", if dark { "dark" } else { "light" })));
+                write_window(
+                    app.hwnd,
+                    &output.join(format!(
+                        "weather-format-{}.bmp",
+                        if dark { "dark" } else { "light" }
+                    )),
+                );
             }
         }
         DestroyWindow(app.hwnd);

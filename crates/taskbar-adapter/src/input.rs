@@ -6,7 +6,7 @@ use crate::{
 };
 use litetray_adapter_protocol::{
     VERSION,
-    activation::{Activation, Input, Rect},
+    activation::{Activation, Input, Options, Rect},
     clock::Owner,
 };
 use std::{
@@ -26,6 +26,8 @@ use windows_sys::{
 
 const IID_TAPPED: GUID = GUID::from_u128(0x68d940cc_9ff0_49ce_b141_3f07ec477b97);
 const IID_KEY: GUID = GUID::from_u128(0x7c63d2e5_7a0e_4e12_b96a_7715aa6ff1c8);
+// Windows.UI.Xaml.winmd: Windows.UI.Xaml.Input.PointerEventHandler.
+const IID_POINTER: GUID = GUID::from_u128(0xe4385929_c004_4bcf_8970_359486e39f88);
 static LIVE_HANDLERS: AtomicU32 = AtomicU32::new(0);
 #[repr(C)]
 struct HandlerTable {
@@ -47,6 +49,7 @@ struct Context {
     owner: Owner,
     island: HWND,
     publish: Box<dyn Fn(Activation) -> bool>,
+    options: Options,
 }
 /// Shared by every clock in one session. The busy flag prevents nested native
 /// events from publishing the same sequence while a callback pumps messages.
@@ -73,10 +76,10 @@ unsafe extern "system" fn query(this: *mut c_void, iid: *const GUID, out: *mut *
         }
         *out = null_mut();
         let handler = &*(this as *const Handler);
-        let expected = if handler.kind == Input::Pointer {
-            IID_TAPPED
-        } else {
-            IID_KEY
+        let expected = match handler.kind {
+            Input::Pointer => IID_TAPPED,
+            Input::Keyboard => IID_KEY,
+            _ => IID_POINTER,
         };
         if !guid_eq(*iid, IID_IUnknown) && !guid_eq(*iid, expected) {
             return E_NOINTERFACE;
@@ -160,16 +163,16 @@ unsafe fn dispatch(
     unsafe {
         let args = Object::query_borrowed(
             args,
-            if kind == Input::Pointer {
-                &IID_ITappedRoutedEventArgs
-            } else {
-                &IID_IKeyRoutedEventArgs
+            match kind {
+                Input::Pointer => &IID_ITappedRoutedEventArgs,
+                Input::Keyboard => &IID_IKeyRoutedEventArgs,
+                _ => &IID_IPointerRoutedEventArgs,
             },
         )?;
-        let (handled, set_handled) = if kind == Input::Pointer {
+        let (handled, set_handled, input) = if kind == Input::Pointer {
             let table = args.table::<ITappedRoutedEventArgs_Vtbl>();
-            (table.Handled, table.SetHandled)
-        } else {
+            (table.Handled, table.SetHandled, kind)
+        } else if kind == Input::Keyboard {
             let table = args.table::<IKeyRoutedEventArgs_Vtbl>();
             let mut key = VirtualKey(0);
             check((table.Key)(args.raw(), &mut key), "Key")?;
@@ -181,8 +184,17 @@ unsafe fn dispatch(
             if status.WasKeyDown {
                 return Ok(());
             }
-            (table.Handled, table.SetHandled)
+            (table.Handled, table.SetHandled, kind)
+        } else {
+            let table = args.table::<IPointerRoutedEventArgs_Vtbl>();
+            let Some(input) = pointer_input(&args, sender, kind)? else {
+                return Ok(());
+            };
+            (table.Handled, table.SetHandled, input)
         };
+        if !context.options.allows(input) {
+            return Ok(());
+        }
         let mut already = false;
         check(handled(args.raw(), &mut already), "Handled")?;
         if already {
@@ -203,7 +215,7 @@ unsafe fn dispatch(
             clock_id: context.clock_id,
             source_window: context.island as u64,
             anchor,
-            input: kind,
+            input,
         };
         event.validate()?;
         if (context.publish)(event) && context.active.get() {
@@ -211,6 +223,73 @@ unsafe fn dispatch(
             check(set_handled(args.raw(), true), "SetHandled")?;
         }
         Ok(())
+    }
+}
+unsafe fn pointer_input(
+    args: &Object,
+    sender: *mut c_void,
+    kind: Input,
+) -> Result<Option<Input>, String> {
+    unsafe {
+        let mut point = null_mut();
+        let relative = Object::query_borrowed(sender, &IID_IUIElement)?;
+        check(
+            (args.table::<IPointerRoutedEventArgs_Vtbl>().GetCurrentPoint)(
+                args.raw(),
+                relative.raw(),
+                &mut point,
+            ),
+            "GetCurrentPoint",
+        )?;
+        let point = Object::owned(point)?.query(&IID_IPointerPoint)?;
+        let mut position: Point = std::mem::zeroed();
+        check(
+            (point.table::<IPointerPoint_Vtbl>().Position)(point.raw(), &mut position),
+            "Pointer position",
+        )?;
+        let fe = Object::query_borrowed(sender, &IID_IFrameworkElement)?;
+        let (mut width, mut height) = (0., 0.);
+        check(
+            (fe.table::<IFrameworkElement_Vtbl>().ActualWidth)(fe.raw(), &mut width),
+            "Pointer width",
+        )?;
+        check(
+            (fe.table::<IFrameworkElement_Vtbl>().ActualHeight)(fe.raw(), &mut height),
+            "Pointer height",
+        )?;
+        if !(position.X >= 0.
+            && position.Y >= 0.
+            && (position.X as f64) < width
+            && (position.Y as f64) < height)
+        {
+            return Ok(None);
+        }
+        let mut properties = null_mut();
+        check(
+            (point.table::<IPointerPoint_Vtbl>().Properties)(point.raw(), &mut properties),
+            "Pointer properties",
+        )?;
+        let properties = Object::owned(properties)?.query(&IID_IPointerPointProperties)?;
+        let table = properties.table::<IPointerPointProperties_Vtbl>();
+        if matches!(kind, Input::VolumeWheel(_)) {
+            let (mut horizontal, mut delta) = (false, 0);
+            check(
+                (table.IsHorizontalMouseWheel)(properties.raw(), &mut horizontal),
+                "Horizontal wheel",
+            )?;
+            check(
+                (table.MouseWheelDelta)(properties.raw(), &mut delta),
+                "Wheel delta",
+            )?;
+            Ok((!horizontal && delta != 0).then_some(Input::VolumeWheel(delta)))
+        } else {
+            let mut update = PointerUpdateKind::Other;
+            check(
+                (table.PointerUpdateKind)(properties.raw(), &mut update),
+                "Pointer update",
+            )?;
+            Ok((update.0 == PointerUpdateKind::MiddleButtonPressed.0).then_some(Input::VolumeMute))
+        }
     }
 }
 fn guid_eq(a: GUID, b: GUID) -> bool {
@@ -324,6 +403,8 @@ pub struct Subscription {
     context: Rc<Context>,
     tap: Option<i64>,
     key: Option<i64>,
+    wheel: Option<i64>,
+    middle: Option<i64>,
     hit_area: RefCell<Option<crate::input_surface::Surface>>,
 }
 impl Subscription {
@@ -333,6 +414,25 @@ impl Subscription {
         owner: Owner,
         clock_id: u64,
         sequence: Rc<Sequence>,
+        publish: impl Fn(Activation) -> bool + 'static,
+    ) -> Result<Self, String> {
+        Self::prepare_with_options(
+            element,
+            island,
+            owner,
+            clock_id,
+            sequence,
+            Options::default(),
+            publish,
+        )
+    }
+    pub fn prepare_with_options(
+        element: &Object,
+        island: HWND,
+        owner: Owner,
+        clock_id: u64,
+        sequence: Rc<Sequence>,
+        options: Options,
         publish: impl Fn(Activation) -> bool + 'static,
     ) -> Result<Self, String> {
         owner.validate()?;
@@ -350,12 +450,15 @@ impl Subscription {
             owner,
             island,
             publish: Box::new(publish),
+            options,
         });
         let mut subscription = Self {
             element: element.query(&IID_IUIElement)?,
             context,
             tap: None,
             key: None,
+            wheel: None,
+            middle: None,
             hit_area: RefCell::new(crate::input_surface::Surface::prepare(element)?),
         };
         unsafe {
@@ -373,6 +476,26 @@ impl Subscription {
                 "KeyDown subscription",
             )?;
             subscription.key = Some(token);
+            if options.volume_scroll {
+                let delegate = handler(subscription.context.clone(), Input::VolumeWheel(0))?;
+                check(
+                    (table.PointerWheelChanged)(
+                        subscription.element.raw(),
+                        delegate.raw(),
+                        &mut token,
+                    ),
+                    "Wheel subscription",
+                )?;
+                subscription.wheel = Some(token);
+            }
+            if options.volume_mute {
+                let delegate = handler(subscription.context.clone(), Input::VolumeMute)?;
+                check(
+                    (table.PointerPressed)(subscription.element.raw(), delegate.raw(), &mut token),
+                    "Middle subscription",
+                )?;
+                subscription.middle = Some(token);
+            }
         }
         Ok(subscription)
     }
@@ -410,6 +533,25 @@ impl Subscription {
                 ) {
                     Ok(()) => self.key = None,
                     Err(e) => errors.push(e),
+                }
+            }
+            for (token, remove, name) in [
+                (
+                    &mut self.wheel,
+                    table.RemovePointerWheelChanged,
+                    "Remove wheel handler",
+                ),
+                (
+                    &mut self.middle,
+                    table.RemovePointerPressed,
+                    "Remove middle handler",
+                ),
+            ] {
+                if let Some(value) = *token {
+                    match check(remove(self.element.raw(), value), name) {
+                        Ok(()) => *token = None,
+                        Err(error) => errors.push(error),
+                    }
                 }
             }
         }
@@ -582,6 +724,39 @@ pub(crate) fn self_test(
         sub.activate()?;
         sub.detach()?;
     }
+    // Exercise the real XAML add/remove slots and delegate interface queries
+    // for both volume controls, while preserving the native calendar choice.
+    for calendar in [false, true] {
+        let options = Options {
+            calendar,
+            volume_scroll: true,
+            volume_mute: true,
+        };
+        let mut sub = Subscription::prepare_with_options(
+            element,
+            island,
+            owner.clone(),
+            1,
+            Sequence::new(),
+            options,
+            |_| true,
+        )?;
+        let probe = sub.probe()?;
+        if probe.invoke()? {
+            return Err("准备阶段不能消费输入".into());
+        }
+        sub.activate()?;
+        if sub.wheel.is_none() || sub.middle.is_none() || probe.invoke()? != calendar {
+            return Err("音量订阅未生效或影响系统日历选项".into());
+        }
+        for kind in [Input::VolumeWheel(0), Input::VolumeMute] {
+            handler(sub.context.clone(), kind)?.query(&IID_POINTER)?;
+        }
+        sub.detach()?;
+        if sub.wheel.is_some() || sub.middle.is_some() || probe.invoke()? {
+            return Err("音量订阅未完全解除".into());
+        }
+    }
     if LIVE_HANDLERS.load(Ordering::Relaxed) != baseline {
         return Err("点击委托引用未释放".into());
     }
@@ -590,6 +765,8 @@ pub(crate) fn self_test(
         "xaml_input_detach_suppresses_callback",
         "xaml_input_repeated_subscription_cleanup",
         "xaml_input_rejected_delivery_preserves_default",
+        "xaml_volume_subscriptions_respect_system_calendar",
+        "xaml_volume_delegates_release_on_stop",
     ])
 }
 

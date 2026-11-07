@@ -112,6 +112,14 @@ impl Session {
         targets: Vec<InputTarget>,
         publish: impl Fn(Activation) -> bool + 'static,
     ) -> Result<(), String> {
+        self.prepare_inputs_with_options(targets, Default::default(), publish)
+    }
+    pub fn prepare_inputs_with_options(
+        &mut self,
+        targets: Vec<InputTarget>,
+        options: litetray_adapter_protocol::activation::Options,
+        publish: impl Fn(Activation) -> bool + 'static,
+    ) -> Result<(), String> {
         if self.state != State::Prepared || self.inputs_prepared {
             return Err("点击订阅只能在会话准备阶段配置一次".into());
         }
@@ -140,12 +148,13 @@ impl Session {
         let publish = Rc::new(publish);
         for target in targets {
             let publisher = publish.clone();
-            match Subscription::prepare(
+            match Subscription::prepare_with_options(
                 &target.element,
                 target.island,
                 self.owner().clone(),
                 target.id,
                 sequence.clone(),
+                options,
                 move |event| publisher(event),
             ) {
                 Ok(input) => self.inputs.push((target.id, input)),
