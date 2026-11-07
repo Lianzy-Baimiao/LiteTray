@@ -12,9 +12,9 @@ mod quick_agenda;
 mod settings;
 mod settings_open;
 mod typography;
-mod volume_tip;
 #[cfg(test)]
 mod visual_checks;
+mod volume_tip;
 mod weather_icons;
 mod weather_location;
 mod widgets;
@@ -50,7 +50,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.11.3";
+const UI_REVISION: &str = "开发版 5.11.4";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -1081,8 +1081,13 @@ impl App {
                     1 => MonitorScope::Primary,
                     _ => MonitorScope::Selected,
                 };
-                c.tray.enabled = self.checked(308);
-                c.tray.show_icons = self.checked(308);
+                let copy_icons = self.checked(308);
+                // The checkbox represents two legacy flags. Merely viewing
+                // their combined state must not rewrite either saved flag.
+                if copy_icons != (c.tray.enabled && c.tray.show_icons) {
+                    c.tray.enabled = copy_icons;
+                    c.tray.show_icons = copy_icons;
+                }
                 c.tray.qq_popup_compatibility = self.checked(309);
                 let selected = (0..self.monitor_rows.len())
                     .map(|i| unsafe { SendMessageW(self.field(305), LB_GETSEL, i, 0) > 0 })
@@ -1158,6 +1163,46 @@ impl App {
         // Full validation belongs to Save; adding a keyed provider is possible before entering its Host.
         self.draft = c;
         Ok(())
+    }
+    unsafe fn finish_settings(&mut self, exiting: bool) -> bool {
+        unsafe {
+            let collected = self.collect_page();
+            if collected.is_ok()
+                && serde_json::to_value(&self.draft).ok() == serde_json::to_value(&self.saved).ok()
+            {
+                return true;
+            }
+            let choice = MessageBoxW(
+                self.hwnd,
+                wide(if exiting {
+                    "设置尚未保存，是否保存后退出？\n选择“否”放弃修改；选择“取消”继续编辑。"
+                } else {
+                    "设置尚未保存，是否保存后关闭设置窗口？\n选择“否”放弃修改；选择“取消”继续编辑。"
+                })
+                .as_ptr(),
+                wide("LiteTray").as_ptr(),
+                MB_YESNOCANCEL | MB_ICONQUESTION,
+            );
+            match choice {
+                IDYES => match self.save() {
+                    Ok(()) => true,
+                    Err(error) => {
+                        self.set_status(error);
+                        false
+                    }
+                },
+                IDNO => {
+                    self.draft = self.saved.clone();
+                    // A cached page may still contain discarded native input.
+                    for page in self.settings_cache.drain(..) {
+                        DestroyWindow(page.window);
+                    }
+                    self.render();
+                    true
+                }
+                _ => false,
+            }
+        }
     }
     fn monitor_summary(&self) -> String {
         let result = monitors::resolve(&self.draft.tray, &self.monitor_snapshot);
@@ -1926,28 +1971,8 @@ impl App {
                     PostMessageW(self.hwnd, WM_SHOW_SETTINGS, 0, 0);
                 }
                 EXIT => {
-                    if let Err(e) = self.collect_page() {
-                        self.set_status(e);
+                    if !self.finish_settings(true) {
                         return false;
-                    }
-                    if serde_json::to_value(&self.draft).ok()
-                        != serde_json::to_value(&self.saved).ok()
-                    {
-                        let choice = MessageBoxW(
-                            self.hwnd,
-                            wide("设置尚未保存，是否保存后退出？").as_ptr(),
-                            wide("LiteTray").as_ptr(),
-                            MB_YESNOCANCEL | MB_ICONQUESTION,
-                        );
-                        if choice == IDCANCEL {
-                            return false;
-                        }
-                        if choice == IDYES
-                            && let Err(e) = self.save()
-                        {
-                            self.set_status(e);
-                            return false;
-                        }
                     }
                     if let Err(error) = self.stop_taskbar() {
                         self.set_status(format!("退出前恢复未完成：{error}"));
@@ -2402,7 +2427,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     Some(0)
                 }
                 WM_CLOSE => {
-                    ShowWindow(hwnd, SW_HIDE);
+                    if app.finish_settings(false) {
+                        ShowWindow(hwnd, SW_HIDE);
+                    }
                     app.schedule_tick();
                     Some(0)
                 }

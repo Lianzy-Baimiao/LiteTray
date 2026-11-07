@@ -1982,6 +1982,220 @@ fn weather_format_controls_preserve_selection_precision_and_saved_draft() {
     });
 }
 #[test]
+fn closing_settings_resolves_edits_before_hiding_the_window() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-close-ui-unused.json"),
+        );
+        app.page = 1;
+        app.render();
+        let hwnd = app.hwnd;
+        STATE.with(|s| *s.borrow_mut() = Some(app));
+        SendMessageW(hwnd, WM_SHOW_SETTINGS, 0, 0);
+        STATE.with(|s| {
+            let app = s.borrow();
+            set_text(app.as_ref().unwrap().field(201), "%time% changed");
+        });
+        let reply = settings_prompt_reply(hwnd, IDCANCEL);
+        SendMessageW(hwnd, WM_CLOSE, 0, 0);
+        assert!(
+            reply.join().unwrap(),
+            "close silently leaves a hidden dirty draft"
+        );
+        assert_ne!(IsWindowVisible(hwnd), 0, "cancel must keep the editor open");
+        STATE.with(|s| {
+            let mut state = s.borrow_mut();
+            let app = state.as_mut().unwrap();
+            app.command(NAV + 7);
+            set_text(app.field(804), "changed tooltip");
+            app.command(NAV + 10);
+        });
+        let reply = settings_prompt_reply(hwnd, IDNO);
+        SendMessageW(hwnd, WM_CLOSE, 0, 0);
+        assert!(reply.join().unwrap());
+        assert_eq!(IsWindowVisible(hwnd), 0);
+        STATE.with(|s| {
+            let mut app = s.borrow_mut().take().unwrap();
+            for page in [1, 7, 10, 1] {
+                app.command(NAV + page);
+                app.collect_page().unwrap();
+                assert_eq!(
+                    serde_json::to_value(&app.draft).unwrap(),
+                    serde_json::to_value(&app.saved).unwrap(),
+                    "discarded changes must not come back from a cached page"
+                );
+            }
+            assert!(
+                app.command(EXIT),
+                "closed clean settings must exit without a prompt"
+            );
+            DestroyWindow(hwnd);
+            app.release_resources();
+        });
+    });
+}
+fn settings_prompt_reply(owner: HWND, choice: i32) -> thread::JoinHandle<bool> {
+    let owner = owner as usize;
+    let ui_thread = unsafe { GetCurrentThreadId() };
+    thread::spawn(move || unsafe {
+        unsafe extern "system" fn find(window: HWND, data: LPARAM) -> i32 {
+            unsafe {
+                let (owner, found) = &mut *(data as *mut (usize, HWND));
+                let mut class = [0u16; 32];
+                let length = GetClassNameW(window, class.as_mut_ptr(), class.len() as i32);
+                if GetWindow(window, GW_OWNER) as usize == *owner
+                    && String::from_utf16_lossy(&class[..length.max(0) as usize]) == "#32770"
+                {
+                    *found = window;
+                }
+                1
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut state: (usize, HWND) = (owner, null_mut());
+        while Instant::now() < deadline {
+            EnumThreadWindows(ui_thread, Some(find), &mut state as *mut _ as isize);
+            if !state.1.is_null() {
+                PostMessageW(state.1, WM_COMMAND, choice as usize, 0);
+                return true;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        false
+    })
+}
+#[test]
+fn closing_settings_saves_valid_edits_and_keeps_failed_saves_open() {
+    on_isolated_desktop(|| unsafe {
+        let directory = std::env::temp_dir().join(format!(
+            "litetray-close-save-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let previous = std::env::var_os("LITETRAY_DATA_DIR");
+        std::env::set_var("LITETRAY_DATA_DIR", &directory);
+        let mut app = app_for_check(false, 96, &directory.join("agenda.json"));
+        app.page = 1;
+        app.render();
+        let hwnd = app.hwnd;
+        STATE.with(|s| *s.borrow_mut() = Some(app));
+        SendMessageW(hwnd, WM_SHOW_SETTINGS, 0, 0);
+        let edit = STATE.with(|s| s.borrow().as_ref().unwrap().field(207));
+        set_text(edit, "invalid");
+        let reply = settings_prompt_reply(hwnd, IDYES);
+        SendMessageW(hwnd, WM_CLOSE, 0, 0);
+        assert!(reply.join().unwrap());
+        assert_ne!(
+            IsWindowVisible(hwnd),
+            0,
+            "invalid edits must remain visible"
+        );
+        assert_eq!(window_text(edit), "invalid");
+        assert!(!directory.join("config.json").exists());
+
+        set_text(edit, "180");
+        // A directory at the destination reliably fails the real atomic save.
+        std::fs::create_dir_all(directory.join("config.json")).unwrap();
+        let reply = settings_prompt_reply(hwnd, IDYES);
+        SendMessageW(hwnd, WM_CLOSE, 0, 0);
+        assert!(reply.join().unwrap());
+        assert_ne!(
+            IsWindowVisible(hwnd),
+            0,
+            "I/O failure must not close the editor"
+        );
+        assert_eq!(window_text(edit), "180");
+        std::fs::remove_dir(directory.join("config.json")).unwrap();
+
+        let reply = settings_prompt_reply(hwnd, IDYES);
+        SendMessageW(hwnd, WM_CLOSE, 0, 0);
+        assert!(reply.join().unwrap());
+        assert_eq!(IsWindowVisible(hwnd), 0);
+        assert_eq!(
+            config::load(&directory.join("config.json"))
+                .unwrap()
+                .clock
+                .width,
+            180
+        );
+        STATE.with(|s| {
+            let mut app = s.borrow_mut().take().unwrap();
+            assert!(app.command(EXIT));
+            DestroyWindow(hwnd);
+            app.release_resources();
+        });
+        if let Some(previous) = previous {
+            std::env::set_var("LITETRAY_DATA_DIR", previous);
+        } else {
+            std::env::remove_var("LITETRAY_DATA_DIR");
+        }
+        std::fs::remove_file(directory.join("config.json")).unwrap();
+        std::fs::remove_file(directory.join("popup-placement.json")).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    });
+}
+#[test]
+fn settings_browsing_does_not_create_unsaved_changes() {
+    on_isolated_desktop(|| unsafe {
+        let mut profiles = vec![];
+        for enabled in [false, true] {
+            for show_icons in [false, true] {
+                let mut config = Config::default();
+                config.tray.enabled = enabled;
+                config.tray.show_icons = show_icons;
+                profiles.push((format!("enabled={enabled}, icons={show_icons}"), config));
+            }
+        }
+        if let Some(path) = std::env::var_os("LITETRAY_SETTINGS_PROFILE_CHECK") {
+            profiles.push((
+                "profile".into(),
+                serde_json::from_slice::<Config>(&std::fs::read(path).unwrap()).unwrap(),
+            ));
+        }
+        let mut differences = vec![];
+        for (name, config) in profiles {
+            let mut app = app_for_check(
+                false,
+                96,
+                &std::env::temp_dir().join("litetray-browsing-ui-unused.json"),
+            );
+            app.draft = config.clone();
+            app.saved = config;
+            app.render();
+            for page in (0..PAGES.len()).chain((0..PAGES.len()).rev()) {
+                let title = PAGES[page];
+                app.command(NAV + page as u16);
+                app.collect_page().unwrap();
+                let before = serde_json::to_value(&app.saved).unwrap();
+                let after = serde_json::to_value(&app.draft).unwrap();
+                for (key, value) in before.as_object().unwrap() {
+                    if after[key] != *value {
+                        differences.push(format!(
+                            "{name}/{title}/{key}: saved={value}, draft={}",
+                            after[key]
+                        ));
+                    }
+                }
+            }
+            if differences.is_empty() {
+                assert!(
+                    app.command(EXIT),
+                    "browsing must not trigger the exit prompt"
+                );
+            }
+            DestroyWindow(app.hwnd);
+            app.release_resources();
+        }
+        assert!(
+            differences.is_empty(),
+            "browsing triggers the unsaved-settings exit prompt:\n{}",
+            differences.join("\n")
+        );
+    });
+}
+#[test]
 fn settings_date_patterns_preview_validate_and_survive_navigation() {
     on_isolated_desktop(|| unsafe {
         let mut app = app_for_check(
