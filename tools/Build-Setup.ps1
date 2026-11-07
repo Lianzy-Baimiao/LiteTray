@@ -46,17 +46,19 @@ $arguments = @(
 )
 & $CompilerPath @arguments
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
-$setup = Join-Path $output 'Setup.exe'
+$setupBase = "LiteTray-$version-Setup-x64"
+$setupName = "$setupBase.exe"
+$setup = Join-Path $output $setupName
 $setupHash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()
-[IO.File]::WriteAllText((Join-Path $output 'Setup.exe.sha256'), "$setupHash  Setup.exe`r`n")
+[IO.File]::WriteAllText((Join-Path $output "$setupName.sha256"), "$setupHash  $setupName`r`n")
 $manifest = [ordered]@{
     version = $version
     buildId = $buildId
-    setup = 'Setup.exe'
+    setup = $setupName
     sha256 = $setupHash
     executable = "versions\$buildId\LiteTray.exe"
     binaries = [ordered]@{}
 }
 for ($i = 0; $i -lt $names.Count; $i++) { $manifest.binaries[$names[$i]] = $hashes[$i] }
-$manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $output 'Setup-manifest.json') -Encoding utf8
+$manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $output "$setupBase.manifest.json") -Encoding utf8
 [pscustomobject]@{ Setup = $setup; Version = $version; BuildId = $buildId; SizeMiB = [math]::Round((Get-Item -LiteralPath $setup).Length / 1MB, 2); SHA256 = $setupHash }

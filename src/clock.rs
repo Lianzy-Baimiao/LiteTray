@@ -160,16 +160,20 @@ pub fn frame_with_weather(
     now: DateTime<Local>,
 ) -> litetray_adapter_protocol::clock::Frame {
     let summary = weather_format::format(&config.weather_format, weather, now);
-    frame_using(config, |template| format_using(template, config, now, &summary, weather))
+    frame_using(config, |template| {
+        format_using(template, config, now, &summary, weather)
+    })
 }
-fn frame_using(config: &ClockConfig, render: impl Fn(&str) -> String) -> litetray_adapter_protocol::clock::Frame {
+fn frame_using(
+    config: &ClockConfig,
+    render: impl Fn(&str) -> String,
+) -> litetray_adapter_protocol::clock::Frame {
     use litetray_adapter_protocol::clock::{Frame, Style, Text};
     Frame {
         text: Text {
             top: render(&config.top_line),
             bottom: render(&config.bottom_line),
-            tooltip: (!config.tooltip_line.is_empty())
-                .then(|| render(&config.tooltip_line)),
+            tooltip: (!config.tooltip_line.is_empty()).then(|| render(&config.tooltip_line)),
         },
         style: Style {
             font_family: config.font_family.clone(),
@@ -204,8 +208,13 @@ pub fn validate_template(template: &str) -> Result<(), String> {
 pub fn format(template: &str, config: &ClockConfig, now: DateTime<Local>, weather: &str) -> String {
     format_using(template, config, now, weather, None)
 }
-fn format_using(template: &str, config: &ClockConfig, now: DateTime<Local>, weather: &str,
-    result: Option<&crate::weather::WeatherResult>) -> String {
+fn format_using(
+    template: &str,
+    config: &ClockConfig,
+    now: DateTime<Local>,
+    weather: &str,
+    result: Option<&crate::weather::WeatherResult>,
+) -> String {
     let weekday = [
         "星期一",
         "星期二",
@@ -244,7 +253,9 @@ fn format_using(template: &str, config: &ClockConfig, now: DateTime<Local>, weat
             ),
             "percent" => out.push('%'),
             "newline" => out.push('\n'),
-            token if weather_format::supports(token) => out.push_str(&weather_format::value(token, result, now)),
+            token if weather_format::supports(token) => {
+                out.push_str(&weather_format::value(token, result, now))
+            }
             _ => out.push_str(&format!("%{token}%")),
         }
         out

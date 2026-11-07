@@ -162,7 +162,7 @@ Rust 原生 Windows 任务栏工具，目标是替代 Windhawk 的 Taskbar Clock
 .\tools\Build-Setup.ps1 -SkipBuild -BinaryPath .\dist\LiteTray-ui5101-weather-icons\LiteTray.exe
 ```
 
-输出为 `dist/Setup.exe`，旁边包含 SHA-256 和版本清单。中文安装向导默认按用户安装至 `%LOCALAPPDATA%\Programs\LiteTray`，创建开始菜单入口，可选桌面图标；无需管理员权限。升级正常退出旧宿主，使用按内容哈希区分的版本目录，已有开机启动项会指向新版。安装和卸载保留 `%LOCALAPPDATA%\LiteTray` 下的配置、日程及缓存；卸载不会删除用户凭据。安装程序不关闭 Windhawk，也不重启 Explorer。详见 [安装包说明](docs/installer.md)。
+输出命名为 `dist/LiteTray-<版本>-Setup-x64.exe`（当前为 `LiteTray-5.11.6-Setup-x64.exe`），旁边包含同名 SHA-256 校验文件和版本清单。中文安装向导默认按用户安装至 `%LOCALAPPDATA%\Programs\LiteTray`，创建开始菜单入口，可选桌面图标；无需管理员权限。升级正常退出旧宿主，使用按内容哈希区分的版本目录，已有开机启动项会指向新版。安装和卸载保留 `%LOCALAPPDATA%\LiteTray` 下的配置、日程及缓存；卸载不会删除用户凭据。安装程序不关闭 Windhawk，也不重启 Explorer。详见 [安装包说明](docs/installer.md)。
 
 `Test-XamlClock` 与 `Test-ShellSource` 只创建自身控件，不访问 Explorer。当前 124 项自动测试通过，包含设置首次打开与最小化恢复、100 次跨入口打开、弹层内六类日程持久化、错误输入、删除、翻页、草稿保留，以及日程通知去重、计时器重启、日历切换重绘、农历闰月、放假补班与离线缓存回归。设置激活测试在独立进程及非输入桌面上运行，不切换用户桌面。任务栏适配代码未在 5.3/5.4 改动，5.2 的 153 项原生 XAML 检查覆盖集合变化、替换/恢复、Auto 宽度、输入路由、菜单祖先接口和绑定恢复。界面渲染覆盖十个页面的浅深色、所有计时 Tab、最小窗口尺寸、外层滚轮隔离及日历／弹层编辑区的多 DPI 状态。`--self-test-app-icon` 检查可执行文件图标资源及不同 DPI 的加载尺寸。
 

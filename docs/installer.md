@@ -1,6 +1,6 @@
 # Windows 安装包
 
-`dist/Setup.exe` 为 LiteTray 5.10.1 的 Windows 11 x64 安装程序。默认简体中文，并根据系统语言支持英文；有程序图标、开始菜单入口、可选桌面快捷方式和 Windows“已安装的应用”卸载入口。
+`dist/LiteTray-<版本>-Setup-x64.exe` 为 LiteTray 的 Windows 11 x64 安装程序，文件名包含软件名、版本和架构。默认简体中文，并根据系统语言支持英文；有程序图标、开始菜单入口、可选桌面快捷方式和 Windows“已安装的应用”卸载入口。
 
 默认安装根目录为 `%LOCALAPPDATA%\Programs\LiteTray`，不请求管理员权限。程序及两份配套 DLL 放入 `versions/<版本>-<内容摘要>/`；三个二进制共同决定摘要，减少 Explorer 保留旧 DLL 时升级覆盖失败的情况。重装会逐文件核对 SHA-256，内容一致的文件不覆盖。
 
@@ -15,11 +15,13 @@
 .\tools\Build-Setup.ps1 -SkipBuild -BinaryPath <完整发布目录>\LiteTray.exe
 ```
 
-脚本自动从 `UI_REVISION` 读取版本，打包宿主、适配 DLL、图标资源、产品说明及第三方声明。Inno Setup 可通过 `-CompilerPath` 指定，输出目录可通过 `-OutputDirectory` 指定。默认产物：
+脚本自动从 `UI_REVISION` 读取版本，打包宿主、适配 DLL、图标资源、产品说明及第三方声明。Inno Setup 可通过 `-CompilerPath` 指定，输出目录可通过 `-OutputDirectory` 指定。以 5.11.6 为例，默认产物：
 
-- `dist/Setup.exe`
-- `dist/Setup.exe.sha256`
-- `dist/Setup-manifest.json`：版本、二进制摘要和安装后的相对 EXE 路径。
+- `dist/LiteTray-5.11.6-Setup-x64.exe`
+- `dist/LiteTray-5.11.6-Setup-x64.exe.sha256`：校验内容使用对应的完整安装包文件名。
+- `dist/LiteTray-5.11.6-Setup-x64.manifest.json`：版本、安装包文件名、二进制摘要和安装后的相对 EXE 路径。
+
+GitHub Releases 使用相同的命名规则。不同版本可同时保存在下载目录中，不会混成多个 `Setup.exe`。
 
 ## 5.9.1 验证
 

@@ -479,9 +479,13 @@ impl PaintBuffer {
             }
             let width = bounds.right - bounds.left;
             let height = bounds.bottom - bounds.top;
-            if width <= 0 || height <= 0 { return None; }
+            if width <= 0 || height <= 0 {
+                return None;
+            }
             let dc = CreateCompatibleDC(destination);
-            if dc.is_null() { return None; }
+            if dc.is_null() {
+                return None;
+            }
             let info = BITMAPINFO {
                 bmiHeader: BITMAPINFOHEADER {
                     biSize: size_of::<BITMAPINFOHEADER>() as u32,
@@ -495,10 +499,19 @@ impl PaintBuffer {
             };
             let mut bits = null_mut();
             let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
-            if bitmap.is_null() { DeleteDC(dc); return None; }
+            if bitmap.is_null() {
+                DeleteDC(dc);
+                return None;
+            }
             let old = SelectObject(dc, bitmap);
             SetViewportOrgEx(dc, -bounds.left, -bounds.top, null_mut());
-            Some(Self { dc, destination, bounds, bitmap, old })
+            Some(Self {
+                dc,
+                destination,
+                bounds,
+                bitmap,
+                old,
+            })
         }
     }
     pub unsafe fn item(item: &DRAWITEMSTRUCT) -> (Option<Self>, DRAWITEMSTRUCT) {
@@ -516,8 +529,17 @@ impl Drop for PaintBuffer {
     fn drop(&mut self) {
         unsafe {
             let r = self.bounds;
-            BitBlt(self.destination, r.left, r.top, r.right - r.left, r.bottom - r.top,
-                self.dc, r.left, r.top, SRCCOPY);
+            BitBlt(
+                self.destination,
+                r.left,
+                r.top,
+                r.right - r.left,
+                r.bottom - r.top,
+                self.dc,
+                r.left,
+                r.top,
+                SRCCOPY,
+            );
             SelectObject(self.dc, self.old);
             DeleteObject(self.bitmap);
             DeleteDC(self.dc);

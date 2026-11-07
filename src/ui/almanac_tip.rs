@@ -127,7 +127,8 @@ impl Card {
             let mut add = |label: Option<(&str, u32)>, value: String, font: usize, color: u32| {
                 let left = s(if label.is_some() { 54 } else { 18 });
                 let mut bounds = rect(left, y, s(342) - left, 0);
-                if let Some(height) = typography::measure(&value, fonts[font], bounds.right - left) {
+                if let Some(height) = typography::measure(&value, fonts[font], bounds.right - left)
+                {
                     bounds.bottom = y + height;
                 } else {
                     let old = SelectObject(dc, fonts[font]);

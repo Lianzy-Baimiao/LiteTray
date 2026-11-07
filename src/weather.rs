@@ -532,7 +532,9 @@ mod tests {
             legacy.as_object_mut().unwrap().remove(field);
         }
         let old: Weather = serde_json::from_value(legacy).unwrap();
-        assert!(old.wind_degrees.is_none() && old.pressure_hpa.is_none() && old.visibility_km.is_none());
+        assert!(
+            old.wind_degrees.is_none() && old.pressure_hpa.is_none() && old.visibility_km.is_none()
+        );
     }
     #[test]
     fn converts_source_timezone() {

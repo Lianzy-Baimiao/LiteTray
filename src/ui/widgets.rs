@@ -378,7 +378,11 @@ unsafe extern "system" fn preview_proc(
                 DT_LEFT | DT_SINGLELINE,
             );
             let now = Local::now();
-            let frame = clock::frame_with_weather(&data.clock, Some(&clock::weather_format::sample(now)), now);
+            let frame = clock::frame_with_weather(
+                &data.clock,
+                Some(&clock::weather_format::sample(now)),
+                now,
+            );
             let color = |value: &str| {
                 if t.high_contrast {
                     return t.text;
