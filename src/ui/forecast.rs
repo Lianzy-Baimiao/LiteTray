@@ -54,7 +54,7 @@ impl State {
                 if w.days.is_empty() {
                     text(
                         dc,
-                        "此来源暂无三日预报，可切回逐小时查看。",
+                        tr("此来源暂无三日预报，可切回逐小时查看。"),
                         r(402, 340, 276, 60),
                         fonts[1],
                         t.muted,
@@ -77,7 +77,7 @@ impl State {
                     );
                     text(
                         dc,
-                        &day.description,
+                        tr(&day.description),
                         r(456, y, 126, 24),
                         fonts[1],
                         t.text,
@@ -100,7 +100,7 @@ impl State {
             if shown.is_empty() {
                 text(
                     dc,
-                    "暂无有效小时预报。Open-Meteo、MET Norway 均无需 Key；可刷新或切换来源。",
+                    tr("暂无有效小时预报。Open-Meteo、MET Norway 均无需 Key；可刷新或切换来源。"),
                     r(402, 340, 276, 88),
                     fonts[1],
                     t.muted,
@@ -128,11 +128,12 @@ impl State {
                     t.muted,
                 );
                 dashboard::weather_icon(dc, r(x + 23, 358, 22, 22), t.accent, &hour.description);
-                center(&hour.description, 382, 20, 1, t.text);
+                center(tr(&hour.description), 382, 20, 1, t.text);
                 center(&format!("{:.0}°", hour.temperature_c), 402, 26, 2, t.text);
                 center(
                     &format!(
-                        "降水 {}",
+                        "{} {}",
+                        tr("降水"),
                         hour.precipitation_probability
                             .map(|p| format!("{p:.0}%"))
                             .unwrap_or_else(|| "—".into())
@@ -153,7 +154,8 @@ impl State {
             text(
                 dc,
                 &format!(
-                    "{date} · 本机时间 · {}/{}",
+                    "{date} · {} · {}/{}",
+                    tr("本机时间"),
                     page + 1,
                     hours.len().div_ceil(PER_PAGE)
                 ),

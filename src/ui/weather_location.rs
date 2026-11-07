@@ -68,7 +68,7 @@ impl App {
                 self.field(QUERY),
                 EM_SETCUEBANNER,
                 0,
-                wide("输入城市名、区县名或拼音").as_ptr() as isize,
+                wide(tr("输入城市名、区县名或拼音")).as_ptr() as isize,
             );
             SetWindowSubclass(self.field(QUERY), Some(search_edit_proc), 23, 0);
             self.button("搜索城市", SEARCH, 224 + total - 220, 126, 100);

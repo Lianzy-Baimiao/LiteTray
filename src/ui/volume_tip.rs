@@ -214,7 +214,7 @@ unsafe fn paint(hwnd: HWND, dc: HDC, card: &Card) {
             if level.muted {
                 design::text(
                     dc,
-                    "已静音",
+                    tr("已静音"),
                     r(140, 16, 52, 24),
                     card.fonts[1],
                     t.muted,
@@ -240,7 +240,7 @@ unsafe fn paint(hwnd: HWND, dc: HDC, card: &Card) {
         } else {
             design::text(
                 dc,
-                "音频设备不可用",
+                tr("音频设备不可用"),
                 r(52, 10, 140, 38),
                 card.fonts[1],
                 t.text,

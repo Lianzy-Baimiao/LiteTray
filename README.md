@@ -17,7 +17,7 @@
 
 ## 下载安装
 
-[**下载 Windows x64 安装包**](https://github.com/Lianzy-Baimiao/LiteTray/releases/tag/v5.11.6) · [更新记录](CHANGELOG.md)
+[**下载 Windows x64 安装包**](https://github.com/Lianzy-Baimiao/LiteTray/releases/latest) · [更新记录](CHANGELOG.md)
 
 在 Releases 下载 `LiteTray-<版本>-Setup-x64.exe`。按当前用户安装，无需管理员权限；配置、日程和天气缓存保存在 `%LOCALAPPDATA%\LiteTray`，升级和卸载均保留用户数据。
 
@@ -31,12 +31,15 @@
 - **本地日程**：待办、日程、生日、纪念日、倒数日；可直接在日历弹层中维护事项。
 - **闹钟与专注**：闹钟、番茄钟、定时提醒和可选铃声；时钟滚轮调音量、中键静音均可开关。
 - **Windows 外观**：跟随明暗主题、强调色和高对比度；日历可分离、拖动并保持展开。
+- **界面语言**：简体中文与 English，默认跟随 Windows 显示语言，也可在常规设置中切换。农历、黄历与上游公告保留原文。
 
 ## 使用
 
 安装后打开设置，在“多屏托盘”选择屏幕，在“时钟显示”启用任务栏时钟。点击时钟打开日历，普通面板点击外部收起，分离后保持展开。关闭设置窗口后继续后台运行，从托盘菜单退出。
 
 [使用与开发说明](docs/usage.md) · [安装包说明](docs/installer.md) · [天气模板](docs/weather-format.md)
+
+软件语言在“常规设置 → 界面语言”中选择，保存后应用；模板、日程标题和备注不作翻译。GitHub README 提供顶部中英文链接，GitHub 本身不按本机语言自动切换 README。[语言支持说明](docs/languages.md)
 
 ## 当前限制
 

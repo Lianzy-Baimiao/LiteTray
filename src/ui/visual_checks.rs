@@ -1374,6 +1374,144 @@ fn settings_clock_navigation_stays_responsive() {
 }
 
 #[test]
+fn language_choice_persists_rebuilds_labels_and_preserves_user_text() {
+    on_isolated_desktop(|| unsafe {
+        let path =
+            std::env::temp_dir().join(format!("litetray-language-{}.json", std::process::id()));
+        let mut app = app_for_check(false, 96, &path.with_extension("agenda"));
+        app.page = 1;
+        app.render();
+        let template = "%time% · 保存设置 · 我的时钟";
+        set_text(app.field(201), template);
+        app.command(NAV + 4);
+        SendMessageW(app.field(settings::LANGUAGE), CB_SETCURSEL, 2, 0);
+        app.collect_page().unwrap();
+        config::save(&path, &app.draft).unwrap();
+        app.saved = config::load(&path).unwrap();
+        assert_eq!(app.saved.language, Language::En);
+        app.recreate_resources();
+        app.render();
+        assert_eq!(window_text(app.field(SAVE)), "Save settings");
+        assert_eq!(window_text(app.field(NAV + 1)), "Clock content");
+        assert_eq!(window_text(app.field(901)), "General");
+        assert_ne!(
+            GetWindowLongW(app.field(901), GWL_STYLE) as u32 & 0x80,
+            0,
+            "literal ampersands must not become mnemonic prefixes"
+        );
+        app.command(NAV + 1);
+        assert_eq!(
+            app.text(201),
+            template,
+            "user template must never be translated"
+        );
+        app.command(NAV + 7);
+        app.collect_page().unwrap();
+        assert!(app.draft.clock.top_style.font_family.is_none());
+        assert!(app.draft.clock.top_style.font_size.is_none());
+        let mut untranslated = std::collections::BTreeSet::new();
+        for page in [1, 2, 3, 4, 5, 6, 7, 10] {
+            app.command(NAV + page);
+            for &child in &app.children {
+                let mut class = [0u16; 32];
+                let n = GetClassNameW(child, class.as_mut_ptr(), 32).max(0) as usize;
+                let class = String::from_utf16_lossy(&class[..n]);
+                if (class.eq_ignore_ascii_case("static") || class.eq_ignore_ascii_case("button"))
+                    && GetDlgCtrlID(child) != STATUS as i32
+                {
+                    let label = window_text(child);
+                    if label
+                        .chars()
+                        .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+                    {
+                        untranslated.insert(label);
+                    }
+                }
+            }
+        }
+        app.command(NAV + 4);
+        SendMessageW(app.field(settings::LANGUAGE), CB_SETCURSEL, 1, 0);
+        app.collect_page().unwrap();
+        app.saved = app.draft.clone();
+        app.recreate_resources();
+        app.render();
+        assert_eq!(window_text(app.field(SAVE)), "保存设置");
+        assert_eq!(app.saved.clock.top_line, template);
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+        std::fs::remove_file(path).unwrap();
+        assert!(
+            untranslated.is_empty(),
+            "untranslated settings labels: {untranslated:#?}"
+        );
+    });
+}
+
+#[test]
+fn english_pages_and_timer_tabs_fit_native_controls() {
+    on_isolated_desktop(|| unsafe {
+        let mut failures = vec![];
+        for dark in [false, true] {
+            let mut app = app_for_check(
+                dark,
+                96,
+                &std::env::temp_dir().join("litetray-english-layout-agenda.json"),
+            );
+            app.saved.language = Language::En;
+            app.draft.language = Language::En;
+            app.recreate_resources();
+            SetWindowPos(
+                app.hwnd,
+                null_mut(),
+                0,
+                0,
+                app.scale(1060),
+                app.scale(820),
+                SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
+            );
+            for page in 0..PAGES.len() {
+                app.page = page;
+                app.render();
+                audit_native_layout(
+                    app.hwnd,
+                    &format!("English dark={dark} page={page}"),
+                    &mut failures,
+                );
+                if page == 9 {
+                    for tab in 1..4 {
+                        SendMessageW(app.field(agenda::ID), WM_COMMAND, 4300 + tab, 0);
+                        audit_native_layout(
+                            app.hwnd,
+                            &format!("English dark={dark} timer={tab}"),
+                            &mut failures,
+                        );
+                    }
+                }
+            }
+            app.prewarm_panels();
+            for &popup in &app.panel_cache {
+                let calendar = GetDlgItem(popup, dashboard::ID as i32);
+                SendMessageW(calendar, WM_COMMAND, 1103, 0);
+                let editor = GetDlgItem(calendar, quick_agenda::ID as i32);
+                for kind in 0..6 {
+                    SendMessageW(editor, WM_COMMAND, 4600 + kind, 0);
+                    assert!(window_text(GetDlgItem(editor, 4620)).starts_with("Save "));
+                    audit_native_layout(
+                        popup,
+                        &format!("English dark={dark} editor={kind}"),
+                        &mut failures,
+                    );
+                }
+            }
+            app.close_panel();
+            DestroyWindow(app.hwnd);
+            app.release_resources();
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    });
+}
+
+#[test]
 fn settings_pages_fit_the_minimum_window_without_outer_scrollbars() {
     on_isolated_desktop(|| unsafe {
         let mut app = app_for_check(
@@ -2341,6 +2479,7 @@ unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path) -> App {
             1usize as HANDLE,
         );
         let mut config = Config {
+            language: Language::ZhCn,
             appearance: if dark {
                 Appearance::Dark
             } else {
@@ -2498,6 +2637,12 @@ fn render_settings_artifacts() {
         let previous_dpi = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         for dark in [false, true] {
             let mut app = app_for_check(dark, 120, &output.join("unused-agenda.json"));
+            if std::env::var("LITETRAY_RENDER_LANGUAGE").as_deref() == Ok("en") {
+                app.saved.language = Language::En;
+                app.draft.language = Language::En;
+                app.status = "UI preview · sample entries · no reminders".into();
+                app.recreate_resources();
+            }
             for page in 0..PAGES.len() {
                 let (width, height) = (1060, 820);
                 SetWindowPos(

@@ -31,12 +31,23 @@ const LEADS: [Option<u32>; 8] = [
 ];
 const WIDTH: i32 = 324;
 const HEIGHT: i32 = 540;
+const REMINDER_LABELS: [&str; 8] = [
+    "不提醒",
+    "准时",
+    "提前 5 分钟",
+    "提前 15 分钟",
+    "提前 30 分钟",
+    "提前 1 小时",
+    "提前 1 天",
+    "提前 7 天",
+];
 struct View {
     hwnd: HWND,
     store: Rc<RefCell<Store>>,
     entry: Entry,
     baseline: String,
     dark: bool,
+    english: bool,
     factor: f64,
     fonts: [HFONT; 3],
     brush: HBRUSH,
@@ -72,7 +83,7 @@ pub(super) unsafe fn create(parent: HWND, store: Rc<RefCell<Store>>, dark: bool)
         let hwnd = CreateWindowExW(
             WS_EX_CONTROLPARENT | WS_EX_COMPOSITED,
             wide(CLASS).as_ptr(),
-            wide("日程快速编辑").as_ptr(),
+            wide(tr("日程快速编辑")).as_ptr(),
             WS_CHILD | WS_CLIPCHILDREN,
             0,
             0,
@@ -92,6 +103,7 @@ pub(super) unsafe fn create(parent: HWND, store: Rc<RefCell<Store>>, dark: bool)
             entry: Entry::new(Kind::Event, Local::now().date_naive()),
             baseline: String::new(),
             dark,
+            english: i18n::english(),
             factor: 0.,
             fonts: [null_mut(); 3],
             brush: null_mut(),
@@ -104,7 +116,11 @@ pub(super) unsafe fn create(parent: HWND, store: Rc<RefCell<Store>>, dark: bool)
         for (i, kind) in Kind::ALL.iter().enumerate() {
             view.control(
                 "BUTTON",
-                kind.label(),
+                if i18n::english() {
+                    ["Task", "Event", "Birth.", "Anniv.", "Days", "Alarm"][i]
+                } else {
+                    kind.label()
+                },
                 KIND + i as u16,
                 BS_OWNERDRAW as u32,
                 design::rect(16 + i as i32 * 49, 54, 48, 32),
@@ -143,20 +159,7 @@ pub(super) unsafe fn create(parent: HWND, store: Rc<RefCell<Store>>, dark: bool)
             &Repeat::ALL.map(Repeat::label),
             design::rect(18, 266, 136, 200),
         );
-        view.combo(
-            REMIND,
-            &[
-                "不提醒",
-                "准时",
-                "提前 5 分钟",
-                "提前 15 分钟",
-                "提前 30 分钟",
-                "提前 1 小时",
-                "提前 1 天",
-                "提前 7 天",
-            ],
-            design::rect(170, 266, 136, 200),
-        );
+        view.combo(REMIND, &REMINDER_LABELS, design::rect(170, 266, 136, 200));
         view.control(
             "EDIT",
             "",
@@ -196,19 +199,19 @@ pub(super) unsafe fn create(parent: HWND, store: Rc<RefCell<Store>>, dark: bool)
             view.field(TITLE),
             EM_SETCUEBANNER,
             0,
-            wide("记录一件重要的事").as_ptr() as isize,
+            wide(tr("记录一件重要的事")).as_ptr() as isize,
         );
         SendMessageW(
             view.field(TIME),
             EM_SETCUEBANNER,
             0,
-            wide("全天").as_ptr() as isize,
+            wide(tr("全天")).as_ptr() as isize,
         );
         SendMessageW(
             view.field(NOTES),
             EM_SETCUEBANNER,
             0,
-            wide("补充备注（可选）").as_ptr() as isize,
+            wide(tr("补充备注（可选）")).as_ptr() as isize,
         );
         let mut tips = icons::Tips::new(hwnd);
         tips.add(hwnd, view.field(CLOSE), "关闭编辑（未保存的修改会取消）");
@@ -281,7 +284,7 @@ pub(super) unsafe fn resize(hwnd: HWND, bounds: RECT, dark: bool) {
             && let Ok(mut v) = cell.try_borrow_mut()
         {
             let factor = (bounds.right - bounds.left) as f64 / WIDTH as f64;
-            if (factor - v.factor).abs() > 0.001 || dark != v.dark {
+            if (factor - v.factor).abs() > 0.001 || dark != v.dark || v.english != i18n::english() {
                 v.arrange(factor, dark);
             }
         }
@@ -336,7 +339,7 @@ impl View {
             let hwnd = CreateWindowExW(
                 0,
                 wide(class).as_ptr(),
-                wide(label).as_ptr(),
+                wide(if class == "EDIT" { label } else { tr(label) }).as_ptr(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | style,
                 bounds.left,
                 bounds.top,
@@ -382,12 +385,63 @@ impl View {
                 bounds,
             );
             for item in items {
-                SendMessageW(hwnd, CB_ADDSTRING, 0, wide(item).as_ptr() as isize);
+                SendMessageW(hwnd, CB_ADDSTRING, 0, wide(tr(item)).as_ptr() as isize);
             }
         }
     }
     unsafe fn arrange(&mut self, factor: f64, dark: bool) {
         unsafe {
+            if self.english != i18n::english() {
+                self.english = i18n::english();
+                for (i, kind) in Kind::ALL.iter().enumerate() {
+                    set_text(
+                        self.field(KIND + i as u16),
+                        if self.english {
+                            ["Task", "Event", "Birth.", "Anniv.", "Days", "Alarm"][i]
+                        } else {
+                            kind.label()
+                        },
+                    );
+                }
+                for (id, label) in [(CLOSE, "关闭编辑"), (DONE, "已完成"), (ENABLED, "启用")]
+                {
+                    set_text(self.field(id), tr(label));
+                }
+                for (id, items) in [
+                    (REPEAT, Repeat::ALL.map(Repeat::label).to_vec()),
+                    (REMIND, REMINDER_LABELS.to_vec()),
+                ] {
+                    let hwnd = self.field(id);
+                    let selected = SendMessageW(hwnd, CB_GETCURSEL, 0, 0);
+                    SendMessageW(hwnd, WM_SETREDRAW, 0, 0);
+                    SendMessageW(hwnd, CB_RESETCONTENT, 0, 0);
+                    for label in items {
+                        SendMessageW(hwnd, CB_ADDSTRING, 0, wide(tr(label)).as_ptr() as isize);
+                    }
+                    SendMessageW(hwnd, CB_SETCURSEL, selected as usize, 0);
+                    SendMessageW(hwnd, WM_SETREDRAW, 1, 0);
+                }
+                for (id, label) in [
+                    (TITLE, "记录一件重要的事"),
+                    (TIME, "全天"),
+                    (NOTES, "补充备注（可选）"),
+                ] {
+                    SendMessageW(
+                        self.field(id),
+                        EM_SETCUEBANNER,
+                        0,
+                        wide(tr(label)).as_ptr() as isize,
+                    );
+                }
+                let mut tips = icons::Tips::new(self.hwnd);
+                tips.add(
+                    self.hwnd,
+                    self.field(CLOSE),
+                    "关闭编辑（未保存的修改会取消）",
+                );
+                self.tips = Some(tips);
+                self.update_buttons();
+            }
             self.factor = factor;
             self.dark = dark;
             let old = self.fonts;
@@ -507,7 +561,12 @@ impl View {
             );
             set_text(
                 self.field(SAVE),
-                &format!("保存{}", self.entry.kind.label()),
+                &format!(
+                    "{}{}{}",
+                    tr("保存"),
+                    if i18n::english() { " " } else { "" },
+                    tr(self.entry.kind.label())
+                ),
             );
             for (hwnd, _) in &self.controls {
                 if !matches!(
@@ -624,13 +683,14 @@ impl View {
             };
             tx(
                 &format!(
-                    "{}{}",
-                    if self.entry.id == 0 {
+                    "{}{}{}",
+                    tr(if self.entry.id == 0 {
                         "新建"
                     } else {
                         "编辑"
-                    },
-                    self.entry.kind.label()
+                    }),
+                    if i18n::english() { " " } else { "" },
+                    tr(self.entry.kind.label())
                 ),
                 18,
                 16,
@@ -647,7 +707,7 @@ impl View {
                 ("提醒", 170, 240, 136),
                 ("备注", 18, 310, 288),
             ] {
-                tx(label, x, y, w, 22, 1, t.muted);
+                tx(tr(label), x, y, w, 22, 1, t.muted);
             }
             for (hwnd, bounds) in &self.controls {
                 if matches!(GetDlgCtrlID(*hwnd) as u16, TITLE | DATE | TIME | NOTES) {
@@ -674,7 +734,7 @@ impl View {
             }
             design::text(
                 dc,
-                &self.message,
+                tr(&self.message),
                 r(18, 458, 288, 30),
                 self.fonts[1],
                 t.text,

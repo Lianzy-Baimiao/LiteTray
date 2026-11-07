@@ -160,7 +160,7 @@ impl Card {
             };
             add(
                 None,
-                format!("{} · 黄历", date.format("%Y年%-m月%-d日")),
+                format!("{} · 黄历", date.format(tr("%Y年%-m月%-d日"))),
                 0,
                 t.text,
             );
@@ -377,7 +377,7 @@ mod tests {
             let button = CreateWindowExW(
                 0,
                 wide("BUTTON").as_ptr(),
-                wide("日期").as_ptr(),
+                wide(tr("日期")).as_ptr(),
                 WS_CHILD | WS_VISIBLE,
                 20,
                 156,

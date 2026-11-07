@@ -4,6 +4,7 @@ pub mod config;
 pub mod festivals;
 pub mod holidays;
 pub mod http;
+pub mod i18n;
 pub mod location;
 pub mod migration;
 pub mod monitors;

@@ -165,7 +165,7 @@ impl Tips {
     }
     pub unsafe fn add(&mut self, owner: HWND, button: HWND, label: &str) {
         unsafe {
-            self.labels.push(wide(label));
+            self.labels.push(wide(tr(label)));
             let mut info: TTTOOLINFOW = std::mem::zeroed();
             info.cbSize = size_of::<TTTOOLINFOW>() as u32;
             info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;

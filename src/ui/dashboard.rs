@@ -80,7 +80,7 @@ pub(super) unsafe fn create(parent: HWND, bounds: RECT, dark: bool, flyout: bool
         let hwnd = CreateWindowExW(
             WS_EX_CONTROLPARENT,
             class.as_ptr(),
-            wide("日历与天气").as_ptr(),
+            wide(tr("日历与天气")).as_ptr(),
             WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_TABSTOP,
             bounds.left,
             bounds.top,
@@ -184,6 +184,7 @@ pub(super) unsafe fn refresh_theme(hwnd: HWND, dark: bool) {
         {
             v.dark = dark;
             v.factor = 0.;
+            refresh_agenda(&mut v);
         }
         layout(hwnd);
         RedrawWindow(hwnd, null(), null_mut(), RDW_INVALIDATE | RDW_ALLCHILDREN);
@@ -221,8 +222,8 @@ fn refresh_agenda(v: &mut View) {
                     "{} · {}",
                     e.time
                         .map(|time| time.format("%H:%M").to_string())
-                        .unwrap_or_else(|| "全天".into()),
-                    e.kind.label()
+                        .unwrap_or_else(|| tr("全天").into()),
+                    tr(e.kind.label())
                 ),
             )
         })
@@ -514,7 +515,7 @@ fn button_specs(v: &View) -> Vec<ButtonSpec> {
         buttons.push(spec(
             format!(
                 "{}{}{}{}",
-                date.format("%Y年%m月%d日"),
+                date.format(tr("%Y年%m月%d日")),
                 if *date == Local::now().date_naive() {
                     "，今天"
                 } else {
@@ -1115,7 +1116,7 @@ fn day_sublabel(v: &View, index: usize) -> Option<&str> {
 }
 fn selected_date_summary(v: &View) -> String {
     let index = v.days.iter().position(|d| *d == v.calendar.selected);
-    let mut result = v.calendar.selected.format("%-m月%-d日").to_string();
+    let mut result = v.calendar.selected.format(tr("%-m月%-d日")).to_string();
     result.push_str(&observance_suffix(
         index
             .and_then(|i| v.solar_terms.get(i))
@@ -1343,7 +1344,7 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
         };
         text(
             item.hDC,
-            &label,
+            tr(&label),
             if day && sublabel.is_some() {
                 rect(
                     item.rcItem.left,
@@ -1469,8 +1470,8 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
         tx(
             &format!(
                 "{}  {}{}",
-                now.format("%-m月%-d日"),
-                weekday[now.weekday().num_days_from_monday() as usize],
+                now.format(tr("%-m月%-d日")),
+                tr(weekday[now.weekday().num_days_from_monday() as usize]),
                 observance_suffix(
                     solar_terms::on_date(now.date_naive()).as_deref(),
                     &festivals::on_date(now.date_naive()),
@@ -1487,9 +1488,9 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
         tx(
             &format!(
                 "{} · {}{}",
-                now.format("%Y年"),
+                now.format(tr("%Y年")),
                 now.format(if v.seconds { "%H:%M:%S" } else { "%H:%M" }),
-                if v.detached { " · 已分离" } else { "" }
+                if v.detached { tr(" · 已分离") } else { "" }
             ),
             20,
             44,
@@ -1500,7 +1501,7 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
         );
         fill(dc, r(20, 72, 680, 1), t.border);
         tx(
-            &v.calendar.month.format("%Y年 %-m月").to_string(),
+            &v.calendar.month.format(tr("%Y年 %-m月")).to_string(),
             20,
             84,
             156,
@@ -1514,7 +1515,7 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
         {
             text(
                 dc,
-                name,
+                tr(name),
                 r(20 + i as i32 * 48, 124, 44, 25),
                 v.fonts[1],
                 t.muted,
@@ -1568,13 +1569,15 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
                 t.text,
             );
             weather_icon(dc, r(638, 152, 44, 44), t.accent, &w.description);
-            tx(&w.description, 402, 204, 276, 25, 0, t.text);
+            tx(tr(&w.description), 402, 204, 276, 25, 0, t.text);
             tx(
                 &format!(
-                    "体感 {}  ·  湿度 {}",
+                    "{} {}  ·  {} {}",
+                    tr("体感"),
                     w.feels_like_c
                         .map(|n| format!("{n:.0}°"))
                         .unwrap_or_else(|| "—".into()),
+                    tr("湿度"),
                     w.humidity_percent
                         .map(|n| format!("{n:.0}%"))
                         .unwrap_or_else(|| "—".into())
@@ -1588,7 +1591,8 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
             );
             tx(
                 &format!(
-                    "风速 {}",
+                    "{} {}",
+                    tr("风速"),
                     w.wind_kmh
                         .map(|n| format!("{n:.0} km/h"))
                         .unwrap_or_else(|| "—".into())
@@ -1605,31 +1609,33 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
                 .render(dc, w, now.with_timezone(&Utc), v.factor, v.fonts, v.dark);
             status = if v.weather.as_ref().is_some_and(|r| r.cached) {
                 format!(
-                    "离线缓存 · 非实时 · {}",
+                    "{} · {}",
+                    tr("离线缓存 · 非实时"),
                     w.data_at.with_timezone(&Local).format("%m-%d %H:%M")
                 )
             } else {
                 format!(
-                    "{}{} · 数据时间 {}",
-                    if v.weather.as_ref().is_some_and(|r| r.fallback) {
+                    "{}{} · {} {}",
+                    tr(if v.weather.as_ref().is_some_and(|r| r.fallback) {
                         "备用来源 · "
                     } else {
                         ""
-                    },
+                    }),
                     w.provider.label(),
+                    tr("数据时间"),
                     w.data_at.with_timezone(&Local).format("%H:%M")
                 )
             };
         } else {
             tx("—°", 398, 144, 276, 68, 3, t.muted);
             tx(
-                if !v.enabled {
+                tr(if !v.enabled {
                     "天气已关闭"
                 } else if v.busy {
                     "正在获取天气"
                 } else {
                     "暂无天气数据"
-                },
+                }),
                 402,
                 224,
                 276,
@@ -1639,11 +1645,11 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
             );
             text(
                 dc,
-                if !v.enabled {
+                tr(if !v.enabled {
                     "在设置中启用天气，即可查看温度和天气预报。"
                 } else {
                     "可刷新重试，或在设置中切换天气来源。"
-                },
+                }),
                 r(402, 266, 274, 70),
                 v.fonts[1],
                 t.muted,
@@ -1659,9 +1665,9 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
         fill(dc, r(20, 488, 680, 1), t.border);
         tx(
             &if v.entry_count > 0 {
-                format!("当日安排 · {}", v.entry_count)
+                format!("{} · {}", tr("当日安排"), v.entry_count)
             } else {
-                "当日安排".into()
+                tr("当日安排").into()
             },
             20,
             496,
@@ -1672,7 +1678,7 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
         );
         if v.entries.is_empty() {
             tx(
-                "这一天还没有安排，留一点时间给自己。",
+                tr("这一天还没有安排，留一点时间给自己。"),
                 28,
                 550,
                 if v.editing { 320 } else { 650 },
@@ -1682,10 +1688,10 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
             );
         }
         fill(dc, r(0, 628, WIDTH, 1), t.border);
-        tx(&status, 20, 631, 590, 23, 1, t.muted);
+        tx(tr(&status), 20, 631, 590, 23, 1, t.muted);
         text(
             dc,
-            "轻托盘",
+            tr("轻托盘"),
             r(626, 631, 74, 23),
             v.fonts[1],
             t.muted,

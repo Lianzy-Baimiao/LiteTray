@@ -22,7 +22,9 @@ use chrono::{Local, Utc};
 use litetray::{
     clock,
     config::{self, Appearance, ClickAction, Config, MonitorScope, Provider},
-    festivals, holidays, http, location, migration, monitors, organizer,
+    festivals, holidays, http,
+    i18n::{self, Language, tr},
+    location, migration, monitors, organizer,
     platform::{
         app_icon, clock_preview, credentials, diagnostics, displays, lunar, startup, taskbar_clock,
         tray_popup, wide,
@@ -50,7 +52,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.11.6";
+const UI_REVISION: &str = "开发版 5.12.0";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -82,6 +84,13 @@ const PAGES: [&str; 11] = [
     "闹钟与专注",
     "天气格式",
 ];
+fn revision_label() -> String {
+    if i18n::english() {
+        UI_REVISION.replace("开发版", "Dev")
+    } else {
+        UI_REVISION.into()
+    }
+}
 thread_local! {static STATE:RefCell<Option<App>>=const{RefCell::new(None)};}
 // Independent of App's modal-dialog borrow. Each native call retains its own
 // Rc, so reentrant window teardown cannot unload a module still on the stack.
@@ -172,6 +181,7 @@ fn secondary_page() -> usize {
     }
 }
 pub fn run(config: Config, mode: &str) -> Result<(), String> {
+    i18n::set_language(config.language);
     unsafe {
         let profile_suffix = instance_suffix()?;
         let settings_class = format!("{CLASS}{profile_suffix}");
@@ -200,7 +210,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
                             "另一个目录的 LiteTray 正在运行，本次新版尚未启动。\r\n\r\n正在运行：\r\n{running}\r\n\r\n你刚打开：\r\n{}\r\n\r\n请从旧版的“常规设置 → 退出程序”或托盘菜单退出，再重新打开新版。只点窗口右上角关闭会收至托盘。",
                             requested.display()
                         )).as_ptr(),
-                        wide("LiteTray · 需要先退出旧版").as_ptr(),
+                        wide(tr("LiteTray · 需要先退出旧版")).as_ptr(),
                         MB_OK | MB_ICONINFORMATION,
                     );
                     return Ok(());
@@ -258,7 +268,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
         let hwnd = CreateWindowExW(
             WS_EX_CONTROLPARENT,
             class_name.as_ptr(),
-            wide(&format!("LiteTray · 轻托盘 · {UI_REVISION}")).as_ptr(),
+            wide(&format!("LiteTray · {}", revision_label())).as_ptr(),
             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -443,7 +453,12 @@ impl App {
         design::Theme::new(self.dark()).text
     }
     unsafe fn recreate_resources(&mut self) {
+        i18n::set_language(self.saved.language);
         unsafe {
+            SetWindowTextW(
+                self.hwnd,
+                wide(&format!("LiteTray · {}", revision_label())).as_ptr(),
+            );
             self.shell_layout = None;
             self.clear_attached_panels();
             self.release_resources();
@@ -587,8 +602,11 @@ impl App {
         h: i32,
     ) -> HWND {
         unsafe {
+            let text = if class == "EDIT" { text } else { tr(text) };
             let content = x >= 224 && y >= 80 && id != STATUS && id != SAVE && id != 42;
-            let style = if class == "COMBOBOX" {
+            let style = if class == "STATIC" {
+                style | 0x80 // SS_NOPREFIX: display literal '&' in translated headings.
+            } else if class == "COMBOBOX" {
                 style | CBS_OWNERDRAWFIXED as u32 | CBS_HASSTRINGS as u32
             } else if class == "LISTBOX" {
                 (style & !WS_BORDER)
@@ -755,7 +773,7 @@ impl App {
                 .sum::<usize>();
             SendMessageW(hwnd, CB_INITSTORAGE, items.len(), bytes as isize);
             for item in items {
-                SendMessageW(hwnd, CB_ADDSTRING, 0, wide(item).as_ptr() as isize);
+                SendMessageW(hwnd, CB_ADDSTRING, 0, wide(tr(item)).as_ptr() as isize);
             }
             SendMessageW(hwnd, CB_SETCURSEL, index, 0);
             SendMessageW(hwnd, WM_SETREDRAW, 1, 0);
@@ -902,13 +920,7 @@ impl App {
                 self.label("日常", 28, 108, 170, 22);
                 self.label("任务栏", 28, 260, 170, 22);
                 self.label("应用", 28, 500, 170, 22);
-                self.label(
-                    &format!("{UI_REVISION}  v{}", env!("CARGO_PKG_VERSION")),
-                    24,
-                    height - 90,
-                    165,
-                    50,
-                );
+                self.label(&revision_label(), 24, height - 90, 165, 50);
                 let heading =
                     self.control("STATIC", "", 901, SS_LEFT as u32, 224, 30, width - 250, 42);
                 SendMessageW(heading, WM_SETFONT, self.title_font as usize, 1);
@@ -1114,6 +1126,11 @@ impl App {
                     _ => Appearance::Dark,
                 };
                 c.start_with_windows = self.checked(502);
+                c.language = match self.selected(settings::LANGUAGE) {
+                    1 => Language::ZhCn,
+                    2 => Language::En,
+                    _ => Language::System,
+                };
             }
             5 => {
                 c.updates.repository = self.text(601).trim().into();
@@ -1139,9 +1156,9 @@ impl App {
                 ] {
                     let family = self.text(id).trim().to_owned();
                     line.font_family =
-                        (!family.is_empty() && family != "沿用公共字体").then_some(family);
+                        (!family.is_empty() && family != tr("沿用公共字体")).then_some(family);
                     let size = self.text(id + 1);
-                    line.font_size = if size.trim().is_empty() || size == "沿用" {
+                    line.font_size = if size.trim().is_empty() || size == tr("沿用") {
                         None
                     } else {
                         Some(
@@ -1175,11 +1192,11 @@ impl App {
             }
             let choice = MessageBoxW(
                 self.hwnd,
-                wide(if exiting {
+                wide(tr(if exiting {
                     "设置尚未保存，是否保存后退出？\n选择“否”放弃修改；选择“取消”继续编辑。"
                 } else {
                     "设置尚未保存，是否保存后关闭设置窗口？\n选择“否”放弃修改；选择“取消”继续编辑。"
-                })
+                }))
                 .as_ptr(),
                 wide("LiteTray").as_ptr(),
                 MB_YESNOCANCEL | MB_ICONQUESTION,
@@ -1207,15 +1224,29 @@ impl App {
     }
     fn monitor_summary(&self) -> String {
         let result = monitors::resolve(&self.draft.tray, &self.monitor_snapshot);
-        let mut text = format!(
-            "当前范围匹配 {} 个桌面区域。选择按设备保存，不受 DISPLAY 编号变化影响。",
-            result.devices.len()
-        );
+        let mut text = if i18n::english() {
+            format!(
+                "{} displays matched. Selections use device identities, independent of DISPLAY numbers.",
+                result.devices.len()
+            )
+        } else {
+            format!(
+                "当前范围匹配 {} 个桌面区域。选择按设备保存，不受 DISPLAY 编号变化影响。",
+                result.devices.len()
+            )
+        };
         if !result.pending.is_empty() {
-            text.push_str(&format!(
-                "\r\n{} 项尚未匹配；未连接的选择会保留。",
-                result.pending.len()
-            ));
+            text.push_str(&if i18n::english() {
+                format!(
+                    "\r\n{} unavailable selections are kept for disconnected displays.",
+                    result.pending.len()
+                )
+            } else {
+                format!(
+                    "\r\n{} 项尚未匹配；未连接的选择会保留。",
+                    result.pending.len()
+                )
+            });
         }
         if let Some(warning) = result.warnings.first() {
             text.push_str(&format!("\r\n{warning}"));
@@ -1567,7 +1598,7 @@ impl App {
             data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
             data.uCallbackMessage = WM_TRAY;
             data.hIcon = app_icon::load(self.dpi, false);
-            let tip = wide("LiteTray · 日历与天气\n左键展开面板，右键打开菜单");
+            let tip = wide(tr("LiteTray · 日历与天气\n左键展开面板，右键打开菜单"));
             for (dest, src) in data.szTip.iter_mut().zip(tip) {
                 *dest = src;
             }
@@ -1590,12 +1621,17 @@ impl App {
                 menu,
                 MF_STRING,
                 CALENDAR as usize,
-                wide("日历与天气").as_ptr(),
+                wide(tr("日历与天气")).as_ptr(),
             );
-            AppendMenuW(menu, MF_STRING, 40, wide("设置").as_ptr());
-            AppendMenuW(menu, MF_STRING, UPDATE as usize, wide("检查更新").as_ptr());
+            AppendMenuW(menu, MF_STRING, 40, wide(tr("设置")).as_ptr());
+            AppendMenuW(
+                menu,
+                MF_STRING,
+                UPDATE as usize,
+                wide(tr("检查更新")).as_ptr(),
+            );
             AppendMenuW(menu, MF_SEPARATOR, 0, null());
-            AppendMenuW(menu, MF_STRING, EXIT as usize, wide("退出").as_ptr());
+            AppendMenuW(menu, MF_STRING, EXIT as usize, wide(tr("退出")).as_ptr());
             let mut point = std::mem::zeroed();
             GetCursorPos(&mut point);
             SetForegroundWindow(self.hwnd);
@@ -1714,7 +1750,7 @@ impl App {
             let hwnd = CreateWindowExW(
                 WS_EX_TOOLWINDOW | WS_EX_CONTROLPARENT | WS_EX_TOPMOST,
                 wide(PANEL_CLASS).as_ptr(),
-                wide("LiteTray 日历与天气").as_ptr(),
+                wide(tr("LiteTray 日历与天气")).as_ptr(),
                 WS_POPUP | WS_BORDER | WS_CLIPCHILDREN,
                 anchor.left,
                 anchor.top,
@@ -2184,8 +2220,8 @@ unsafe fn choose_migration_file(owner: HWND) -> Result<Option<std::path::PathBuf
         use std::os::windows::ffi::OsStringExt;
         use windows_sys::Win32::UI::Controls::Dialogs::*;
         let mut path = vec![0u16; 32768];
-        let filter = wide("Windhawk 导出文件 (*.json)\0*.json\0所有文件\0*.*\0");
-        let title = wide("选择 Windhawk 配置导出文件");
+        let filter = wide(tr("Windhawk 导出文件 (*.json)\0*.json\0所有文件\0*.*\0"));
+        let title = wide(tr("选择 Windhawk 配置导出文件"));
         let mut dialog: OPENFILENAMEW = std::mem::zeroed();
         dialog.lStructSize = size_of::<OPENFILENAMEW>() as u32;
         dialog.hwndOwner = owner;
@@ -2630,6 +2666,16 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM)
 }
 unsafe fn set_text(hwnd: HWND, text: &str) {
     unsafe {
+        let mut class = [0u16; 32];
+        let len = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32);
+        let class = String::from_utf16_lossy(&class[..len.max(0) as usize]);
+        // Edit values and editable combo selections are user data. Translate
+        // only presentation labels, never text that will be persisted.
+        let text = if matches!(class.as_str(), "Edit" | "EDIT" | "ComboBox" | "COMBOBOX") {
+            text
+        } else {
+            tr(text)
+        };
         if !hwnd.is_null() && window_text(hwnd) != text {
             SetWindowTextW(hwnd, wide(text).as_ptr());
         }

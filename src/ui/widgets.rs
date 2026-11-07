@@ -363,7 +363,7 @@ unsafe extern "system" fn preview_proc(
             design::rounded(dc, r, t.bg, t.border, s(10));
             design::text(
                 dc,
-                "任务栏时钟预览",
+                tr("任务栏时钟预览"),
                 design::rect(s(18), s(10), s(190), s(23)),
                 data.fonts[0],
                 t.muted,
@@ -371,7 +371,7 @@ unsafe extern "system" fn preview_proc(
             );
             design::text(
                 dc,
-                "示例天气 · 保存后应用",
+                tr("示例天气 · 保存后应用"),
                 design::rect(s(18), s(38), s(220), s(22)),
                 data.fonts[0],
                 t.muted,

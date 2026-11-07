@@ -249,7 +249,10 @@ pub(super) unsafe fn open_date(hwnd: HWND, date: NaiveDate) {
             view.selected = 0;
             view.filter = 2;
             view.load_entry(&Entry::new(Kind::Event, date));
-            set_text(view.field(SCOPE), &date.format("%Y年%m月%d日").to_string());
+            set_text(
+                view.field(SCOPE),
+                &date.format(tr("%Y年%m月%d日")).to_string(),
+            );
             view.populate();
         }
     }
@@ -395,7 +398,9 @@ impl View {
         h: i32,
     ) -> HWND {
         unsafe {
-            let style = if class == "COMBOBOX" {
+            let style = if class == "STATIC" {
+                style | 0x80 // SS_NOPREFIX
+            } else if class == "COMBOBOX" {
                 style | CBS_OWNERDRAWFIXED as u32 | CBS_HASSTRINGS as u32
             } else {
                 style
@@ -403,7 +408,7 @@ impl View {
             let hwnd = CreateWindowExW(
                 0,
                 wide(class).as_ptr(),
-                wide(label).as_ptr(),
+                wide(if class == "EDIT" { label } else { tr(label) }).as_ptr(),
                 WS_CHILD | WS_VISIBLE | style,
                 self.s(x),
                 self.s(y),
@@ -505,7 +510,7 @@ impl View {
                 240,
             );
             for item in items {
-                SendMessageW(hwnd, CB_ADDSTRING, 0, wide(item).as_ptr() as isize);
+                SendMessageW(hwnd, CB_ADDSTRING, 0, wide(tr(item)).as_ptr() as isize);
             }
             SendMessageW(hwnd, CB_SETCURSEL, index, 0);
         }
@@ -536,7 +541,7 @@ impl View {
                 "STATIC",
                 &self
                     .scope
-                    .map(|d| d.format("%Y年%m月%d日").to_string())
+                    .map(|d| d.format(tr("%Y年%m月%d日")).to_string())
                     .unwrap_or_else(|| "全部日期 · 即将到来".into()),
                 SCOPE,
                 0,
@@ -592,7 +597,7 @@ impl View {
                 title,
                 EM_SETCUEBANNER,
                 0,
-                wide("输入事项标题").as_ptr() as isize,
+                wide(tr("输入事项标题")).as_ptr() as isize,
             );
             self.edit(
                 "日期 · YYYY-MM-DD",
@@ -882,7 +887,7 @@ impl View {
                 self.field(SOUND_PATH),
                 EM_SETCUEBANNER,
                 0,
-                wide("选择自定义 WAV 时填写").as_ptr() as isize,
+                wide(tr("选择自定义 WAV 时填写")).as_ptr() as isize,
             );
             self.button("选择文件…", SOUND_BROWSE, width - 166, 262, 142);
             self.button("保存铃声", SOUND_SAVE, 24, 330, 160);
@@ -985,17 +990,26 @@ impl View {
                     self.field(DONE),
                     if self.filter == 1 { SW_SHOWNA } else { SW_HIDE },
                 );
-                set_text(self.field(COMMIT), &format!("保存{}", self.kind().label()));
+                set_text(
+                    self.field(COMMIT),
+                    &format!(
+                        "{}{}{}",
+                        tr("保存"),
+                        if i18n::english() { " " } else { "" },
+                        tr(self.kind().label())
+                    ),
+                );
                 set_text(
                     self.field(4023),
                     &format!(
-                        "{}{}",
-                        if self.selected == 0 {
+                        "{}{}{}",
+                        tr(if self.selected == 0 {
                             "新建"
                         } else {
                             "编辑"
-                        },
-                        self.kind().label()
+                        }),
+                        if i18n::english() { " " } else { "" },
+                        tr(self.kind().label())
                     ),
                 );
                 set_text(self.field(NEW), &format!("新建{}", self.kind().label()));
@@ -1697,8 +1711,8 @@ unsafe fn choose_sound_file(owner: HWND) -> Result<Option<std::path::PathBuf>, S
         use std::os::windows::ffi::OsStringExt;
         use windows_sys::Win32::UI::Controls::Dialogs::*;
         let mut path = vec![0u16; 32768];
-        let filter = wide("WAV 音乐 (*.wav)\0*.wav\0");
-        let title = wide("选择提醒音乐");
+        let filter = wide(tr("WAV 音乐 (*.wav)\0*.wav\0"));
+        let title = wide(tr("选择提醒音乐"));
         let mut dialog: OPENFILENAMEW = std::mem::zeroed();
         dialog.lStructSize = size_of::<OPENFILENAMEW>() as u32;
         dialog.hwndOwner = owner;

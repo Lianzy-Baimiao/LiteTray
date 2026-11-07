@@ -35,6 +35,7 @@ pub(super) const OPEN_WEATHER_FORMAT: u16 = 226;
 pub(super) const VOLUME_SCROLL: u16 = 227;
 pub(super) const VOLUME_MUTE: u16 = 228;
 pub(super) const COMPACT_LAYOUT: u16 = 229;
+pub(super) const LANGUAGE: u16 = 505;
 pub(super) const PRESETS: [(&str, &str, &str); 4] = [
     ("Windows 简洁", "%time%", "%date%"),
     ("日期与星期", "%time%", "%month2%/%day2% %weekday_short%"),
@@ -140,26 +141,39 @@ impl App {
                 133,
                 half,
             );
+            self.label("界面语言", 224, 184, half, 24);
+            self.combo(
+                &["跟随系统", "简体中文", "English"],
+                match c.language {
+                    Language::System => 0,
+                    Language::ZhCn => 1,
+                    Language::En => 2,
+                },
+                LANGUAGE,
+                248 + half,
+                177,
+                half,
+            );
             self.caption(
-                "强调色、界面字体与高对比度随系统变化。",
+                "保存后应用语言；时钟模板和日程内容保留原文。",
                 224,
-                187,
+                224,
                 total,
                 24,
             );
-            self.divider(224, 233, total);
-            self.section("启动与后台运行", 224, 252, total);
+            self.divider(224, 270, total);
+            self.section("启动与后台运行", 224, 289, total);
             self.check(
                 "登录 Windows 时启动 LiteTray",
                 c.start_with_windows,
                 502,
                 224,
-                299,
+                336,
                 total,
             );
-            self.caption("关闭窗口后继续计时和提醒。\r\n退出 LiteTray 后停止提醒，已保存的数据仍保留在本机。", 224, 342, total, 44);
-            self.divider(224, 410, total);
-            self.section("数据与维护", 224, 429, total);
+            self.caption("关闭窗口后继续计时和提醒。\r\n退出 LiteTray 后停止提醒，已保存的数据仍保留在本机。", 224, 379, total, 44);
+            self.divider(224, 447, total);
+            self.section("数据与维护", 224, 466, total);
             let button = (total - 32) / 3;
             for (i, (name, id)) in [
                 ("打开配置目录", 503),
@@ -169,12 +183,12 @@ impl App {
             .into_iter()
             .enumerate()
             {
-                self.button(name, id, 224 + i as i32 * (button + 16), 477, button);
+                self.button(name, id, 224 + i as i32 * (button + 16), 514, button);
             }
             self.caption(
                 "配置、日程和提醒记录均保存在本机配置目录。",
                 224,
-                533,
+                570,
                 total,
                 24,
             );
@@ -284,7 +298,7 @@ impl App {
                 self.field(416),
                 EM_SETCUEBANNER,
                 0,
-                wide("仅使用和风天气时填写").as_ptr() as isize,
+                wide(tr("仅使用和风天气时填写")).as_ptr() as isize,
             );
         }
     }
@@ -612,12 +626,19 @@ impl App {
                     Ok(()) => {
                         set_text(
                             self.field(id),
-                            &format!("{label} · {}", clock::format(token, &c, Local::now(), "")),
+                            &format!(
+                                "{} · {}",
+                                tr(label),
+                                clock::format(token, &c, Local::now(), "")
+                            ),
                         );
                         set_text(self.field(id + 2), help);
                     }
                     Err(error) => {
-                        set_text(self.field(id), &format!("{label} · 请检查格式"));
+                        set_text(
+                            self.field(id),
+                            &format!("{} · {}", tr(label), tr("请检查格式")),
+                        );
                         set_text(self.field(id + 2), &error);
                     }
                 }
@@ -739,7 +760,8 @@ impl App {
                 Ok(()) => {
                     let now = Local::now();
                     format!(
-                        "示例 · {}",
+                        "{} · {}",
+                        tr("示例"),
                         clock::weather_format::format(
                             &template,
                             Some(&clock::weather_format::sample(now)),
@@ -865,7 +887,7 @@ impl App {
                     self.field(color_id),
                     EM_SETCUEBANNER,
                     0,
-                    wide("跟随系统").as_ptr() as isize,
+                    wide(tr("跟随系统")).as_ptr() as isize,
                 );
                 self.button(
                     "选色",
@@ -908,7 +930,7 @@ impl App {
                 tip,
                 EM_SETCUEBANNER,
                 0,
-                wide("留空使用系统提示；支持内容模板中的变量与换行").as_ptr() as isize,
+                wide(tr("留空使用系统提示；支持内容模板中的变量与换行")).as_ptr() as isize,
             );
             self.button("预览原生时钟", 209, 224, 562, half);
             self.button("重置样式", 805, 248 + half, 562, half);
@@ -922,8 +944,9 @@ impl App {
             self.button("项目主页", 607, 224 + total - 144, 82, 144);
             self.caption(
                 &format!(
-                    "版本 {} · {UI_REVISION}\r\n让每块屏幕都有顺手的时钟、日历和托盘。",
-                    env!("CARGO_PKG_VERSION")
+                    "{}\r\n{}",
+                    revision_label(),
+                    tr("让每块屏幕都有顺手的时钟、日历和托盘。")
                 ),
                 224,
                 134,

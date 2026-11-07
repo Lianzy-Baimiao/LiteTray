@@ -16,7 +16,7 @@ pub(super) unsafe fn create(parent: HWND, bounds: RECT) -> HWND {
         let hwnd = CreateWindowExW(
             WS_EX_CONTROLPARENT | WS_EX_COMPOSITED,
             class.as_ptr(),
-            wide("页面内容").as_ptr(),
+            wide(tr("页面内容")).as_ptr(),
             WS_CHILD | WS_CLIPCHILDREN,
             bounds.left,
             bounds.top,

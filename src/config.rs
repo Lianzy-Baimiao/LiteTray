@@ -15,6 +15,7 @@ pub struct Config {
     pub weather: WeatherConfig,
     pub updates: UpdateConfig,
     pub appearance: Appearance,
+    pub language: crate::i18n::Language,
     pub start_with_windows: bool,
 }
 
@@ -27,6 +28,7 @@ impl Default for Config {
             weather: WeatherConfig::default(),
             updates: UpdateConfig::default(),
             appearance: Appearance::System,
+            language: crate::i18n::Language::System,
             start_with_windows: false,
         }
     }

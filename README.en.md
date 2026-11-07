@@ -17,7 +17,7 @@ The taskbar image is a live capture. The calendar is a native UI rendering previ
 
 ## Download
 
-[**Download the Windows x64 installer**](https://github.com/Lianzy-Baimiao/LiteTray/releases/tag/v5.11.6) · [Changelog](CHANGELOG.md)
+[**Download the Windows x64 installer**](https://github.com/Lianzy-Baimiao/LiteTray/releases/latest) · [Changelog](CHANGELOG.md)
 
 Download `LiteTray-<version>-Setup-x64.exe` from Releases. Installation is per user and needs no administrator privileges. Settings, schedules and weather cache live in `%LOCALAPPDATA%\LiteTray`; upgrades and uninstall preserve user data.
 
@@ -31,12 +31,15 @@ Download `LiteTray-<version>-Setup-x64.exe` from Releases. Installation is per u
 - **Local schedules:** tasks, events, birthdays, anniversaries and countdowns, including editing directly in the calendar flyout.
 - **Alarms and focus:** alarms, Pomodoro sessions, timers and optional sounds. Optional wheel volume control and middle-click mute over the taskbar clock.
 - **Windows appearance:** system light/dark theme, accent colors and high contrast; detach and drag the calendar to keep it open.
+- **UI languages:** Simplified Chinese and English, following the Windows display language by default, with a manual choice in General. Lunar dates, almanac text and upstream holiday notices retain their original language.
 
 ## Getting started
 
 Open settings, choose your displays in the tray page, then enable the taskbar clock. Click the clock to open the calendar. An attached panel closes when you click outside it; a detached panel stays open. Closing settings keeps LiteTray running; use the tray menu to exit.
 
 [Usage and development guide, Chinese](docs/usage.md) · [Installer guide, Chinese](docs/installer.md) · [Weather templates, Chinese](docs/weather-format.md)
+
+Choose **General → Language**, then save. Templates, entry titles and notes keep their original text. GitHub does not select a README based on your device language; use the language links at the top. [Language support](docs/languages.md)
 
 ## Current limitations
 

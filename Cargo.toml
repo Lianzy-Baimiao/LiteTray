@@ -26,7 +26,7 @@ litetray-adapter-protocol = { path = "crates/adapter-protocol" }
 [target.'cfg(windows)'.dependencies]
 windows-core = "0.62"
 windows-sys = { version = "0.61", features = [
-  "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm",
+  "Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm",
   "Win32_Media_Audio",
   "Win32_Devices_Display",
   "Win32_Security", "Win32_Security_Credentials", "Win32_Storage_FileSystem",

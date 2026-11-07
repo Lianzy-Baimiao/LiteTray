@@ -127,20 +127,24 @@ fn format_pattern(pattern: &str, date: bool, now: DateTime<Local>) -> String {
         .into_iter()
         .map(|(literal, spec)| match spec {
             None => literal,
-            Some("weekday") => [
-                "星期一",
-                "星期二",
-                "星期三",
-                "星期四",
-                "星期五",
-                "星期六",
-                "星期日",
-            ][now.weekday().num_days_from_monday() as usize]
-                .into(),
-            Some("weekday_short") => ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-                [now.weekday().num_days_from_monday() as usize]
-                .into(),
-            Some("ampm") => if now.hour12().0 { "下午" } else { "上午" }.into(),
+            Some("weekday") => crate::i18n::tr(
+                [
+                    "星期一",
+                    "星期二",
+                    "星期三",
+                    "星期四",
+                    "星期五",
+                    "星期六",
+                    "星期日",
+                ][now.weekday().num_days_from_monday() as usize],
+            )
+            .into(),
+            Some("weekday_short") => crate::i18n::tr(
+                ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+                    [now.weekday().num_days_from_monday() as usize],
+            )
+            .into(),
+            Some("ampm") => crate::i18n::tr(if now.hour12().0 { "下午" } else { "上午" }).into(),
             Some(spec) => now.format(spec).to_string(),
         })
         .collect()
@@ -234,7 +238,7 @@ fn format_using(
                     out.push_str(&now.format(":%S").to_string());
                 }
             }
-            "weekday" => out.push_str(weekday),
+            "weekday" => out.push_str(crate::i18n::tr(weekday)),
             "weather" => out.push_str(weather),
             "year" => out.push_str(&now.year().to_string()),
             "month" => out.push_str(&now.month().to_string()),
@@ -246,11 +250,15 @@ fn format_using(
             "hour12" => out.push_str(&format!("{:02}", now.hour12().1)),
             "minute" => out.push_str(&format!("{:02}", now.minute())),
             "second" => out.push_str(&format!("{:02}", now.second())),
-            "ampm" => out.push_str(if now.hour12().0 { "下午" } else { "上午" }),
-            "weekday_short" => out.push_str(
+            "ampm" => out.push_str(crate::i18n::tr(if now.hour12().0 {
+                "下午"
+            } else {
+                "上午"
+            })),
+            "weekday_short" => out.push_str(crate::i18n::tr(
                 ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
                     [now.weekday().num_days_from_monday() as usize],
-            ),
+            )),
             "percent" => out.push('%'),
             "newline" => out.push('\n'),
             token if weather_format::supports(token) => {

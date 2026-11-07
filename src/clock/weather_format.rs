@@ -112,7 +112,7 @@ pub(super) fn value(token: &str, result: Option<&WeatherResult>, now: DateTime<L
     let today = now.format("%Y-%m-%d").to_string();
     let day = || w.days.iter().find(|day| day.date == today);
     match name {
-        "weather_condition" => w.description.chars().take(128).collect(),
+        "weather_condition" => crate::i18n::tr(&w.description).chars().take(128).collect(),
         "weather_temp" => number(Some(w.temperature_c), precision, "°C", -100., 65.),
         "weather_feels" => number(w.feels_like_c, precision, "°C", -150., 100.),
         "weather_humidity" => number(w.humidity_percent, precision, "%", 0., 100.),
