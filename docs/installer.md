@@ -1,6 +1,6 @@
 # Windows 安装包
 
-`dist/Setup.exe` 为 LiteTray 5.9.1 的 Windows 11 x64 安装程序。默认简体中文，并根据系统语言支持英文；有程序图标、开始菜单入口、可选桌面快捷方式和 Windows“已安装的应用”卸载入口。
+`dist/Setup.exe` 为 LiteTray 5.9.2 的 Windows 11 x64 安装程序。默认简体中文，并根据系统语言支持英文；有程序图标、开始菜单入口、可选桌面快捷方式和 Windows“已安装的应用”卸载入口。
 
 默认安装根目录为 `%LOCALAPPDATA%\Programs\LiteTray`，不请求管理员权限。程序及两份配套 DLL 放入 `versions/<版本>-<内容摘要>/`；三个二进制共同决定摘要，减少 Explorer 保留旧 DLL 时升级覆盖失败的情况。重装会逐文件核对 SHA-256，内容一致的文件不覆盖。
 

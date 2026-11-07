@@ -42,6 +42,7 @@ struct View {
     revision: u64,
     lunar_labels: Vec<String>,
     solar_terms: Vec<Option<String>>,
+    festivals: Vec<Vec<&'static str>>,
     markers: Vec<bool>,
     entries: Vec<(u64, String, String)>,
     entry_count: usize,
@@ -118,6 +119,7 @@ pub(super) unsafe fn create(parent: HWND, bounds: RECT, dark: bool, flyout: bool
             revision: u64::MAX,
             lunar_labels: vec![],
             solar_terms: vec![],
+            festivals: vec![],
             markers: vec![],
             entries: vec![],
             entry_count: 0,
@@ -523,11 +525,8 @@ fn button_specs(v: &View) -> Vec<ButtonSpec> {
                     .and_then(|d| d.as_ref())
                     .map(|d| format!("，{}", d.description()))
                     .unwrap_or_default(),
-                v.solar_terms
-                    .get(i)
-                    .and_then(|name| name.as_ref())
-                    .map(|name| format!("，{name}"))
-                    .unwrap_or_default()
+                observance_suffix(v.solar_terms.get(i).and_then(Option::as_deref),
+                    v.festivals.get(i).map_or(&[], Vec::as_slice), "，")
             ),
             FIRST + i as u16,
             20 + (i % 7) as i32 * 48,
@@ -595,6 +594,7 @@ unsafe fn layout(hwnd: HWND) {
         }
         if month_changed {
             v.days = v.calendar.grid();
+            v.festivals = v.days.iter().map(|date| festivals::on_date(*date)).collect();
             v.solar_terms = v
                 .days
                 .iter()
@@ -1077,6 +1077,7 @@ fn day_sublabel(v: &View, index: usize) -> Option<&str> {
     v.solar_terms
         .get(index)
         .and_then(|s| s.as_deref())
+        .or_else(|| v.festivals.get(index).and_then(|names| names.first().copied()))
         .or_else(|| {
             v.holiday_days
                 .get(index)
@@ -1091,22 +1092,28 @@ fn day_sublabel(v: &View, index: usize) -> Option<&str> {
         })
 }
 fn selected_date_summary(v: &View) -> String {
-    let mut labels = vec![v.calendar.selected.format("%-m月%-d日").to_string()];
+    let index = v.days.iter().position(|d| *d == v.calendar.selected);
+    let mut result = v.calendar.selected.format("%-m月%-d日").to_string();
+    result.push_str(&observance_suffix(
+        index.and_then(|i| v.solar_terms.get(i)).and_then(Option::as_deref),
+        index.and_then(|i| v.festivals.get(i)).map_or(&[], Vec::as_slice),
+        " · ",
+    ));
     if v.lunar
         && let Some(day) = lunar::for_date(v.calendar.selected)
     {
-        labels.push(day.full);
+        result.push_str(" · ");
+        result.push_str(&day.full);
     }
-    if let Some(term) = v
-        .days
-        .iter()
-        .position(|d| *d == v.calendar.selected)
-        .and_then(|i| v.solar_terms.get(i))
-        .and_then(|s| s.as_ref())
-    {
-        labels.push(term.clone());
+    result
+}
+fn observance_suffix(term: Option<&str>, festivals: &[&str], separator: &str) -> String {
+    let mut result = String::new();
+    for name in term.into_iter().chain(festivals.iter().copied()) {
+        result.push_str(separator);
+        result.push_str(name);
     }
-    labels.join(" · ")
+    result
 }
 unsafe fn draw_button_buffered(v: &View, item: &DRAWITEMSTRUCT) {
     unsafe {
@@ -1342,7 +1349,8 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
                     v.fonts[1],
                     if selected {
                         t.on_accent
-                    } else if v.solar_terms.get(index).is_some_and(Option::is_some)
+                    } else if (v.solar_terms.get(index).is_some_and(Option::is_some)
+                        || v.festivals.get(index).is_some_and(|names| !names.is_empty()))
                         && date.is_some_and(|d| d.month() == v.calendar.month.month())
                     {
                         t.accent
@@ -1435,9 +1443,8 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
                 "{}  {}{}",
                 now.format("%-m月%-d日"),
                 weekday[now.weekday().num_days_from_monday() as usize],
-                solar_terms::on_date(now.date_naive())
-                    .map(|term| format!(" · {term}"))
-                    .unwrap_or_default()
+                observance_suffix(solar_terms::on_date(now.date_naive()).as_deref(),
+                    &festivals::on_date(now.date_naive()), " · ")
             ),
             20,
             13,
@@ -1867,7 +1874,7 @@ mod visual_checks {
             let button = GetDlgItem(hwnd, FIRST as i32 + index as i32);
             assert_eq!(day_sublabel(&cell.borrow(), index), Some("立冬"));
             assert!(window_text(button).contains("立冬"));
-            assert!(selected_date_summary(&cell.borrow()).ends_with("立冬"));
+            assert!(selected_date_summary(&cell.borrow()).contains("立冬"));
             assert_ne!(day_sublabel(&cell.borrow(), index + 1), Some("立冬"));
             let mut config = Config::default();
             config.clock.show_lunar = false;
@@ -1892,6 +1899,84 @@ mod visual_checks {
                 "休"
             );
             DestroyWindow(parent);
+        });
+    }
+    #[test]
+    fn festivals_are_visible_without_lunar_labels_and_keep_colliding_names() {
+        super::super::visual_checks::on_isolated_desktop(|| unsafe {
+            let _ = RoInitialize(RO_INIT_SINGLETHREADED);
+            for dark in [false, true] {
+                for scale in [1., 1.25, 1.5, 2.] {
+                    let width = (WIDTH as f64 * scale) as i32;
+                    let height = (HEIGHT as f64 * scale) as i32;
+                    let parent = CreateWindowExW(
+                        0, wide("STATIC").as_ptr(), wide("Festival calendar").as_ptr(),
+                        WS_POPUP, 0, 0, width, height, null_mut(), null_mut(),
+                        GetModuleHandleW(null()), null(),
+                    );
+                    let hwnd = create(parent, rect(0, 0, width, height), dark, true);
+                    bind_holidays(hwnd, Rc::new(RefCell::new(holidays::Catalog::default())));
+                    let cell = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RefCell<View>);
+                    let buttons = cell.borrow().buttons.clone();
+                    let mut config = Config::default();
+                    config.clock.show_lunar = false;
+                    config.clock.show_almanac = false;
+                    update(hwnd, &config, &None, false);
+                    for (year, month, day, label, other) in [
+                        (2026, 10, 31, "万圣节", None),
+                        (2026, 12, 25, "圣诞节", None),
+                        (2026, 2, 17, "春节", None),
+                        (2026, 5, 10, "母亲节", None),
+                        (2026, 6, 21, "夏至", Some("父亲节")),
+                        (2020, 10, 1, "中秋节", Some("国庆节")),
+                    ] {
+                        let date = NaiveDate::from_ymd_opt(year, month, day).unwrap();
+                        restore_selection(hwnd, calendar::Calendar::new(date));
+                        let v = cell.borrow();
+                        let i = v.days.iter().position(|d| *d == date).unwrap();
+                        let name = window_text(GetDlgItem(hwnd, FIRST as i32 + i as i32));
+                        assert_eq!(day_sublabel(&v, i), Some(label));
+                        assert!(name.contains(label));
+                        assert!(selected_date_summary(&v).contains(label));
+                        if let Some(other) = other {
+                            assert!(name.contains(other), "{date}: {name}");
+                            assert!(selected_date_summary(&v).contains(other));
+                        }
+                        if month == 10 && day == 31 {
+                            assert!(v.holiday_days[i].is_none(), "Halloween must not imply a day off");
+                        }
+                        if let Some(output) = std::env::var_os("LITETRAY_FESTIVAL_RENDER_DIR") {
+                            let output = std::path::PathBuf::from(output);
+                            std::fs::create_dir_all(&output).unwrap();
+                            super::super::visual_checks::write_window(hwnd, &output.join(format!(
+                                "festivals-{}-{}-{date}.bmp",
+                                if dark { "dark" } else { "light" }, (scale * 100.) as i32,
+                            )));
+                        }
+                        drop(v);
+                        assert_eq!(cell.borrow().buttons, buttons, "month navigation rebuilt controls");
+                    }
+                    restore_selection(hwnd, calendar::Calendar::new(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()));
+                    SendMessageW(hwnd, WM_COMMAND, NEXT as usize, 0);
+                    let v = cell.borrow();
+                    for (i, date) in v.days.iter().enumerate() {
+                        if (date.month(), date.day()) != (10, 31) {
+                            assert_ne!(day_sublabel(&v, i), Some("万圣节"));
+                        }
+                    }
+                    drop(v);
+                    config.clock.show_lunar = true;
+                    update(hwnd, &config, &None, false);
+                    restore_selection(hwnd, calendar::Calendar::new(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()));
+                    if let Some(output) = std::env::var_os("LITETRAY_FESTIVAL_RENDER_DIR") {
+                        super::super::visual_checks::write_window(hwnd, &std::path::PathBuf::from(output).join(format!(
+                            "festivals-{}-{}-lunar.bmp",
+                            if dark { "dark" } else { "light" }, (scale * 100.) as i32,
+                        )));
+                    }
+                    DestroyWindow(parent);
+                }
+            }
         });
     }
     #[test]
@@ -2548,6 +2633,7 @@ mod visual_checks {
                         .iter()
                         .map(|d| solar_terms::on_date(*d))
                         .collect(),
+                    festivals: calendar.grid().iter().map(|d| festivals::on_date(*d)).collect(),
                     markers: calendar
                         .grid()
                         .iter()

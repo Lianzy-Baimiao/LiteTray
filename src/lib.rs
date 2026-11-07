@@ -1,6 +1,7 @@
 pub mod almanac;
 pub mod clock;
 pub mod config;
+pub mod festivals;
 pub mod holidays;
 pub mod http;
 pub mod location;

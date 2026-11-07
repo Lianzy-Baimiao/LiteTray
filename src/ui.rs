@@ -20,7 +20,7 @@ use chrono::{Local, Utc};
 use litetray::{
     clock,
     config::{self, Appearance, ClickAction, Config, MonitorScope, Provider},
-    holidays, http, location, migration, monitors, organizer,
+    festivals, holidays, http, location, migration, monitors, organizer,
     platform::{
         app_icon, clock_preview, credentials, diagnostics, displays, lunar, startup, taskbar_clock,
         tray_popup, wide,
@@ -48,7 +48,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.9.1";
+const UI_REVISION: &str = "开发版 5.9.2";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;

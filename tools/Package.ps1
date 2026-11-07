@@ -36,6 +36,7 @@ $documents += @('docs/almanac-hover.md','docs/images/almanac-light.png','docs/im
 $documents += @('docs/hourly-weather.md','docs/images/hourly-weather-light.png')
 $documents += @('docs/text-rendering.md')
 $documents += @('docs/installer.md')
+$documents += @('docs/festivals.md')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null
