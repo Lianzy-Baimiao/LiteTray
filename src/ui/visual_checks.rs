@@ -2660,6 +2660,236 @@ fn opening_focus_bounce_does_not_hide_calendar_and_popup_is_topmost() {
 }
 
 #[test]
+fn outside_presses_dismiss_attached_panels_without_closing_owned_or_detached_views() {
+    on_isolated_desktop(|| unsafe {
+        let input_owner = || {
+            use windows_sys::Win32::UI::Input::{GetRegisteredRawInputDevices, RAWINPUTDEVICE};
+            let mut devices = [RAWINPUTDEVICE::default(); 8];
+            let mut count = devices.len() as u32;
+            let read = GetRegisteredRawInputDevices(
+                devices.as_mut_ptr(),
+                &mut count,
+                size_of::<RAWINPUTDEVICE>() as u32,
+            );
+            assert_ne!(read, u32::MAX);
+            devices[..read as usize]
+                .iter()
+                .find(|d| d.usUsagePage == 1 && d.usUsage == 2)
+                .map_or(null_mut(), |d| d.hwndTarget)
+        };
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-panel-press-unused.json"),
+        );
+        app.prewarm_panels();
+        let popup = app.panel;
+        let mut bounds: RECT = std::mem::zeroed();
+        GetWindowRect(popup, &mut bounds);
+        let anchor = popup::Rect {
+            left: bounds.right - 100,
+            top: bounds.bottom + 10,
+            right: bounds.right,
+            bottom: bounds.bottom + 50,
+        };
+        let outside = POINT {
+            x: bounds.left - 30,
+            y: bounds.top + 40,
+        };
+        let inside = POINT {
+            x: bounds.left + 100,
+            y: bounds.top + 100,
+        };
+        let foreground = GetForegroundWindow();
+        for button in [1, 4, 16, 64, 256] {
+            panel::open(popup, anchor, false);
+            assert_eq!(
+                input_owner(),
+                popup,
+                "visible panel must receive real raw-input messages"
+            );
+            // No waiting for grace or a foreground change: even a fast click
+            // in the already-active app / blank desktop must dismiss.
+            panel::pointer_down(
+                popup,
+                outside,
+                button,
+                windows_sys::Win32::System::SystemInformation::GetTickCount64() as u32,
+            );
+            assert_eq!(
+                IsWindowVisible(popup),
+                0,
+                "outside button {button} kept the flyout open"
+            );
+            assert!(
+                input_owner().is_null(),
+                "hidden panel must stop observing input"
+            );
+        }
+        panel::open(popup, anchor, false);
+        let now = windows_sys::Win32::System::SystemInformation::GetTickCount64() as u32;
+        panel::pointer_down(popup, outside, 1, now.wrapping_sub(1000));
+        assert_ne!(
+            IsWindowVisible(popup),
+            0,
+            "old queued input dismissed a newly opened panel"
+        );
+        panel::pointer_down(popup, inside, 1, now);
+        assert_ne!(
+            IsWindowVisible(popup),
+            0,
+            "inside click dismissed the panel"
+        );
+
+        let owned_class = wide("LiteTray.OwnedInputFixture");
+        let wc = WNDCLASSW {
+            lpfnWndProc: Some(DefWindowProcW),
+            hInstance: GetModuleHandleW(null()),
+            lpszClassName: owned_class.as_ptr(),
+            ..std::mem::zeroed()
+        };
+        RegisterClassW(&wc);
+        let owned = CreateWindowExW(
+            WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+            owned_class.as_ptr(),
+            wide("Owned dropdown fixture").as_ptr(),
+            WS_POPUP,
+            outside.x - 10,
+            outside.y - 10,
+            20,
+            20,
+            popup,
+            null_mut(),
+            GetModuleHandleW(null()),
+            null(),
+        );
+        assert!(!owned.is_null());
+        SetWindowPos(
+            owned,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+        assert_eq!(
+            WindowFromPoint(outside),
+            owned,
+            "interactive owned popup must receive this point"
+        );
+        panel::pointer_down(
+            popup,
+            outside,
+            1,
+            windows_sys::Win32::System::SystemInformation::GetTickCount64() as u32,
+        );
+        assert_ne!(
+            IsWindowVisible(popup),
+            0,
+            "owned popup is part of the expanded panel"
+        );
+        DestroyWindow(owned);
+
+        let clock = POINT {
+            x: anchor.left + 20,
+            y: anchor.top + 10,
+        };
+        panel::pointer_down(
+            popup,
+            clock,
+            1,
+            windows_sys::Win32::System::SystemInformation::GetTickCount64() as u32,
+        );
+        assert_ne!(
+            IsWindowVisible(popup),
+            0,
+            "clock left down must leave the release toggle in charge"
+        );
+        panel::pointer_down(
+            popup,
+            clock,
+            16,
+            windows_sys::Win32::System::SystemInformation::GetTickCount64() as u32,
+        );
+        assert_eq!(
+            IsWindowVisible(popup),
+            0,
+            "middle mute outside the panel should dismiss it"
+        );
+
+        panel::open(popup, anchor, false);
+        panel::set_detached(popup, true);
+        assert!(
+            input_owner().is_null(),
+            "detached panel must stop observing input"
+        );
+        for button in [1, 4, 16, 64, 256] {
+            panel::pointer_down(
+                popup,
+                outside,
+                button,
+                windows_sys::Win32::System::SystemInformation::GetTickCount64() as u32,
+            );
+        }
+        SendMessageW(popup, WM_ACTIVATE, WA_INACTIVE as usize, app.hwnd as isize);
+        assert_ne!(IsWindowVisible(popup), 0, "detached panel must remain open");
+        assert_eq!(GetForegroundWindow(), foreground);
+        app.close_panel();
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+    });
+}
+
+#[test]
+fn attached_calendar_dismisses_when_an_outside_window_is_activated() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-panel-outside-unused.json"),
+        );
+        app.prewarm_panels();
+        let popup = app.panel;
+        let outside = CreateWindowExW(
+            WS_EX_NOACTIVATE,
+            wide("STATIC").as_ptr(),
+            wide("Outside application fixture").as_ptr(),
+            WS_POPUP,
+            -30000,
+            -30000,
+            20,
+            20,
+            null_mut(),
+            null_mut(),
+            GetModuleHandleW(null()),
+            null(),
+        );
+        assert!(!outside.is_null());
+        let anchor = popup::Rect {
+            left: 0,
+            top: 0,
+            right: 80,
+            bottom: 40,
+        };
+        panel::open(popup, anchor, false);
+        std::thread::sleep(Duration::from_millis(270));
+        // A fast outside click may already be released before the 50ms
+        // sampler runs. Deactivation still names its new active window.
+        SendMessageW(popup, WM_ACTIVATE, WA_INACTIVE as usize, outside as isize);
+        let remained_open = IsWindowVisible(popup) != 0;
+        app.close_panel();
+        DestroyWindow(outside);
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+        assert!(
+            !remained_open,
+            "clicking an outside window left the attached calendar open"
+        );
+    });
+}
+
+#[test]
 fn detached_calendar_keeps_its_position_and_lifetime_until_close() {
     on_isolated_desktop(|| unsafe {
         let mut app = app_for_check(

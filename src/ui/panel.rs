@@ -2,6 +2,7 @@
 //! borrows. A detached calendar is a persistent, draggable topmost window.
 use super::*;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
+mod input;
 const OBSERVE: usize = 71;
 pub(super) const DETACH: u16 = 45;
 pub(super) const CLOSE: u16 = 46;
@@ -49,8 +50,12 @@ pub(super) unsafe fn set_detached(hwnd: HWND, value: bool) {
         dashboard::set_detached(GetDlgItem(hwnd, dashboard::ID as i32), value);
         if value {
             KillTimer(hwnd, OBSERVE);
+            input::stop(hwnd);
         } else {
             SetTimer(hwnd, OBSERVE, 50, None);
+            if IsWindowVisible(hwnd) != 0 {
+                input::start(hwnd);
+            }
         }
         SetWindowPos(
             hwnd,
@@ -84,6 +89,7 @@ pub(super) unsafe fn open(hwnd: HWND, anchor: popup::Rect, activate: bool) {
         );
         if !detached(hwnd) {
             SetTimer(hwnd, OBSERVE, 50, None);
+            input::start(hwnd);
         }
         if activate && SetForegroundWindow(hwnd) != 0 {
             dashboard::focus_content(GetDlgItem(hwnd, dashboard::ID as i32));
@@ -93,6 +99,7 @@ pub(super) unsafe fn open(hwnd: HWND, anchor: popup::Rect, activate: bool) {
 pub(super) unsafe fn hide(hwnd: HWND) {
     unsafe {
         KillTimer(hwnd, OBSERVE);
+        input::stop(hwnd);
         ShowWindow(hwnd, SW_HIDE);
     }
 }
@@ -117,6 +124,57 @@ unsafe fn shell_window(hwnd: HWND) -> bool {
         )
     }
 }
+unsafe fn belongs_to_panel(hwnd: HWND, target: HWND) -> bool {
+    unsafe {
+        if target.is_null() {
+            return false;
+        }
+        let mut current = target;
+        for _ in 0..16 {
+            if current == hwnd || IsChild(hwnd, current) != 0 {
+                return true;
+            }
+            let root = GetAncestor(current, GA_ROOT);
+            if root == hwnd {
+                return true;
+            }
+            current = GetWindow(root, GW_OWNER);
+            if current.is_null() {
+                break;
+            }
+        }
+        false
+    }
+}
+pub(super) unsafe fn pointer_down(hwnd: HWND, point: POINT, buttons: u16, time: u32) {
+    unsafe {
+        if buttons == 0 || IsWindowVisible(hwnd) == 0 {
+            return;
+        }
+        let Some(cell) = state(hwnd) else {
+            return;
+        };
+        let Ok(s) = cell.try_borrow() else {
+            return;
+        };
+        if s.detached || (time.wrapping_sub(s.opened as u32) as i32) < 0 {
+            return;
+        }
+        let mut bounds: RECT = std::mem::zeroed();
+        if GetWindowRect(hwnd, &mut bounds) == 0 {
+            return;
+        }
+        // The clock's left click is handled by the existing toggle on release.
+        // Hiding on down there would make that same release reopen the panel.
+        let clock_toggle = buttons == input::LEFT_DOWN && contains(s.anchor, point);
+        let inside =
+            PtInRect(&bounds, point) != 0 || belongs_to_panel(hwnd, WindowFromPoint(point));
+        drop(s);
+        if !inside && !clock_toggle {
+            hide(hwnd);
+        }
+    }
+}
 unsafe fn observe(hwnd: HWND) {
     unsafe {
         if IsWindowVisible(hwnd) == 0 {
@@ -132,7 +190,7 @@ unsafe fn observe(hwnd: HWND) {
         if s.detached {
             return;
         }
-        let pressed = buttons_down();
+        let pressed = !input::active(hwnd) && buttons_down();
         let click = pressed && !s.buttons;
         s.buttons = pressed;
         if GetTickCount64().saturating_sub(s.opened) < OPEN_GRACE {
@@ -151,8 +209,7 @@ unsafe fn observe(hwnd: HWND) {
             .settled_foreground
             .is_some_and(|previous| previous != foreground)
             && !foreground.is_null()
-            && foreground != hwnd
-            && IsChild(hwnd, foreground) == 0
+            && !belongs_to_panel(hwnd, foreground)
             && !shell_window(foreground);
         if !foreground.is_null() && !shell_window(foreground) {
             s.settled_foreground = Some(foreground);
@@ -168,6 +225,7 @@ pub(super) unsafe fn message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Opti
         match msg {
             WM_NCDESTROY => {
                 KillTimer(hwnd, OBSERVE);
+                input::stop(hwnd);
                 let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RefCell<State>;
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 if !raw.is_null() {
@@ -177,9 +235,32 @@ pub(super) unsafe fn message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Opti
             }
             WM_ACTIVATE if w & 0xffff == WA_INACTIVE as usize => {
                 if !detached(hwnd) && IsWindowVisible(hwnd) != 0 {
-                    SetTimer(hwnd, OBSERVE, 50, None);
+                    let target = l as HWND;
+                    let opening = state(hwnd)
+                        .and_then(|s| s.try_borrow().ok())
+                        .is_none_or(|s| GetTickCount64().saturating_sub(s.opened) < OPEN_GRACE);
+                    if !opening
+                        && !target.is_null()
+                        && !shell_window(target)
+                        && !belongs_to_panel(hwnd, target)
+                    {
+                        hide(hwnd);
+                    } else {
+                        SetTimer(hwnd, OBSERVE, 50, None);
+                    }
                 }
                 Some(0)
+            }
+            WM_INPUT => {
+                input::receive(hwnd, l as _);
+                // Required cleanup for foreground raw-input packets. This
+                // does not consume the legacy click destined for another app.
+                Some(DefWindowProcW(hwnd, msg, w, l))
+            }
+            WM_SHOWWINDOW if w == 0 => {
+                input::stop(hwnd);
+                KillTimer(hwnd, OBSERVE);
+                None
             }
             WM_TIMER if w == OBSERVE => {
                 observe(hwnd);
