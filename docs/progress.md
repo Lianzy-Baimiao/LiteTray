@@ -368,3 +368,7 @@ Release 复现了父级已附加但时钟尚未完成布局的竞争；等待条
 日历、天气、黄历及自绘控件使用 Windows DirectWrite 灰阶渲染，保留小字号笔画、消除强制 GDI ClearType 的彩色细边；辅助文字提高至 12 逻辑像素。增加 256 项布局缓存及 CPU 绘制缓冲，黄历测量与绘制使用相同排版。162 项测试和 Clippy 通过，三个设置入口首开成功，十页无外层滚动条，页签切换中位 7.7ms。
 
 20:29:20 已后台部署至原运行目录，PID 29760，完整包 dist/LiteTray-ui591-text。Explorer 11064 与用户配置、适配 DLL 哈希不变。本次登录的 Windhawk 已加载 taskbar-multi-tray，LiteTray 报托盘入口被改写并暂停接入（active=false）；该冲突未记为接管验收通过，未重启 Explorer 或关闭 Windhawk。详情与证据见 docs/text-rendering.md。
+
+## 2026-11-07 · Setup 安装包
+
+新增中文 Windows 11 x64 安装包 dist/Setup.exe，以及 SHA-256 和版本清单。按用户安装，提供开始菜单、可选桌面图标与卸载入口；按三份二进制的内容摘要隔离版本，正常退出旧宿主后升级，保留配置／日程／缓存和已有开机启动偏好。已在非输入桌面验证安装、旧宿主退出协议、快捷方式、占用时重装、安装版首开与卸载，均成功。运行中的 5.9.1 已在副屏打开。构建入口 tools/Build-Setup.ps1，说明 docs/installer.md，测试证据 local/setup591-check.json。
