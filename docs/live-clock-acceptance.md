@@ -215,3 +215,11 @@
 日历、天气、黄历及自绘控件使用 Windows DirectWrite 灰阶渲染，保留小字号笔画、消除强制 GDI ClearType 的彩色细边；辅助文字提高至 12 逻辑像素。增加 256 项布局缓存及 CPU 绘制缓冲，黄历测量与绘制使用相同排版。162 项测试和 Clippy 通过，三个设置入口首开成功，十页无外层滚动条，页签切换中位 7.7ms。
 
 20:29:20 已后台部署至原运行目录，PID 29760，完整包 dist/LiteTray-ui591-text。Explorer 11064 与用户配置、适配 DLL 哈希不变。本次登录的 Windhawk 已加载 taskbar-multi-tray，LiteTray 报托盘入口被改写并暂停接入（active=false）；该冲突未记为接管验收通过，未重启 Explorer 或关闭 Windhawk。详情与证据见 docs/text-rendering.md。
+
+## 2026-11-07 · 5.9.2 实际任务栏恢复接管
+
+用户指出打开日历窗口不等于接管任务栏。21:26 读取真实任务栏，主副屏均为系统时间／日期，`tray_input.active=false`；设置保留此前“托盘坐标入口已变化或已被其他组件改写”的暂停原因。此时 Windhawk 服务已停止，Explorer 中已无其模块。单独后台重启 LiteTray 后仍未恢复，表明只清除宿主暂停状态不足以解决当前 Explorer 接入状态。
+
+按已有任务栏重启授权，于 21:30 重启任务栏 Explorer（11064 → 444）并后台启动 LiteTray 5.9.2（PID 11248）。21:30:38 与 21:31:52 两次读取实际 XAML 时钟：主副屏均显示“2026-11-07 时间 周六”和“多云 25°C”，时间持续变化，`tray_input.active=true`，任务栏及几何检查无错误。两屏 9 个非时钟托盘项的数据模型、顺序、宽度及垂直位置匹配，距右侧的偏差最多 1 像素。用户配置哈希保持不变。
+
+本次为运行环境恢复，没有更改二进制或安装包；自然鼠标点击与 QQ 悬停未在此轮重新验收。证据：`local/taskbar-before-reconnect.json`、`local/taskbar-reconnect-result.json`、`local/taskbar-shell-refresh-result.json`、`local/taskbar-reconnect-verified.json`。
