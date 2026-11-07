@@ -10,6 +10,7 @@ fn main() {
             matches!(
                 a.as_str(),
                 "--diagnose"
+                    | "--compatibility-report"
                     | "--weather-check"
                     | "--check-updates"
                     | "--prepare-symbols"
@@ -44,6 +45,41 @@ fn main() {
 fn run() -> Result<(), String> {
     use litetray::{config, http, platform, update, weather};
     let arguments: Vec<_> = std::env::args().skip(1).collect();
+    // Runs before config::load: export remains usable even with a damaged
+    // profile, and never attaches to or loads a DLL into Explorer.
+    if arguments.first().map(String::as_str) == Some("--compatibility-report") {
+        let output = arguments
+            .get(1)
+            .ok_or("用法：--compatibility-report <新报告.json> [--system-root <Windows目录>]")?;
+        let (root, build) = match arguments.len() {
+            2 => (
+                std::env::var_os("SystemRoot")
+                    .map(std::path::PathBuf::from)
+                    .ok_or("SystemRoot 不可用")?,
+                Some(platform::diagnostics::windows_build()),
+            ),
+            4 if arguments[2] == "--system-root" => (std::path::PathBuf::from(&arguments[3]), None),
+            _ => {
+                return Err(
+                    "用法：--compatibility-report <新报告.json> [--system-root <Windows目录>]"
+                        .into(),
+                );
+            }
+        };
+        let report = litetray::compatibility::collect(&root, build)?;
+        let text = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output)
+            .map_err(|e| format!("报告未保存（不覆盖已有文件）：{e}"))?;
+        file.write_all(text.as_bytes())
+            .and_then(|_| file.sync_all())
+            .map_err(|e| e.to_string())?;
+        println!("{text}");
+        return Ok(());
+    }
     if arguments.first().map(String::as_str) == Some("--self-test-app-icon") {
         println!(
             "{}",
@@ -165,9 +201,8 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         Some("--diagnose") => {
-            let text =
-                serde_json::to_string_pretty(&platform::diagnostics::collect_for(&config.tray))
-                    .map_err(|e| e.to_string())?;
+            let text = serde_json::to_string_pretty(&platform::diagnostics::export(&config.tray)?)
+                .map_err(|e| e.to_string())?;
             if let Some(path) = arguments.get(1) {
                 std::fs::write(path, &text).map_err(|e| e.to_string())?;
             }
@@ -201,7 +236,7 @@ fn run() -> Result<(), String> {
         }
         Some("--help") => {
             println!(
-                "LiteTray [--settings | --calendar | --clock-preview | --background | --show-secondary [calendar|agenda|timers|clock|weather-format|appearance] | --diagnose [file] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-app-icon | --self-test-clock | --self-test-shell-source | --self-test-preview-recovery | --test-secondary-clock <report.json> | --test-secondary-tray <report.json> | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
+                "LiteTray [--settings | --calendar | --clock-preview | --background | --show-secondary [calendar|agenda|timers|clock|weather-format|appearance] | --diagnose [file] | --compatibility-report <new-report.json> [--system-root <Windows-directory>] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-app-icon | --self-test-clock | --self-test-shell-source | --self-test-preview-recovery | --test-secondary-clock <report.json> | --test-secondary-tray <report.json> | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
             );
             Ok(())
         }

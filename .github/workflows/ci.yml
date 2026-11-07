@@ -21,6 +21,9 @@ jobs:
       - run: cargo test --workspace --all-targets --locked -- --test-threads=1
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo build --workspace --release --locked
+      - name: Check disk-only compatibility export without profile or adapter DLLs
+        shell: pwsh
+        run: ./tools/Test-Compatibility.ps1 -BinaryPath ./target/release/LiteTray.exe
       - name: Check XAML clock apply and restore in an isolated process
         shell: pwsh
         run: ./tools/Test-XamlClock.ps1 -BinaryPath ./target/release/LiteTray.exe

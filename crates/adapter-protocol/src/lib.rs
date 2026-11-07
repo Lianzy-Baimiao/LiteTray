@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 pub mod activation;
 pub mod clock;
+pub mod compatibility;
 pub mod popup;
 pub mod routing;
 pub mod taskbar;
@@ -75,7 +76,7 @@ impl SymbolRole {
         !matches!(self, Self::PrimarySite | Self::SecondarySite)
     }
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SymbolAddress {
     pub role: SymbolRole,
@@ -85,7 +86,7 @@ pub struct SymbolAddress {
     pub executable: bool,
     pub prologue: Vec<u8>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostLayout {
     pub schema: u32,

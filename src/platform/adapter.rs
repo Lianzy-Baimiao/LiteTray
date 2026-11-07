@@ -246,22 +246,10 @@ impl Drop for Session {
 }
 
 pub fn inspect() -> Result<InspectResponse, String> {
-    let module = std::env::var_os("SystemRoot")
+    let system = std::env::var_os("SystemRoot")
         .map(std::path::PathBuf::from)
-        .ok_or("SystemRoot 不可用")?
-        .join("System32/taskbar.dll");
-    let bytes = std::fs::read(&module).map_err(|e| e.to_string())?;
-    let identity = crate::pe::identity(&bytes)?;
-    let path = crate::config::data_dir()
-        .join("adapters")
-        .join(format!("{}.json", identity.sha256));
-    let map_bytes = std::fs::read(&path).map_err(|_| "没有匹配的任务栏符号，请先准备兼容性资料")?;
-    if map_bytes.len() > 4 * 1024 * 1024 {
-        return Err("符号映射尺寸无效".into());
-    }
-    let map: super::symbols::SymbolMap =
-        serde_json::from_slice(&map_bytes).map_err(|_| "符号映射损坏")?;
-    let layout = super::symbols::host_layout(&map, &bytes)?;
+        .ok_or("SystemRoot 不可用")?;
+    let layout = crate::compatibility::preflight(&system, true, false)?;
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     inspect_with_layout(
         &executable

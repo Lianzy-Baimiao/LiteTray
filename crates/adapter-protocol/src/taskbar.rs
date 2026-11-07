@@ -10,8 +10,6 @@ pub const PREPARE_TAG: usize = 0x4c544110;
 pub const REPLY_TAG: usize = 0x4c544111;
 pub const STATUS_TAG: usize = 0x4c544112;
 pub const RECEIVER_CLASS: &str = "LiteTray.TaskbarClockReceiver.v1";
-pub const TASKBAR_HASH: &str = "ca1e335ac1fae5ff57519035302a2f365c4620d3a230f31f1231af7331760741";
-pub const SHELL_HASH: &str = "8ba440eded430a2417692a98b34695a12ad0ee000333dfed07e0c2723e17111c";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -1,5 +1,6 @@
 pub mod almanac;
 pub mod clock;
+pub mod compatibility;
 pub mod config;
 pub mod festivals;
 pub mod holidays;

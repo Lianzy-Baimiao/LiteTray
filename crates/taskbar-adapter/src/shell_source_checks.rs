@@ -15,33 +15,25 @@ use crate::{
 };
 use litetray_adapter_protocol::{
     clock::{Frame, Owner, Style, Text},
+    compatibility::builtin,
     routing::{Options, Plan, Route},
 };
-use sha2::{Digest, Sha256};
 use std::{
     cell::RefCell,
     ffi::c_void,
-    path::PathBuf,
     ptr::{null, null_mut},
     rc::Rc,
 };
 use windows_sys::{
     Win32::{
         Foundation::*,
-        System::{
-            LibraryLoader::*,
-            SystemInformation::{GetSystemDirectoryW, GetTickCount64},
-            Threading::*,
-        },
+        System::{LibraryLoader::*, SystemInformation::GetTickCount64, Threading::*},
         UI::WindowsAndMessaging::*,
     },
     core::{GUID, HSTRING, IInspectable_Vtbl},
 };
 windows_link::link!("combase.dll" "system" fn RoInitialize(kind:u32)->i32);
 windows_link::link!("combase.dll" "system" fn RoUninitialize());
-const HASH: &str = "8ba440eded430a2417692a98b34695a12ad0ee000333dfed07e0c2723e17111c";
-const FACTORY_RVA: usize = 7866448;
-const CHILD_RVA: usize = 7739040;
 const IID_FACTORY: GUID = GUID::from_u128(0xff119559_d636_5e6b_b169_390efeb2cf6e);
 const IID_CHILD: GUID = GUID::from_u128(0xec97afd0_5c0d_581b_9508_074773c6f1e0);
 const IID_CLOSABLE: GUID = GUID::from_u128(0x30d5a829_7fa4_4026_83bb_d75bae4ea99e);
@@ -107,17 +99,8 @@ fn inspected_module() -> Result<Module, String> {
         cfg!(target_arch = "x86_64"),
         "only inspected x64 ABI is supported",
     )?;
-    let mut path = vec![0u16; 32768];
-    let length = unsafe { GetSystemDirectoryW(path.as_mut_ptr(), path.len() as u32) } as usize;
-    require(length > 0 && length < path.len(), "system module path")?;
-    let path = PathBuf::from(String::from_utf16_lossy(&path[..length])).join("twinui.pcshell.dll");
-    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-    let hash = format!("{:x}", Sha256::digest(&bytes));
-    if hash != HASH {
-        return Err(format!(
-            "此系统模块尚未验证，拒绝调用私有 ABI：SHA256={hash}"
-        ));
-    }
+    let profile = builtin()?;
+    let path = crate::compatibility::verified_file(&profile.shell)?;
     let module = Module(unsafe {
         LoadLibraryExW(
             wide(&path.to_string_lossy()).as_ptr(),
@@ -126,30 +109,9 @@ fn inspected_module() -> Result<Module, String> {
         )
     });
     require(!module.0.is_null(), "load inspected system module")?;
-    let mut loaded_path = vec![0u16; 32768];
-    let length =
-        unsafe { GetModuleFileNameW(module.0, loaded_path.as_mut_ptr(), loaded_path.len() as u32) }
-            as usize;
     require(
-        length > 0
-            && length < loaded_path.len()
-            && String::from_utf16_lossy(&loaded_path[..length])
-                .eq_ignore_ascii_case(&path.to_string_lossy()),
-        "loaded image path",
-    )?;
-    // The on-disk hash alone cannot identify a previously loaded older image.
-    let identity =
-        unsafe { crate::loaded_identity(module.0 as usize) }.ok_or("无法核对已加载模块身份")?;
-    require(
-        identity["machine"] == 0x8664
-            && identity["pdb_age"] == 1
-            && identity["image_size"] == 10113024
-            && identity["timestamp"] == 3162946381u32
-            && identity["pdb_guid"]
-                == serde_json::json!([
-                    218, 243, 7, 149, 127, 212, 2, 95, 101, 105, 252, 80, 39, 60, 64, 215
-                ]),
-        "loaded image PDB identity",
+        unsafe { crate::compatibility::loaded(&profile.shell)? } == module.0 as usize,
+        "loaded image and PDB identity",
     )?;
     Ok(module)
 }
@@ -202,12 +164,15 @@ impl Host {
                 island: null_mut(),
             };
             require(
-                pointer(host.child.raw() as usize)? == module.0 as usize + CHILD_RVA,
+                pointer(host.child.raw() as usize)?
+                    == module.0 as usize + builtin()?.source.child_vtable_rva as usize,
                 "inspected concrete child vtable",
             )?;
             // Exact image + exact interface vtable + own freshly created host.
             // Offline getter chain: ABI this - 0x10, then member + 0x20.
-            let source = pointer(host.child.raw() as usize + 0x10)?;
+            let source = pointer(
+                host.child.raw() as usize + builtin()?.source.child_source_offset as usize,
+            )?;
             let source = Object::query_borrowed(source as *mut _, &IID_IDesktopWindowXamlSource)?;
             let native = source.query(&IID_NATIVE)?;
             check(
@@ -411,7 +376,8 @@ pub(crate) fn run() -> Result<serde_json::Value, String> {
     let module = inspected_module()?;
     let factory = factory(CLASS, &IID_FACTORY)?;
     require(
-        pointer(factory.raw() as usize)? == module.0 as usize + FACTORY_RVA,
+        pointer(factory.raw() as usize)?
+            == module.0 as usize + builtin()?.source.factory_vtable_rva as usize,
         "inspected concrete factory vtable",
     )?;
     let first = Host::create(&module, &factory)?;
@@ -599,6 +565,6 @@ pub(crate) fn run() -> Result<serde_json::Value, String> {
     checks.push("shell_own_host_close_invalidates_public_source_binding");
     Ok(
         serde_json::json!({ "passed": true, "environment": "isolated_private_shell_host_in_app_process", "explorer_accessed": false,
-        "module_sha256": HASH, "checks": checks, "production_taskbar_verified": false, "input_method": "retained_native_delegate" }),
+        "module_sha256": builtin()?.shell.sha256, "checks": checks, "production_taskbar_verified": false, "input_method": "retained_native_delegate" }),
     )
 }

@@ -7,6 +7,7 @@ mod clock_style;
 mod clock_style_checks;
 mod clock_text;
 mod clock_text_checks;
+mod compatibility;
 mod discovery;
 mod discovery_checks;
 mod hooks;

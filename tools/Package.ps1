@@ -47,6 +47,8 @@ $documents += @('LICENSE','NOTICE')
 $documents += @('docs/images/taskbar-5.12.0.png','docs/images/README.md')
 $documents += @('docs/images/calendar-5.12.0-zh-light.png','docs/images/calendar-5.12.0-zh-dark.png')
 $documents += @('docs/images/calendar-5.12.0-en-light.png','docs/images/calendar-5.12.0-en-dark.png')
+$documents += @('docs/compatibility.md','docs/windows11-compatibility-plan.md','docs/windows11-compatibility-research.md')
+$documents += @('crates/adapter-protocol/profiles/README.md','crates/adapter-protocol/profiles/windows11-26300.9711-x64.json')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null

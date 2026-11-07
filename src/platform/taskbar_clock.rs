@@ -3,8 +3,7 @@
 //! source windows before a Start command is sent to the clock endpoint.
 use crate::{
     config::{ClickAction, Config},
-    pe,
-    platform::{diagnostics, symbols, wide},
+    platform::{diagnostics, wide},
     taskbar_service::{self, ConnectFailure},
 };
 use litetray_adapter_protocol::{
@@ -89,32 +88,13 @@ pub struct Preflight {
 pub fn preflight(config: &Config) -> Result<Preflight, String> {
     let system = std::env::var_os("SystemRoot")
         .map(std::path::PathBuf::from)
-        .ok_or("SystemRoot 不可用")?
-        .join("System32");
-    for (name, hash) in [
-        ("taskbar.dll", TASKBAR_HASH),
-        ("twinui.pcshell.dll", SHELL_HASH),
-    ] {
-        let bytes = std::fs::read(system.join(name)).map_err(|e| e.to_string())?;
-        if pe::identity(&bytes)?.sha256 != hash {
-            return Err(format!("{name} 不属于当前实验适配的系统版本"));
-        }
-    }
-    let bytes = std::fs::read(system.join("taskbar.dll")).map_err(|e| e.to_string())?;
-    let identity = pe::identity(&bytes)?;
-    let cache = crate::config::data_dir()
-        .join("adapters")
-        .join(format!("{}.json", identity.sha256));
-    let map = if cache.is_file() {
-        let bytes = std::fs::read(cache).map_err(|e| e.to_string())?;
-        if bytes.len() > 4 * 1024 * 1024 {
-            return Err("兼容性资料尺寸无效".into());
-        }
-        serde_json::from_slice::<symbols::SymbolMap>(&bytes).map_err(|_| "兼容性资料损坏")?
-    } else {
-        symbols::prepare(&system.join("taskbar.dll"), None)?
-    };
-    let layout = symbols::host_layout(&map, &bytes)?;
+        .ok_or("SystemRoot 不可用")?;
+    // Known builds carry complete layouts; startup has no PDB/network dependency.
+    let layout = crate::compatibility::preflight(
+        &system,
+        config.tray.clock_enabled,
+        config.tray.enabled && config.tray.show_icons,
+    )?;
     let mut tray = config.tray.clone();
     tray.enabled = tray.enabled && tray.show_icons;
     tray.show_control_center = false;

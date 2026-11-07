@@ -52,7 +52,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.12.0";
+const UI_REVISION: &str = "开发版 5.13.0";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -113,6 +113,7 @@ struct Palette {
 thread_local! {static PALETTE:Cell<Option<Palette>>=const{Cell::new(None)};}
 
 enum Event {
+    Diagnostics(Result<std::path::PathBuf, String>),
     Weather(Box<(config::WeatherConfig, weather::WeatherResult)>),
     Update(Result<UpdateStatus, String>),
     Holidays(i32, holidays::Outcome),
@@ -163,6 +164,7 @@ struct App {
     rx: mpsc::Receiver<Event>,
     weather_busy: bool,
     update_busy: bool,
+    diagnostics_busy: bool,
     next_weather: Instant,
     engine: std::sync::Arc<std::sync::Mutex<weather::Engine>>,
     taskbar_created: u32,
@@ -342,6 +344,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             rx,
             weather_busy: false,
             update_busy: false,
+            diagnostics_busy: false,
             next_weather: Instant::now(),
             engine: Default::default(),
             taskbar_created: RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
@@ -1446,6 +1449,17 @@ impl App {
         unsafe {
             while let Ok(event) = self.rx.try_recv() {
                 match event {
+                    Event::Diagnostics(result) => {
+                        self.diagnostics_busy = false;
+                        match result {
+                            Ok(path) => self.set_status(if i18n::english() {
+                                format!("Diagnostics saved: {}", path.display())
+                            } else {
+                                format!("诊断已保存：{}", path.display())
+                            }),
+                            Err(error) => self.set_status(error),
+                        }
+                    }
                     Event::Location(serial, result) => self.receive_location(serial, result),
                     Event::Holidays(year, result) => {
                         self.holiday_active = None;
@@ -2081,14 +2095,27 @@ impl App {
                     open_target(&config::data_dir().to_string_lossy());
                 }
                 504 => {
-                    let path = config::data_dir().join("diagnostics.json");
-                    let result =
-                        serde_json::to_vec_pretty(&diagnostics::collect_for(&self.saved.tray))
-                            .map_err(|e| e.to_string())
-                            .and_then(|data| config::atomic_write(&path, &data));
-                    match result {
-                        Ok(()) => self.set_status(format!("诊断已保存：{}", path.display())),
-                        Err(e) => self.set_status(e),
+                    if !self.diagnostics_busy {
+                        self.diagnostics_busy = true;
+                        self.set_status(if i18n::english() {
+                            "Exporting compatibility diagnostics…"
+                        } else {
+                            "正在导出兼容性诊断…"
+                        });
+                        let path = config::data_dir().join("diagnostics.json");
+                        let tray = self.saved.tray.clone();
+                        let sender = self.tx.clone();
+                        let window = self.hwnd as usize;
+                        thread::spawn(move || {
+                            let result = diagnostics::export(&tray)
+                                .and_then(|report| {
+                                    serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())
+                                })
+                                .and_then(|bytes| config::atomic_write(&path, &bytes))
+                                .map(|_| path);
+                            let _ = sender.send(Event::Diagnostics(result));
+                            PostMessageW(window as HWND, WM_RESULT, 0, 0);
+                        });
                     }
                 }
                 OPEN_RELEASE => {

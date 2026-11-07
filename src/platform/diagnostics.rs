@@ -35,9 +35,9 @@ pub fn collect() -> Diagnostics {
         Diagnostics {
             build,
             family: if build >= 22000 {
-                "Windows 11 / XAML 任务栏"
+                "Windows 11（任务栏实现需单独检查）"
             } else if build >= 10240 {
-                "Windows 10 / 经典任务栏"
+                "Windows 10（任务栏实现需单独检查）"
             } else {
                 "未知或未支持的 Windows"
             }
@@ -51,6 +51,18 @@ pub fn collect() -> Diagnostics {
             adapter_status: "原位时钟与应用托盘图标复制仅适配已核对的 Windows 11 26300.9711 x64 模块；系统图标及跨屏菜单仍在完善。此诊断不代表当前连接状态。".into(),
         }
     }
+}
+/// Explicit export only. Hashing images is not part of display enumeration or
+/// the settings render path. The UI invokes this on a worker thread.
+pub fn export(tray: &crate::config::TrayConfig) -> Result<serde_json::Value, String> {
+    let diagnostics = collect_for(tray);
+    let root = std::env::var_os("SystemRoot")
+        .map(std::path::PathBuf::from)
+        .ok_or("SystemRoot 不可用")?;
+    let compatibility = crate::compatibility::collect(&root, Some(diagnostics.build))?;
+    let mut value = serde_json::to_value(diagnostics).map_err(|e| e.to_string())?;
+    value["compatibility"] = serde_json::to_value(compatibility).map_err(|e| e.to_string())?;
+    Ok(value)
 }
 pub fn collect_for(tray: &crate::config::TrayConfig) -> Diagnostics {
     let mut result = collect();

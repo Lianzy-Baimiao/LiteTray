@@ -2,7 +2,12 @@
 
 [返回项目介绍](README.md) · [GitHub Releases](https://github.com/Lianzy-Baimiao/LiteTray/releases)
 
-## 未发布 / Unreleased
+## 5.13.0
+
+- 集中管理当前已验证的三份系统模块身份、宿主字段、虚表与托盘入口；EXE 和适配器共用内置兼容资料，保留磁盘/内存、线程、对象归属和停止恢复检查。
+- 当前已验证版本启动不再依赖 PDB 下载或外部符号缓存；系统支持范围仍限定于已核验的 26300.9711 x64 模块。
+- 新增 `--compatibility-report <新报告.json> [--system-root <Windows目录>]`，无需用户配置或适配 DLL，离线导出按功能区分的兼容检查。报告不注入 Explorer、不联网，不把磁盘匹配标为接管成功。
+- 设置中的诊断导出加入兼容报告并移到后台；CI 增加独立 EXE、损坏配置、离线错误分类和禁止覆盖检查。
 
 - 项目采用 Apache License 2.0，新增 LICENSE、NOTICE 和 Rust 项目许可元数据，保留第三方许可声明。
 - 中英文 README 更新为 5.12.0 的副屏任务栏实拍与当前日历预览，按页面明暗主题切换图片；日历包含离线示例小时天气与日程。

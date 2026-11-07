@@ -2554,6 +2554,7 @@ unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path) -> App {
             rx,
             weather_busy: false,
             update_busy: false,
+            diagnostics_busy: false,
             next_weather: Instant::now(),
             engine: Default::default(),
             taskbar_created: 0,
