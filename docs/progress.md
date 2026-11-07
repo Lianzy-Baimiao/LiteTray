@@ -392,3 +392,11 @@ dist/Setup.exe 已更新为 5.11.0，BuildId 5.11.0-6310a1ec4012；安装、正�
 187 项常规回归、Clippy 和真实 Core Audio 反馈验证通过；音频检查结束已恢复原音量 26%／未静音。浮层在非输入桌面检查两屏定位、明暗渲染、窗口复用、焦点保持、鼠标穿透、到期隐藏及清理。发布包完整管理、日历设置及专注入口均一次打开成功。未重复执行无关的导航性能基准；后台音频与窗口检查不冒充物理滚轮全链路验收。说明见 [窗口入口与时钟音量](clock-input-5.11.md)，图像证据 `local/ui5111-volume/`。
 
 00:43:14 已正常退出旧宿主并在原 `dist/LiteTray-5.11.0` 目录切换至 5.11.1，宿主 PID 33464，设置窗口保持隐藏。Explorer PID 31596、两个 DLL 与用户配置哈希不变；主副屏实际接管检查 active=true，两屏 error／geometry_error 均为空。QQ 兼容项仍为 disabled／hooks=0。完整独立包在 `dist/LiteTray-5.11.1`；部署与检查证据 `local/ui5111-deployment.json`、`local/ui5111-live-taskbar.json`。EXE SHA256 `93EEC961B173EF95E4E64C9673C4AC2A5A5CAFD61F9317E9786567D46D6A5C1D`。
+
+## 2026-11-08 · 开发版 5.11.2：中键静音误开日历
+
+事件链回归复现中键 PointerPressed 发布静音后，独立 Tapped 又发布打开日历，得到 `[VolumeMute, Pointer]`。修复在每个时钟订阅内保留已接受的静音手势，消费随后 Tapped；下一次指针按下结束旧手势。系统日历选择也适用，发送失败保留原行为。另补回归发现托盘定时刷新短暂暂停、恢复订阅会清掉手势，改为跨刷新保留，仅在完整解除订阅时清理。
+
+最终发布包 156 项隔离 XAML 检查、四项适配器单元检查及全工作区 Clippy 通过。回归覆盖重复中键／Tapped、后续左键／触摸、无 Tapped 的取消手势、发送失败、暂停恢复和两种日历模式。证据 `local/ui5112-middle-red.txt`、`local/ui5112-refresh-red.txt`、`local/ui5112-release-xaml.txt`。真实 XAML 元素上执行生产委托，按键参数使用事件夹具；未把它记为真实鼠标手势验收。
+
+完整包位于 `dist/LiteTray-5.11.2`。尝试正常退出旧版时出现“设置尚未保存，是否保存后退出？”，已取消退出，保留用户未提交设置。当前宿主仍为 5.11.1／PID 33464，Explorer 31596 尚未重启；修复版尚未接入实际任务栏。切换脚本 `local/Switch-Ui5112.ps1` 已准备好，待确认未保存设置的处理后重载 Explorer 并切换。

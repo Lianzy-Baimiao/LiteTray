@@ -23,6 +23,7 @@ use windows_sys::{
     },
     core::{GUID, IID_IUnknown, IUnknown_Vtbl},
 };
+mod pointer_checks;
 
 const IID_TAPPED: GUID = GUID::from_u128(0x68d940cc_9ff0_49ce_b141_3f07ec477b97);
 const IID_KEY: GUID = GUID::from_u128(0x7c63d2e5_7a0e_4e12_b96a_7715aa6ff1c8);
@@ -50,6 +51,7 @@ struct Context {
     island: HWND,
     publish: Box<dyn Fn(Activation) -> bool>,
     options: Options,
+    mute_gesture: Cell<bool>,
 }
 /// Shared by every clock in one session. The busy flag prevents nested native
 /// events from publishing the same sequence while a callback pumps messages.
@@ -171,6 +173,13 @@ unsafe fn dispatch(
         )?;
         let (handled, set_handled, input) = if kind == Input::Pointer {
             let table = args.table::<ITappedRoutedEventArgs_Vtbl>();
+            // XAML may raise Tapped even when the preceding middle press was
+            // Handled. Consume that gesture before checking the calendar mode,
+            // so it cannot activate either our panel or the native calendar.
+            if context.mute_gesture.get() {
+                check((table.SetHandled)(args.raw(), true), "Consume middle tap")?;
+                return Ok(());
+            }
             (table.Handled, table.SetHandled, kind)
         } else if kind == Input::Keyboard {
             let table = args.table::<IKeyRoutedEventArgs_Vtbl>();
@@ -187,6 +196,12 @@ unsafe fn dispatch(
             (table.Handled, table.SetHandled, kind)
         } else {
             let table = args.table::<IPointerRoutedEventArgs_Vtbl>();
+            if kind == Input::VolumeMute {
+                // This delegate observes every press on this clock. A new
+                // left/touch/pen press starts a different gesture, even when
+                // the previous middle press produced no Tapped event.
+                context.mute_gesture.set(false);
+            }
             let Some(input) = pointer_input(&args, sender, kind)? else {
                 return Ok(());
             };
@@ -220,6 +235,9 @@ unsafe fn dispatch(
         event.validate()?;
         if (context.publish)(event) && context.active.get() {
             context.sequence.value.set(sequence);
+            if input == Input::VolumeMute {
+                context.mute_gesture.set(true);
+            }
             check(set_handled(args.raw(), true), "SetHandled")?;
         }
         Ok(())
@@ -451,6 +469,7 @@ impl Subscription {
             island,
             publish: Box::new(publish),
             options,
+            mute_gesture: Cell::new(false),
         });
         let mut subscription = Self {
             element: element.query(&IID_IUIElement)?,
@@ -514,6 +533,9 @@ impl Subscription {
     }
     pub fn detach(&mut self) -> Result<(), String> {
         self.suspend();
+        // Temporary suspension during tray refresh must preserve the in-flight
+        // gesture. Only a full detach or the next press ends its lifetime.
+        self.context.mute_gesture.set(false);
         let mut errors = Vec::new();
         unsafe {
             let table = self.element.table::<IUIElement_Vtbl>();
@@ -757,6 +779,7 @@ pub(crate) fn self_test(
             return Err("音量订阅未完全解除".into());
         }
     }
+    pointer_checks::run(element, island, owner)?;
     if LIVE_HANDLERS.load(Ordering::Relaxed) != baseline {
         return Err("点击委托引用未释放".into());
     }
@@ -767,6 +790,7 @@ pub(crate) fn self_test(
         "xaml_input_rejected_delivery_preserves_default",
         "xaml_volume_subscriptions_respect_system_calendar",
         "xaml_volume_delegates_release_on_stop",
+        "xaml_middle_gesture_does_not_open_calendar",
     ])
 }
 

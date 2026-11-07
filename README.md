@@ -1,6 +1,6 @@
 # LiteTray · 轻托盘
 
-Rust 原生 Windows 任务栏工具，目标是替代 Windhawk 的 Taskbar Clock Customization 和 Taskbar multi-tray，提供可配置时钟、日历天气、日程与计时提醒。私有开发仓库，当前版本为 **开发版 5.11.1**。
+Rust 原生 Windows 任务栏工具，目标是替代 Windhawk 的 Taskbar Clock Customization 和 Taskbar multi-tray，提供可配置时钟、日历天气、日程与计时提醒。私有开发仓库，当前版本为 **开发版 5.11.2**。
 
 ## 当前能做什么
 
@@ -19,6 +19,8 @@ Rust 原生 Windows 任务栏工具，目标是替代 Windhawk 的 Taskbar Clock
 **当前仍不能认定为两个 Windhawk 模块的完整替代品。** 独立时钟预览和离屏界面图都不证明任务栏替换成功。
 
 ## 开发版 5
+
+5.11.2 修复中键静音后又展开日历的冲突：已处理的中键手势不会继续触发 LiteTray 或系统日历，下一次左键／触摸仍正常打开。修复位于任务栏适配 DLL，已运行的旧适配器需要重载 Explorer 后才能切换。
 
 5.11.1 在时钟滚轮调音量或中键静音后，于当前操作的时钟旁显示实际音量百分比、进度条及静音状态。浮层跟随明暗主题，不抢焦点，连续操作更新同一浮层，停止操作约 1.4 秒后自动收起。
 
