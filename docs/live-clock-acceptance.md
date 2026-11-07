@@ -197,3 +197,9 @@
 14:16:22 后台启动新版（PID 2568），沿用 `dist/LiteTray-ui54-inline`，标题开发版 5.8，设置保持隐藏。启动前没有运行中的 LiteTray；Explorer 10960 保持不变，适配器与 QQ 钩子 DLL 哈希未变化，正式配置哈希一致。只读检查两个任务栏的 `error`、`geometry_error` 均为空，`tray_input.active=true`。
 
 黄历使用离线数据、400ms 悬停延迟及独立开关。验证覆盖窗口不激活、同屏定位、关闭与切月清理，发布 EXE 三个设置入口首次打开正常。测试未移动鼠标或切换输入桌面；真实鼠标体验仍以用户使用结果为准。详情与哈希见 [黄历使用与验证](almanac-hover.md)，现场证据 `local/ui58-deployment.json`、`local/ui58-live-taskbar.json`。
+
+## 2026-11-07 · 开发版 5.8.1：外显节气
+
+日期格直接显示二十四节气，节气当天优先于农历和假日名称，休／班角标保留；今日标题和选中日期详情也显示节气。离线计算按中国历日，仅标记交节当天；关闭农历标签或黄历悬停均不隐藏节气。155 项自动测试及 Clippy 通过，已检查明暗原生渲染。
+
+14:23:22 已切换 5.8.1，宿主 PID 21856，EXE SHA256 FBC98080403E4181D9B3EDBD5F19339E2E399EC0F54FF7F6EA37A50B255DE213。运行目录仍为 dist/LiteTray-ui54-inline；Explorer 10960 未重启，两个 DLL 与用户配置哈希不变，主副屏任务栏无错误且输入 active=true。完整包 dist/LiteTray-ui581-terms，证据 local/ui581-deployment.json、local/ui581-live-taskbar.json、local/ui581-tests.txt、local/ui581-renders/。

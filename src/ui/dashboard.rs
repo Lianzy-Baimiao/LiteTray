@@ -40,6 +40,7 @@ struct View {
     store: Option<Rc<RefCell<organizer::Store>>>,
     revision: u64,
     lunar_labels: Vec<String>,
+    solar_terms: Vec<Option<String>>,
     markers: Vec<bool>,
     entries: Vec<(u64, String, String)>,
     entry_count: usize,
@@ -114,6 +115,7 @@ pub(super) unsafe fn create(parent: HWND, bounds: RECT, dark: bool, flyout: bool
             store: None,
             revision: u64::MAX,
             lunar_labels: vec![],
+            solar_terms: vec![],
             markers: vec![],
             entries: vec![],
             entry_count: 0,
@@ -477,7 +479,7 @@ fn button_specs(v: &View) -> Vec<ButtonSpec> {
     for (i, date) in v.days.iter().enumerate() {
         buttons.push(spec(
             format!(
-                "{}{}{}",
+                "{}{}{}{}",
                 date.format("%Y年%m月%d日"),
                 if *date == Local::now().date_naive() {
                     "，今天"
@@ -488,6 +490,11 @@ fn button_specs(v: &View) -> Vec<ButtonSpec> {
                     .get(i)
                     .and_then(|d| d.as_ref())
                     .map(|d| format!("，{}", d.description()))
+                    .unwrap_or_default(),
+                v.solar_terms
+                    .get(i)
+                    .and_then(|name| name.as_ref())
+                    .map(|name| format!("，{name}"))
                     .unwrap_or_default()
             ),
             FIRST + i as u16,
@@ -556,6 +563,11 @@ unsafe fn layout(hwnd: HWND) {
         }
         if month_changed {
             v.days = v.calendar.grid();
+            v.solar_terms = v
+                .days
+                .iter()
+                .map(|date| solar_terms::on_date(*date))
+                .collect();
             v.lunar_labels = v
                 .days
                 .iter()
@@ -1008,6 +1020,41 @@ fn holiday_colors(t: Theme, off: bool) -> (u32, u32) {
         )
     }
 }
+fn day_sublabel(v: &View, index: usize) -> Option<&str> {
+    v.solar_terms
+        .get(index)
+        .and_then(|s| s.as_deref())
+        .or_else(|| {
+            v.holiday_days
+                .get(index)
+                .and_then(|d| d.as_ref())
+                .map(|d| d.name.as_str())
+        })
+        .or_else(|| {
+            v.lunar
+                .then(|| v.lunar_labels.get(index))
+                .flatten()
+                .map(String::as_str)
+        })
+}
+fn selected_date_summary(v: &View) -> String {
+    let mut labels = vec![v.calendar.selected.format("%-m月%-d日").to_string()];
+    if v.lunar
+        && let Some(day) = lunar::for_date(v.calendar.selected)
+    {
+        labels.push(day.full);
+    }
+    if let Some(term) = v
+        .days
+        .iter()
+        .position(|d| *d == v.calendar.selected)
+        .and_then(|i| v.solar_terms.get(i))
+        .and_then(|s| s.as_ref())
+    {
+        labels.push(term.clone());
+    }
+    labels.join(" · ")
+}
 unsafe fn draw_button_buffered(v: &View, item: &DRAWITEMSTRUCT) {
     unsafe {
         let width = item.rcItem.right - item.rcItem.left;
@@ -1100,6 +1147,9 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
             .then(|| v.holiday_days.get((id - FIRST) as usize))
             .flatten()
             .and_then(|d| d.as_ref());
+        let sublabel = day
+            .then(|| day_sublabel(v, (id - FIRST) as usize))
+            .flatten();
         let selected = date == Some(v.calendar.selected);
         fill(item.hDC, item.rcItem, t.surface);
         let color = if selected {
@@ -1160,7 +1210,7 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
         text(
             item.hDC,
             &label,
-            if day && (v.lunar || holiday.is_some()) {
+            if day && sublabel.is_some() {
                 rect(
                     item.rcItem.left,
                     item.rcItem.top + s(2),
@@ -1178,12 +1228,6 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
         );
         if day {
             let index = (id - FIRST) as usize;
-            let sublabel = holiday.map(|d| d.name.as_str()).or_else(|| {
-                v.lunar
-                    .then(|| v.lunar_labels.get(index))
-                    .flatten()
-                    .map(String::as_str)
-            });
             if let Some(label) = sublabel {
                 text(
                     item.hDC,
@@ -1195,7 +1239,15 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
                         s(18),
                     ),
                     v.fonts[1],
-                    if selected { t.on_accent } else { t.muted },
+                    if selected {
+                        t.on_accent
+                    } else if v.solar_terms.get(index).is_some_and(Option::is_some)
+                        && date.is_some_and(|d| d.month() == v.calendar.month.month())
+                    {
+                        t.accent
+                    } else {
+                        t.muted
+                    },
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
                 );
             }
@@ -1279,9 +1331,12 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
         ];
         tx(
             &format!(
-                "{}  {}",
+                "{}  {}{}",
                 now.format("%-m月%-d日"),
-                weekday[now.weekday().num_days_from_monday() as usize]
+                weekday[now.weekday().num_days_from_monday() as usize],
+                solar_terms::on_date(now.date_naive())
+                    .map(|term| format!(" · {term}"))
+                    .unwrap_or_default()
             ),
             20,
             13,
@@ -1327,24 +1382,7 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE,
             );
         }
-        let lunar = if v.lunar {
-            Local
-                .from_local_datetime(&v.calendar.selected.and_hms_opt(12, 0, 0).unwrap())
-                .single()
-                .and_then(lunar::describe)
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-        tx(
-            &format!("{}  {}", v.calendar.selected.format("%-m月%-d日"), lunar),
-            20,
-            446,
-            340,
-            20,
-            1,
-            t.muted,
-        );
+        tx(&selected_date_summary(v), 20, 446, 340, 20, 1, t.muted);
         let selected_holiday = v
             .days
             .iter()
@@ -1607,6 +1645,61 @@ pub(super) unsafe fn with_borrowed_view(hwnd: HWND, action: impl FnOnce()) {
 #[cfg(test)]
 mod visual_checks {
     use super::*;
+    #[test]
+    fn solar_terms_are_visible_without_hover_and_survive_month_navigation() {
+        super::super::visual_checks::on_isolated_desktop(|| unsafe {
+            let _ = RoInitialize(RO_INIT_SINGLETHREADED);
+            let parent = CreateWindowExW(
+                0,
+                wide("STATIC").as_ptr(),
+                wide("Solar term calendar").as_ptr(),
+                WS_POPUP,
+                0,
+                0,
+                WIDTH,
+                HEIGHT,
+                null_mut(),
+                null_mut(),
+                GetModuleHandleW(null()),
+                null(),
+            );
+            let hwnd = create(parent, rect(0, 0, WIDTH, HEIGHT), false, true);
+            bind_holidays(hwnd, Rc::new(RefCell::new(holidays::Catalog::default())));
+            let cell = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RefCell<View>);
+            let first_button = GetDlgItem(hwnd, FIRST as i32);
+            let date = NaiveDate::from_ymd_opt(2026, 11, 7).unwrap();
+            restore_selection(hwnd, calendar::Calendar::new(date));
+            let index = cell.borrow().days.iter().position(|d| *d == date).unwrap();
+            let button = GetDlgItem(hwnd, FIRST as i32 + index as i32);
+            assert_eq!(day_sublabel(&cell.borrow(), index), Some("立冬"));
+            assert!(window_text(button).contains("立冬"));
+            assert!(selected_date_summary(&cell.borrow()).ends_with("立冬"));
+            assert_ne!(day_sublabel(&cell.borrow(), index + 1), Some("立冬"));
+            let mut config = Config::default();
+            config.clock.show_lunar = false;
+            config.clock.show_almanac = false;
+            update(hwnd, &config, &None, false);
+            assert_eq!(day_sublabel(&cell.borrow(), index), Some("立冬"));
+            assert_eq!(day_sublabel(&cell.borrow(), index + 1), None);
+            SendMessageW(hwnd, WM_COMMAND, NEXT as usize, 0);
+            assert!(!window_text(button).contains("立冬"));
+            assert_eq!(GetDlgItem(hwnd, FIRST as i32), first_button);
+            let qingming = NaiveDate::from_ymd_opt(2026, 4, 5).unwrap();
+            restore_selection(hwnd, calendar::Calendar::new(qingming));
+            let i = cell
+                .borrow()
+                .days
+                .iter()
+                .position(|d| *d == qingming)
+                .unwrap();
+            assert_eq!(day_sublabel(&cell.borrow(), i), Some("清明"));
+            assert_eq!(
+                cell.borrow().holiday_days[i].as_ref().unwrap().badge(),
+                "休"
+            );
+            DestroyWindow(parent);
+        });
+    }
     #[test]
     fn almanac_toggle_and_month_navigation_cancel_pending_hover() {
         super::super::visual_checks::on_isolated_desktop(|| unsafe {
@@ -2255,6 +2348,11 @@ mod visual_checks {
                         .grid()
                         .iter()
                         .map(|d| lunar::for_date(*d).map(|l| l.short).unwrap_or_default())
+                        .collect(),
+                    solar_terms: calendar
+                        .grid()
+                        .iter()
+                        .map(|d| solar_terms::on_date(*d))
                         .collect(),
                     markers: calendar
                         .grid()

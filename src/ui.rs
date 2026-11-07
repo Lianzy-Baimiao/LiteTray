@@ -14,7 +14,7 @@ mod settings_open;
 mod visual_checks;
 mod weather_location;
 mod widgets;
-use chrono::{Local, TimeZone, Utc};
+use chrono::{Local, Utc};
 use litetray::{
     clock,
     config::{self, Appearance, ClickAction, Config, MonitorScope, Provider},
@@ -23,7 +23,7 @@ use litetray::{
         app_icon, clock_preview, credentials, diagnostics, displays, lunar, startup, taskbar_clock,
         tray_popup, wide,
     },
-    popup,
+    popup, solar_terms,
     update::{self, UpdateStatus},
     weather,
 };
@@ -46,7 +46,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.8";
+const UI_REVISION: &str = "开发版 5.8.1";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;

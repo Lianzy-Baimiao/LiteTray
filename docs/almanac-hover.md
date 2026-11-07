@@ -38,3 +38,11 @@
 14:16:22 在原目录 `dist/LiteTray-ui54-inline` 后台启动 5.8，宿主 PID 2568；此前没有运行中的 LiteTray。实际标题已确认，设置保持隐藏。Explorer PID 10960 未变化，正式配置文件哈希前后一致，未改变原有城市或日程。两个 DLL 保持原哈希，主副屏任务栏的 `error`、`geometry_error` 均为空，`tray_input.active=true`。
 
 完整包为 `dist/LiteTray-ui58-almanac`。EXE SHA256：`95E8FDD0ADCCA84F7D809F249C583918FA2ED7A33F6079A6EC5CAB96ECAEF734`。部署、发布包和现场证据：`local/ui58-deployment.json`、`local/hidden-startup-packages/5.8-almanac.json`、`local/ui58-package-check.txt`、`local/ui58-live-taskbar.json`。
+
+## 5.8.1 · 日期格节气
+
+二十四节气直接显示在日期格第二行，并使用主题强调色。当天标题与选中日期详情也显示节气。显示优先级为节气、假日名称、农历日期，休／班角标始终独立保留；关闭黄历悬停或农历标签不会关闭节气。按中国历日（UTC+8）计算，只显示交节当天，不把其后十多天都标成同一节气。
+
+![日期格节气](images/solar-terms-light.png)
+
+155 项测试及 Clippy 通过，覆盖立冬、小雪、冬至、小寒、跨年、24 节气完整性、清明假日角标、开关独立性及切月控件复用，已检查浅深色原生截图。证据：local/ui581-tests.txt、local/ui581-renders/。

@@ -13,6 +13,7 @@ pub mod platform;
 pub mod popup;
 pub mod recovery;
 pub mod routing;
+pub mod solar_terms;
 pub mod taskbar_service;
 pub mod update;
 pub mod weather;
