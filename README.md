@@ -1,6 +1,6 @@
 # LiteTray · 轻托盘
 
-Rust 原生 Windows 任务栏工具，目标是替代 Windhawk 的 Taskbar Clock Customization 和 Taskbar multi-tray，提供可配置时钟、日历天气、日程与计时提醒。私有开发仓库，当前版本为 **开发版 5.10**。
+Rust 原生 Windows 任务栏工具，目标是替代 Windhawk 的 Taskbar Clock Customization 和 Taskbar multi-tray，提供可配置时钟、日历天气、日程与计时提醒。私有开发仓库，当前版本为 **开发版 5.10.1**。
 
 ## 当前能做什么
 
@@ -19,6 +19,8 @@ Rust 原生 Windows 任务栏工具，目标是替代 Windhawk 的 Taskbar Clock
 **当前仍不能认定为两个 Windhawk 模块的完整替代品。** 独立时钟预览和离屏界面图都不证明任务栏替换成功。
 
 ## 开发版 5
+
+5.10.1 将原来无抗锯齿的 GDI 天气简笔画改为内嵌 SVG，按实际 DPI 计算边缘覆盖率，保留实色笔画。当前天气和小时预报共用十种天气图形，明暗主题及不同尺寸分别缓存。[天气图标来源与绘制](docs/weather-icons.md)。
 
 5.10 增加独立“天气格式”页，提供四种预设、16 类天气属性、光标位置插入及小数精度设置。`%weather%` 按自定义格式展开，温度、体感、湿度、风速风向、今日高低温、小时降水概率、气压等也可直接写入两行时钟和悬停提示。保存后应用到实际任务栏，来源缺少的字段显示 —。[天气格式说明](docs/weather-format.md)。
 
@@ -104,7 +106,7 @@ Rust 原生 Windows 任务栏工具，目标是替代 Windhawk 的 Taskbar Clock
 
 实验原位路径当前只接受 Windows 11 build 26300.9711 x64 已核对的 taskbar.dll 与 twinui.pcshell.dll 哈希。其他系统版本拒绝套用私有偏移。Windows 10、系统升级、多屏热插拔、混合 DPI、自动隐藏与原系统点击行为仍需兼容验证。DLL 为保证回调生命周期，会固定加载到 Explorer 结束；停止成功后释放本次时钟属性、点击及私有宿主引用。
 
-开发版标题包含“开发版 5.10”。从其他目录运行的旧 LiteTray 不会自动升级；新版检测到旧实例时会明确显示双方路径，避免静默打开旧界面。`LITETRAY_DATA_DIR` 可指定独立开发配置目录，凭据管理器仍按 Windows 用户共享。
+开发版标题包含“开发版 5.10.1”。从其他目录运行的旧 LiteTray 不会自动升级；新版检测到旧实例时会明确显示双方路径，避免静默打开旧界面。`LITETRAY_DATA_DIR` 可指定独立开发配置目录，凭据管理器仍按 Windows 用户共享。
 
 ## 天气来源
 
@@ -139,7 +141,7 @@ Rust 原生 Windows 任务栏工具，目标是替代 Windhawk 的 Taskbar Clock
 ```powershell
 .\tools\Build-Setup.ps1
 # 使用已构建的同版本完整包：
-.\tools\Build-Setup.ps1 -SkipBuild -BinaryPath .\dist\LiteTray-ui510-weather-format\LiteTray.exe
+.\tools\Build-Setup.ps1 -SkipBuild -BinaryPath .\dist\LiteTray-ui5101-weather-icons\LiteTray.exe
 ```
 
 输出为 `dist/Setup.exe`，旁边包含 SHA-256 和版本清单。中文安装向导默认按用户安装至 `%LOCALAPPDATA%\Programs\LiteTray`，创建开始菜单入口，可选桌面图标；无需管理员权限。升级正常退出旧宿主，使用按内容哈希区分的版本目录，已有开机启动项会指向新版。安装和卸载保留 `%LOCALAPPDATA%\LiteTray` 下的配置、日程及缓存；卸载不会删除用户凭据。安装程序不关闭 Windhawk，也不重启 Explorer。详见 [安装包说明](docs/installer.md)。

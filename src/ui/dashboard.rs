@@ -1663,59 +1663,8 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
     }
 }
 pub(super) unsafe fn weather_icon(dc: HDC, r: RECT, color: u32, description: &str) {
-    unsafe {
-        let size = r.right - r.left;
-        let sx = |n| r.left + size * n / 48;
-        let sy = |n| r.top + size * n / 48;
-        let pen = CreatePen(PS_SOLID, (size / 24).max(1), color);
-        let old_pen = SelectObject(dc, pen);
-        let old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-        if description.contains('晴') {
-            Ellipse(dc, sx(14), sy(8), sx(34), sy(28));
-            for (a, b, c, d) in [
-                (24, 1, 24, 5),
-                (24, 31, 24, 35),
-                (7, 18, 11, 18),
-                (37, 18, 41, 18),
-                (12, 6, 15, 9),
-                (33, 27, 36, 30),
-                (12, 30, 15, 27),
-                (33, 9, 36, 6),
-            ] {
-                MoveToEx(dc, sx(a), sy(b), null_mut());
-                LineTo(dc, sx(c), sy(d));
-            }
-        } else {
-            let points = [
-                (10, 30),
-                (1, 30),
-                (1, 18),
-                (12, 18),
-                (13, 3),
-                (34, 3),
-                (35, 18),
-                (48, 15),
-                (49, 30),
-                (38, 30),
-                (28, 30),
-                (19, 30),
-                (10, 30),
-            ]
-            .map(|(x, y)| POINT { x: sx(x), y: sy(y) });
-            PolyBezier(dc, points.as_ptr(), points.len() as u32);
-            if description.contains('雨') || description.contains('雪') {
-                for x in [14, 25, 36] {
-                    MoveToEx(dc, sx(x), sy(34), null_mut());
-                    LineTo(dc, sx(x - 3), sy(40));
-                }
-            }
-        }
-        SelectObject(dc, old_brush);
-        SelectObject(dc, old_pen);
-        DeleteObject(pen);
-    }
+    unsafe { super::weather_icons::draw(dc, r, color, description); }
 }
-
 #[cfg(test)]
 pub(super) unsafe fn with_borrowed_view(hwnd: HWND, action: impl FnOnce()) {
     unsafe {

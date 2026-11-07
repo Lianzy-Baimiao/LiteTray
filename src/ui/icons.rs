@@ -62,46 +62,7 @@ pub(super) unsafe fn draw(dc: HDC, icon: Icon, bounds: RECT, foreground: u32, ba
             null(),
         );
         let old_pen = SelectObject(mem, pen);
-        BeginPath(mem);
-        let path = icon
-            .source()
-            .split(" d=\"")
-            .nth(1)
-            .unwrap()
-            .split('"')
-            .next()
-            .unwrap();
-        let mut tokens = path.split_whitespace();
-        let coordinate = |tokens: &mut std::str::SplitWhitespace<'_>| {
-            (tokens.next().unwrap().parse::<f64>().unwrap() * scale).round() as i32
-        };
-        while let Some(command) = tokens.next() {
-            match command {
-                "M" => {
-                    let x = coordinate(&mut tokens);
-                    let y = coordinate(&mut tokens);
-                    MoveToEx(mem, x, y, null_mut());
-                }
-                "L" => {
-                    let x = coordinate(&mut tokens);
-                    let y = coordinate(&mut tokens);
-                    LineTo(mem, x, y);
-                }
-                "C" => {
-                    let points = std::array::from_fn::<_, 3, _>(|_| POINT {
-                        x: coordinate(&mut tokens),
-                        y: coordinate(&mut tokens),
-                    });
-                    PolyBezierTo(mem, points.as_ptr(), 3);
-                }
-                "Z" => {
-                    CloseFigure(mem);
-                }
-                _ => unreachable!("unsupported bundled SVG command"),
-            }
-        }
-        EndPath(mem);
-        StrokePath(mem);
+        stroke_svg_path(mem, icon.source(), scale);
         let saved = SaveDC(dc);
         SetStretchBltMode(dc, HALFTONE);
         SetBrushOrgEx(dc, 0, 0, null_mut());
@@ -124,6 +85,50 @@ pub(super) unsafe fn draw(dc: HDC, icon: Icon, bounds: RECT, foreground: u32, ba
         SelectObject(mem, old_bitmap);
         DeleteObject(bitmap);
         DeleteDC(mem);
+    }
+}
+/// Internal, trusted bundled assets only; uses the caller's geometric pen.
+pub(super) unsafe fn stroke_svg_path(dc: HDC, source: &str, scale: f64) {
+    unsafe {
+        BeginPath(dc);
+        let path = source
+            .split(" d=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap();
+        let mut tokens = path.split_whitespace();
+        let coordinate = |tokens: &mut std::str::SplitWhitespace<'_>| {
+            (tokens.next().unwrap().parse::<f64>().unwrap() * scale).round() as i32
+        };
+        while let Some(command) = tokens.next() {
+            match command {
+                "M" => {
+                    let x = coordinate(&mut tokens);
+                    let y = coordinate(&mut tokens);
+                    MoveToEx(dc, x, y, null_mut());
+                }
+                "L" => {
+                    let x = coordinate(&mut tokens);
+                    let y = coordinate(&mut tokens);
+                    LineTo(dc, x, y);
+                }
+                "C" => {
+                    let points = std::array::from_fn::<_, 3, _>(|_| POINT {
+                        x: coordinate(&mut tokens),
+                        y: coordinate(&mut tokens),
+                    });
+                    PolyBezierTo(dc, points.as_ptr(), 3);
+                }
+                "Z" => {
+                    CloseFigure(dc);
+                }
+                _ => unreachable!("unsupported bundled SVG command"),
+            }
+        }
+        EndPath(dc);
+        StrokePath(dc);
     }
 }
 pub(super) struct Tips {

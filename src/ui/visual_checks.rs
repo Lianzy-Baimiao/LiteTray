@@ -4,6 +4,79 @@ use super::*;
 use chrono::Days;
 
 #[test]
+fn weather_icons_have_smooth_edges_and_solid_strokes_at_actual_sizes() {
+    on_isolated_desktop(|| unsafe {
+        let mut failures = vec![];
+        for dpi in [96, 120, 144, 192] {
+            for logical in [22, 44] {
+                let size = (logical * dpi + 48) / 96;
+                let extent = size + 8;
+                let dc = CreateCompatibleDC(null_mut());
+                let mut info: BITMAPINFO = std::mem::zeroed();
+                info.bmiHeader = BITMAPINFOHEADER {
+                    biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: extent, biHeight: -extent, biPlanes: 1, biBitCount: 32,
+                    biCompression: BI_RGB, ..std::mem::zeroed()
+                };
+                let mut bits = null_mut();
+                let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+                assert!(!bitmap.is_null());
+                let old = SelectObject(dc, bitmap);
+                for (name, description) in [
+                    ("sun", "晴"), ("partly-cloudy", "晴间多云"), ("cloud", "阴"),
+                    ("rain", "小雨"), ("thunder", "雷阵雨"), ("snow", "雪"),
+                    ("sleet", "雨夹雪"), ("fog", "雾"), ("hail", "冰雹"), ("unknown", "未知"),
+                ] {
+                    for dark in [false, true] {
+                        let (bg, fg) = if dark { (30, 240) } else { (250, 30) };
+                        design::fill(dc, design::rect(0, 0, extent, extent), rgb(bg, bg, bg));
+                        dashboard::weather_icon(dc, design::rect(4, 4, size, size), rgb(fg, fg, fg), description);
+                        GdiFlush();
+                        let pixels = std::slice::from_raw_parts(bits.cast::<u8>(), (extent * extent * 4) as usize);
+                        let mut mixed = 0;
+                        let mut solid = 0;
+                        let mut spill = 0;
+                        for (i, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+                            assert!(pixel[0] == pixel[1] && pixel[1] == pixel[2], "colored antialias fringe");
+                            if pixel[0] != bg as u8 {
+                                let (x, y) = (i as i32 % extent, i as i32 / extent);
+                                if x < 4 || x >= size + 4 || y < 4 || y >= size + 4 { spill += 1; }
+                                if pixel[0].abs_diff(fg as u8) <= 2 { solid += 1; }
+                                else { mixed += 1; }
+                            }
+                        }
+                        if mixed < 8 || solid < 8 || spill != 0 {
+                            failures.push(format!("{description} {logical}px {dpi}dpi dark={dark}: antialiased={mixed}, solid={solid}, outside={spill}"));
+                        }
+                        if let Some(dir) = std::env::var_os("LITETRAY_WEATHER_ICON_RENDER_DIR") {
+                            let dir = std::path::PathBuf::from(dir);
+                            std::fs::create_dir_all(&dir).unwrap();
+                            let mut bytes = Vec::with_capacity(54 + pixels.len());
+                            bytes.extend_from_slice(b"BM");
+                            bytes.extend_from_slice(&(54u32 + pixels.len() as u32).to_le_bytes());
+                            bytes.extend_from_slice(&[0; 4]);
+                            bytes.extend_from_slice(&54u32.to_le_bytes());
+                            bytes.extend_from_slice(&40u32.to_le_bytes());
+                            bytes.extend_from_slice(&extent.to_le_bytes());
+                            bytes.extend_from_slice(&(-extent).to_le_bytes());
+                            bytes.extend_from_slice(&1u16.to_le_bytes());
+                            bytes.extend_from_slice(&32u16.to_le_bytes());
+                            bytes.extend_from_slice(&[0; 24]);
+                            bytes.extend_from_slice(pixels);
+                            std::fs::write(dir.join(format!("{name}-{logical}-{dpi}-{}.bmp", if dark { "dark" } else { "light" })), bytes).unwrap();
+                        }
+                    }
+                }
+                SelectObject(dc, old);
+                DeleteObject(bitmap);
+                DeleteDC(dc);
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    });
+}
+
+#[test]
 fn ui_text_has_neutral_antialiased_edges_at_monitor_scales() {
     on_isolated_desktop(|| unsafe {
         // Exercise the same font and drawing path as the calendar. Subpixel

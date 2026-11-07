@@ -15,6 +15,7 @@ mod typography;
 #[cfg(test)]
 mod visual_checks;
 mod weather_location;
+mod weather_icons;
 mod widgets;
 use chrono::{Local, Utc};
 use litetray::{
@@ -48,7 +49,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.10";
+const UI_REVISION: &str = "开发版 5.10.1";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
