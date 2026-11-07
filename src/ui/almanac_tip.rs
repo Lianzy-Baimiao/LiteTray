@@ -112,7 +112,7 @@ impl Card {
             let fonts = [
                 make_font(s(19), 600, &face),
                 make_font(s(14), 400, &face),
-                make_font(s(11), 400, &face),
+                make_font(s(12), 400, &face),
             ];
             let t = Theme::new(dark);
             let mut card = Self {
@@ -127,15 +127,19 @@ impl Card {
             let mut add = |label: Option<(&str, u32)>, value: String, font: usize, color: u32| {
                 let left = s(if label.is_some() { 54 } else { 18 });
                 let mut bounds = rect(left, y, s(342) - left, 0);
-                let old = SelectObject(dc, fonts[font]);
-                DrawTextW(
-                    dc,
-                    wide(&value).as_ptr(),
-                    -1,
-                    &mut bounds,
-                    DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX,
-                );
-                SelectObject(dc, old);
+                if let Some(height) = typography::measure(&value, fonts[font], bounds.right - left) {
+                    bounds.bottom = y + height;
+                } else {
+                    let old = SelectObject(dc, fonts[font]);
+                    DrawTextW(
+                        dc,
+                        wide(&value).as_ptr(),
+                        -1,
+                        &mut bounds,
+                        DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX,
+                    );
+                    SelectObject(dc, old);
+                }
                 bounds.bottom = bounds.bottom.max(y + s(20));
                 card.rows.push(Row {
                     value,
@@ -321,6 +325,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 };
                 let t = Theme::new(card.dark);
                 let bounds = rect(0, 0, card.width, card.height);
+                let buffer = design::PaintBuffer::new(dc, bounds);
+                let dc = buffer.as_ref().map_or(dc, |b| b.dc);
                 design::fill(dc, bounds, t.surface);
                 let border = CreateSolidBrush(t.border);
                 FrameRect(dc, &bounds, border);
@@ -335,6 +341,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                         DT_LEFT | DT_WORDBREAK | DT_NOPREFIX,
                     );
                 }
+                drop(buffer);
                 if msg == WM_PAINT {
                     EndPaint(hwnd, &ps);
                 }

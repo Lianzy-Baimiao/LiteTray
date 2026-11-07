@@ -4,6 +4,87 @@ use super::*;
 use chrono::Days;
 
 #[test]
+fn ui_text_has_neutral_antialiased_edges_at_monitor_scales() {
+    on_isolated_desktop(|| unsafe {
+        // Exercise the same font and drawing path as the calendar. Subpixel
+        // RGB fringes are especially visible on its small Chinese labels and
+        // do not remain neutral across different monitor pixel arrangements.
+        let dc = CreateCompatibleDC(null_mut());
+        let mut info: BITMAPINFO = std::mem::zeroed();
+        info.bmiHeader = BITMAPINFOHEADER {
+            biSize: size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: 720,
+            biHeight: -64,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB,
+            ..std::mem::zeroed()
+        };
+        let mut bits = null_mut();
+        let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+        assert!(!bitmap.is_null());
+        let old = SelectObject(dc, bitmap);
+        let face = design::font_face();
+        let mut failures = vec![];
+        let mut antialiased = 0;
+        for dpi in [96, 120, 144, 192] {
+            for size in [12, 14, 19] {
+                for dark in [false, true] {
+                    let (background, foreground) = if dark { (32, 255) } else { (255, 26) };
+                    let color = |v| rgb(v, v, v);
+                    let bounds = RECT {
+                        left: 0,
+                        top: 0,
+                        right: 720,
+                        bottom: 64,
+                    };
+                    design::fill(dc, bounds, color(background));
+                    let font = make_font((size * dpi + 48) / 96, 400, &face);
+                    design::text(
+                        dc,
+                        "星期六 · 立冬  农历九月廿九  天气 75%  12:34",
+                        bounds,
+                        font,
+                        color(foreground),
+                        DT_SINGLELINE | DT_VCENTER,
+                    );
+                    GdiFlush();
+                    let pixels = std::slice::from_raw_parts(bits.cast::<u8>(), 720 * 64 * 4);
+                    let mut fringe = 0;
+                    let mut ink = 0;
+                    for pixel in pixels.as_chunks::<4>().0 {
+                        if pixel[0] != pixel[1] || pixel[1] != pixel[2] {
+                            fringe += 1;
+                        }
+                        if pixel[0] != background as u8 {
+                            ink += 1;
+                            if pixel[0] != foreground as u8 {
+                                antialiased += 1;
+                            }
+                        }
+                    }
+                    if fringe != 0 || ink == 0 {
+                        failures.push(format!("{dpi} DPI, {size}px, dark={dark}: {fringe} colored edges, {ink} ink pixels"));
+                    }
+                    DeleteObject(font);
+                }
+            }
+        }
+        SelectObject(dc, old);
+        DeleteObject(bitmap);
+        DeleteDC(dc);
+        let mut smoothing = 0i32;
+        if SystemParametersInfoW(SPI_GETFONTSMOOTHING, 0, &mut smoothing as *mut _ as _, 0) != 0
+            && smoothing != 0
+        {
+            assert!(antialiased > 0, "text smoothing must not be disabled");
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        eprintln!("24 text samples: neutral edges at 100/125/150/200%, smoothing retained");
+    });
+}
+
+#[test]
 fn almanac_setting_survives_page_cache_and_saved_config() {
     on_isolated_desktop(|| unsafe {
         let path =

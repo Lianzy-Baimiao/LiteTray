@@ -356,6 +356,8 @@ unsafe extern "system" fn preview_proc(
             let t = design::Theme::new(data.dark);
             let mut r: RECT = std::mem::zeroed();
             GetClientRect(hwnd, &mut r);
+            let buffer = design::PaintBuffer::new(dc, r);
+            let dc = buffer.as_ref().map_or(dc, |b| b.dc);
             let s = |n| n * data.dpi as i32 / 96;
             design::fill(dc, r, t.surface);
             design::rounded(dc, r, t.bg, t.border, s(10));
@@ -410,6 +412,7 @@ unsafe extern "system" fn preview_proc(
                 color(&data.clock.bottom_color),
                 alignment(&data.clock.bottom_style) | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
             );
+            drop(buffer);
             if msg != WM_PRINTCLIENT {
                 EndPaint(hwnd, &ps);
             }

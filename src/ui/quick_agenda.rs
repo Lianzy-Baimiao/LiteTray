@@ -684,6 +684,8 @@ impl View {
     }
     unsafe fn draw(&self, item: &DRAWITEMSTRUCT) {
         unsafe {
+            let (_buffer, buffered) = design::PaintBuffer::item(item);
+            let item = &buffered;
             if item.CtlType == ODT_COMBOBOX {
                 design::draw_combo(item, self.dark);
                 return;
@@ -827,7 +829,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     w as HDC
                 };
                 if let Ok(v) = cell.try_borrow() {
-                    v.paint(dc);
+                    let mut bounds = RECT::default();
+                    GetClientRect(hwnd, &mut bounds);
+                    let buffer = design::PaintBuffer::new(dc, bounds);
+                    v.paint(buffer.as_ref().map_or(dc, |b| b.dc));
                 }
                 if msg == WM_PAINT {
                     EndPaint(hwnd, &ps);

@@ -209,3 +209,9 @@
 天气卡片增加逐小时／三日切换，每组四小时，箭头翻看未来 24 小时（含当前小时），显示天气、温度和降水概率。Open-Meteo 与 MET Norway 沿用既有请求提供小时数据，无需 Key；时间以 UTC 存储、本机时间显示，空概率为“—”，六小时数据不伪装成逐小时。切换和翻页复用日历与原生控件，内嵌日程编辑时隐藏天气操作按钮。
 
 160 项测试、Clippy 及两家来源的真实联网验证通过。已检查明暗界面及三个缩放比例，发布包三个设置入口首次打开成功、十页无外层滚动条。14:32:03 在原目录切换至 5.9（PID 15364），Explorer 10960 与适配 DLL 保持原样，用户配置哈希不变，主副屏检查无错误且输入代理 active=true。正式缓存已自动取得 58 个剩余小时和三日预报。源码与验收详见 docs/hourly-weather.md；完整包 dist/LiteTray-ui59-hourly，现场证据 local/ui59-deployment.json、ui59-live-weather.json、ui59-live-taskbar.json、ui59-live-windows.json。
+
+## 2026-11-07 · 开发版 5.9.1：DirectWrite 字体清晰度
+
+日历、天气、黄历及自绘控件使用 Windows DirectWrite 灰阶渲染，保留小字号笔画、消除强制 GDI ClearType 的彩色细边；辅助文字提高至 12 逻辑像素。增加 256 项布局缓存及 CPU 绘制缓冲，黄历测量与绘制使用相同排版。162 项测试和 Clippy 通过，三个设置入口首开成功，十页无外层滚动条，页签切换中位 7.7ms。
+
+20:29:20 已后台部署至原运行目录，PID 29760，完整包 dist/LiteTray-ui591-text。Explorer 11064 与用户配置、适配 DLL 哈希不变。本次登录的 Windhawk 已加载 taskbar-multi-tray，LiteTray 报托盘入口被改写并暂停接入（active=false）；该冲突未记为接管验收通过，未重启 Explorer 或关闭 Windhawk。详情与证据见 docs/text-rendering.md。

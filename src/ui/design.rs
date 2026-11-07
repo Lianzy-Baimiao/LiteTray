@@ -18,6 +18,7 @@ pub(super) struct Theme {
 thread_local! { static THEMES: Cell<[Option<Theme>; 2]> = const { Cell::new([None, None]) }; }
 pub(super) fn invalidate_theme() {
     THEMES.with(|cache| cache.set([None, None]));
+    typography::invalidate();
 }
 impl Theme {
     pub fn new(dark: bool) -> Self {
@@ -228,6 +229,8 @@ unsafe extern "system" fn combo_proc(
                 };
                 let mut r: RECT = std::mem::zeroed();
                 GetClientRect(hwnd, &mut r);
+                let buffer = PaintBuffer::new(dc, r);
+                let dc = buffer.as_ref().map_or(dc, |b| b.dc);
                 let dark = !GetPropW(hwnd, wide("LiteTray.ControlDark").as_ptr()).is_null();
                 let t = Theme::new(dark);
                 let dpi = GetDpiForWindow(hwnd).max(96) as i32;
@@ -269,6 +272,7 @@ unsafe extern "system" fn combo_proc(
                 LineTo(dc, x + s(8), y);
                 SelectObject(dc, old);
                 DeleteObject(pen);
+                drop(buffer);
                 if msg != WM_PRINTCLIENT {
                     EndPaint(hwnd, &ps);
                 }
@@ -458,8 +462,73 @@ unsafe fn smooth_rounded(dc: HDC, r: RECT, color: u32, border: u32, diameter: i3
         })
     }
 }
+/// Buffer a complete painted surface in CPU memory. DirectWrite can read its
+/// background without synchronously reading pixels back from a window DC.
+pub(super) struct PaintBuffer {
+    pub dc: HDC,
+    destination: HDC,
+    bounds: RECT,
+    bitmap: HBITMAP,
+    old: HGDIOBJ,
+}
+impl PaintBuffer {
+    pub unsafe fn new(destination: HDC, bounds: RECT) -> Option<Self> {
+        unsafe {
+            if GetObjectType(destination) == OBJ_MEMDC as u32 {
+                return None;
+            }
+            let width = bounds.right - bounds.left;
+            let height = bounds.bottom - bounds.top;
+            if width <= 0 || height <= 0 { return None; }
+            let dc = CreateCompatibleDC(destination);
+            if dc.is_null() { return None; }
+            let info = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: width,
+                    biHeight: -height,
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut bits = null_mut();
+            let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+            if bitmap.is_null() { DeleteDC(dc); return None; }
+            let old = SelectObject(dc, bitmap);
+            SetViewportOrgEx(dc, -bounds.left, -bounds.top, null_mut());
+            Some(Self { dc, destination, bounds, bitmap, old })
+        }
+    }
+    pub unsafe fn item(item: &DRAWITEMSTRUCT) -> (Option<Self>, DRAWITEMSTRUCT) {
+        unsafe {
+            let buffer = Self::new(item.hDC, item.rcItem);
+            let buffered = DRAWITEMSTRUCT {
+                hDC: buffer.as_ref().map_or(item.hDC, |b| b.dc),
+                ..*item
+            };
+            (buffer, buffered)
+        }
+    }
+}
+impl Drop for PaintBuffer {
+    fn drop(&mut self) {
+        unsafe {
+            let r = self.bounds;
+            BitBlt(self.destination, r.left, r.top, r.right - r.left, r.bottom - r.top,
+                self.dc, r.left, r.top, SRCCOPY);
+            SelectObject(self.dc, self.old);
+            DeleteObject(self.bitmap);
+            DeleteDC(self.dc);
+        }
+    }
+}
 pub(super) unsafe fn text(dc: HDC, value: &str, r: RECT, font: HFONT, color: u32, flags: u32) {
     unsafe {
+        if typography::draw(dc, value, r, font, color, flags) {
+            return;
+        }
         let old = SelectObject(dc, font);
         SetBkMode(dc, TRANSPARENT as i32);
         SetTextColor(dc, color);

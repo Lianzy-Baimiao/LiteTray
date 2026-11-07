@@ -587,7 +587,7 @@ unsafe fn layout(hwnd: HWND) {
             let face = design::font_face();
             v.fonts = [
                 make_font(s(14), 400, &face),
-                make_font(s(11), 400, &face),
+                make_font(s(12), 400, &face),
                 make_font(s(19), 600, &face),
                 make_font(s(44), 400, "Segoe UI"),
                 make_font(s(20), 400, "Segoe MDL2 Assets"),
@@ -1602,7 +1602,7 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
             text(
                 dc,
                 if !v.enabled {
-                    "在设置中启用天气，即可查看温度、小时与三日预报。"
+                    "在设置中启用天气，即可查看温度和天气预报。"
                 } else {
                     "可刷新重试，或在设置中切换天气来源。"
                 },
@@ -2563,7 +2563,7 @@ mod visual_checks {
                     },
                     fonts: [
                         make_font(s(14), 400, &design::font_face()),
-                        make_font(s(11), 400, &design::font_face()),
+                        make_font(s(12), 400, &design::font_face()),
                         make_font(s(19), 600, &design::font_face()),
                         make_font(s(44), 400, "Segoe UI"),
                         make_font(s(20), 400, "Segoe MDL2 Assets"),

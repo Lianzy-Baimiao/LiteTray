@@ -1564,6 +1564,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
 }
 unsafe fn draw_item(view: &View, item: &DRAWITEMSTRUCT) {
     unsafe {
+        let (_buffer, buffered) = design::PaintBuffer::item(item);
+        let item = &buffered;
         if item.CtlType == ODT_COMBOBOX {
             design::draw_combo(item, view.dark);
             return;

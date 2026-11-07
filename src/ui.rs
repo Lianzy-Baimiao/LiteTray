@@ -11,6 +11,7 @@ mod panel;
 mod quick_agenda;
 mod settings;
 mod settings_open;
+mod typography;
 #[cfg(test)]
 mod visual_checks;
 mod weather_location;
@@ -47,7 +48,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.9";
+const UI_REVISION: &str = "开发版 5.9.1";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -2685,7 +2686,12 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                 Some(p.edit as isize)
             }
             WM_DRAWITEM if l != 0 => {
-                let item = &*(l as *const DRAWITEMSTRUCT);
+                let original = &*(l as *const DRAWITEMSTRUCT);
+                if !matches!(original.CtlType, ODT_BUTTON | ODT_COMBOBOX | ODT_LISTBOX) {
+                    return None;
+                }
+                let (_buffer, buffered) = design::PaintBuffer::item(original);
+                let item = &buffered;
                 if item.CtlType == ODT_COMBOBOX {
                     design::draw_combo(item, p.dark);
                     return Some(1);
@@ -2805,7 +2811,9 @@ unsafe fn make_font(height: i32, weight: i32, family: &str) -> HFONT {
             DEFAULT_CHARSET as u32,
             OUT_DEFAULT_PRECIS as u32,
             CLIP_DEFAULT_PRECIS as u32,
-            CLEARTYPE_QUALITY as u32,
+            // Editable native controls follow Windows' smoothing preference.
+            // Custom surfaces use DirectWrite through design::text.
+            DEFAULT_QUALITY as u32,
             DEFAULT_PITCH as u32,
             wide(family).as_ptr(),
         )
