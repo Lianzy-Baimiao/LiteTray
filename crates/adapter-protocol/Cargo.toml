@@ -8,8 +8,8 @@ publish = false
 
 [features]
 default = []
-# Adds the 26200.8037 and LTSC 26100.1742 static candidates for isolated VMs only.
-# Default builds exclude all profiles under profiles/lab.
+# Reserved for candidates awaiting isolated VM validation; currently adds none.
+# All five reviewed profiles are included in the default registry.
 compatibility-lab = []
 
 [dependencies]

@@ -8,10 +8,8 @@ const PROFILE_BYTES: &[&[u8]] = &[
     include_bytes!("../profiles/windows11-26300.9711-x64.json"),
     include_bytes!("../profiles/windows11-26300.9818-x64.json"),
     include_bytes!("../profiles/windows11-26200.8457-x64.json"),
-    #[cfg(feature = "compatibility-lab")]
-    include_bytes!("../profiles/lab/windows11-26200.8037-x64.json"),
-    #[cfg(feature = "compatibility-lab")]
-    include_bytes!("../profiles/lab/windows11-26100.1742-x64.json"),
+    include_bytes!("../profiles/windows11-26200.8037-x64.json"),
+    include_bytes!("../profiles/windows11-26100.1742-x64.json"),
 ];
 const MAX_PROFILE: usize = 64 * 1024;
 
@@ -227,8 +225,8 @@ fn decode_profiles(sources: &[&[u8]]) -> Result<Vec<Profile>, String> {
 
 /// Validated, embedded evidence only. Registry order is not a compatibility
 /// preference: callers must select an exact module identity, never a default.
-/// `compatibility-lab` adds static candidates pending isolated VM validation;
-/// default builds include only the independently reviewed production profiles.
+/// `compatibility-lab` is reserved for candidates pending isolated validation;
+/// it currently adds none. Default builds include five reviewed profiles.
 pub fn profiles() -> Result<&'static [Profile], String> {
     static PROFILES: OnceLock<Result<Vec<Profile>, String>> = OnceLock::new();
     PROFILES
@@ -295,9 +293,7 @@ mod tests {
             "windows11-26300.9711-x64",
             "windows11-26300.9818-x64",
             "windows11-26200.8457-x64",
-            #[cfg(feature = "compatibility-lab")]
             "windows11-26200.8037-x64",
-            #[cfg(feature = "compatibility-lab")]
             "windows11-26100.1742-x64",
         ];
         assert_eq!(profiles.len(), expected_ids.len());
@@ -316,15 +312,15 @@ mod tests {
         }
     }
     #[test]
-    fn lab_candidates_are_feature_gated_and_keep_all_module_identities_separate() {
+    fn promoted_vm_profiles_keep_all_module_identities_separate() {
         let candidates = [
             (
                 "windows11-26200.8037-x64",
-                &include_bytes!("../profiles/lab/windows11-26200.8037-x64.json")[..],
+                &include_bytes!("../profiles/windows11-26200.8037-x64.json")[..],
             ),
             (
                 "windows11-26100.1742-x64",
-                &include_bytes!("../profiles/lab/windows11-26100.1742-x64.json")[..],
+                &include_bytes!("../profiles/windows11-26100.1742-x64.json")[..],
             ),
         ]
         .map(|(id, bytes)| {
@@ -344,39 +340,22 @@ mod tests {
                 "windows11-26300.9711-x64",
                 "windows11-26300.9818-x64",
                 "windows11-26200.8457-x64",
-                #[cfg(feature = "compatibility-lab")]
                 "windows11-26200.8037-x64",
-                #[cfg(feature = "compatibility-lab")]
                 "windows11-26100.1742-x64",
             ]
         );
-        // Include both lab fixtures in the mixing checks even in default tests,
-        // where neither candidate is present in the actual registry.
-        let mut comparisons = registry.to_vec();
         for candidate in &candidates {
-            if !comparisons.iter().any(|profile| profile.id == candidate.id) {
-                comparisons.push(candidate.clone());
-            }
-        }
-        for candidate in &candidates {
-            if cfg!(feature = "compatibility-lab") {
-                assert_eq!(
-                    profile_for_taskbar(&candidate.taskbar.identity).unwrap().id,
-                    candidate.id
-                );
-            } else {
-                assert!(profile_for_taskbar(&candidate.taskbar.identity).is_err());
-            }
+            assert_eq!(
+                profile_for_taskbar(&candidate.taskbar.identity).unwrap().id,
+                candidate.id
+            );
             for changed in changed_identities(&candidate.taskbar.identity) {
                 assert!(profile_for_taskbar(&changed).is_err());
             }
             for module in candidate.modules() {
                 assert_module_identity_requirements(module);
             }
-            for other in comparisons
-                .iter()
-                .filter(|profile| profile.id != candidate.id)
-            {
+            for other in registry.iter().filter(|profile| profile.id != candidate.id) {
                 let mut mixed_host = candidate.clone();
                 mixed_host.host = other.host.clone();
                 assert!(mixed_host.validate().is_err());

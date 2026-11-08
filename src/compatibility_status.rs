@@ -130,6 +130,7 @@ enum RecordedProfile {
     Previous9711,
     Sandbox9818,
     VirtualMachine8457,
+    VirtualMachine8037,
     VirtualMachineLtsc1742,
 }
 
@@ -162,6 +163,14 @@ fn recorded_profile(profile: &Profile) -> Option<RecordedProfile> {
                 "a920c97ace9f336855ebfea221101eb03739398c8b75ac6dcf28d82ed645aed5",
             ],
         ) => Some(RecordedProfile::VirtualMachine8457),
+        (
+            "windows11-26200.8037-x64",
+            [
+                "9312c39df6be503f54a3e9bee1a7b32a249375daba0e0a8d5941f941d6e09481",
+                "d56742e631ab34b07b0b908eddbdfd1811e8f0ad760641ba57125922f1ce1dc0",
+                "662d4cbfcbe2547ee2c66f68245acaaceb10c4280e6568b35c95aff295e20030",
+            ],
+        ) => Some(RecordedProfile::VirtualMachine8037),
         (
             "windows11-26100.1742-x64",
             [
@@ -267,6 +276,42 @@ fn evidence(profile: &Profile) -> Vec<ValidationEvidence> {
                         ValidationScenario::ClockUpdateRestore => {
                             evidence.scope = "独立 Windows 11 Pro 25H2 26200.8457 单屏虚拟机，普通权限测试进程";
                             "三次真实文字更新及宽度 240→320 通过；停止后原文字、宽度 55 和可见性恢复，Explorer 身份不变。未独立验收字体、颜色或绑定。"
+                        }
+                        ValidationScenario::TrayPrepareStop => {
+                            "Taskbar.View.dll 的三个坐标入口与 5 类必需托盘区域准备、停止通过；未激活复制。"
+                        }
+                        ValidationScenario::TrayMirroring => {
+                            "本轮虚拟机只有主屏，未激活副屏托盘模型复制；准备通过不代表复制及交互验收。"
+                        }
+                        ValidationScenario::PointerInteractions => {
+                            "本轮验收未注入鼠标或键盘；日历点击、滚轮、中键、真实悬停和菜单定位待验收。"
+                        }
+                        ValidationScenario::MultiMonitor => {
+                            "本轮独立虚拟机只有一块显示器，主副屏完整矩阵未执行。"
+                        }
+                        ValidationScenario::MixedDpi => {
+                            "本轮未执行混合 DPI、显示器热插拔和休眠恢复矩阵。"
+                        }
+                    };
+                    if matches!(
+                        scenario,
+                        ValidationScenario::ModuleLayout
+                            | ValidationScenario::ClockUpdateRestore
+                            | ValidationScenario::TrayPrepareStop
+                    ) {
+                        evidence.status = ValidationStatus::Tested;
+                        evidence.recorded_on = Some("2026-11-09");
+                    }
+                }
+                Some(RecordedProfile::VirtualMachine8037) => {
+                    evidence.reference = Some("docs/compatibility-next-versions.md");
+                    evidence.detail = match scenario {
+                        ValidationScenario::ModuleLayout => {
+                            "25H2 8037 三模块/PDB、字段、虚表及 ABI 已核验；独立客体磁盘与加载身份匹配，XAML 164 项和私有宿主 6 项通过。"
+                        }
+                        ValidationScenario::ClockUpdateRestore => {
+                            evidence.scope = "独立 Windows 11 Pro 25H2 26200.8037 单屏虚拟机，普通权限测试进程";
+                            "三次真实文字更新及宽度 240→320 通过；停止后恢复原文字、尺寸和可见性，Explorer 身份不变。外层等待超时后，原测试进程完整结果经独立复核通过；未独立验收屏幕绘制、原生刷新、字体、颜色或绑定。"
                         }
                         ValidationScenario::TrayPrepareStop => {
                             "Taskbar.View.dll 的三个坐标入口与 5 类必需托盘区域准备、停止通过；未激活复制。"

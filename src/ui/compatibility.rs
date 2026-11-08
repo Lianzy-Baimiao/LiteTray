@@ -706,6 +706,7 @@ mod tests {
                     profile.profile_id.as_str(),
                     "windows11-26300.9818-x64"
                         | "windows11-26200.8457-x64"
+                        | "windows11-26200.8037-x64"
                         | "windows11-26100.1742-x64"
                 )
             })

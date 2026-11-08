@@ -81,6 +81,8 @@ $documents += @('crates/adapter-protocol/profiles/README.md','crates/adapter-pro
 $documents += @('crates/adapter-protocol/profiles/windows11-26300.9818-x64.json','docs/compatibility-9818.md')
 $documents += @('docs/compatibility-8457.md')
 $documents += @('crates/adapter-protocol/profiles/windows11-26200.8457-x64.json')
+$documents += @('crates/adapter-protocol/profiles/windows11-26200.8037-x64.json','crates/adapter-protocol/profiles/windows11-26100.1742-x64.json')
+$documents += @('docs/compatibility-next-versions.md','docs/windows11-next-versions-research.md')
 $documents += @('docs/windows11-commonality.md','docs/images/compatibility-5.14.0-zh-light.png','docs/images/compatibility-5.14.0-en-light.png')
 foreach($name in $documents){
     $destination=Join-Path $output $name

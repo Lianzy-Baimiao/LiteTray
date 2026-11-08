@@ -16,7 +16,7 @@ layout and validation evidence is recorded in
 whose tray code resides in Core/Taskbar.View.dll. Matching symbols and instructions
 establish the shared source fields and tray ABI; an independently installed VM
 passed real primary-clock text/width updates, restoration and tray preparation/stop.
-The [three-set comparison](../../../docs/windows11-commonality.md) and
+The [module-set comparison](../../../docs/windows11-commonality.md) and
 [25H2 runtime evidence](../../../docs/compatibility-8457.md) record the exact scope,
 failed attempts and tested binary hashes. Input, tray replication, multiple-monitor
 and mixed-DPI acceptance remain pending.
@@ -39,18 +39,32 @@ implementation of any new ABI, and explicit validation results. Do not widen
 an OS build range or reuse offsets merely because version labels look similar.
 The profile contains metadata and minimal code prefixes, not system DLLs/PDBs.
 
-The default registry contains the three reviewed profiles above. The explicit
-`compatibility-lab` Cargo feature additionally includes
-`lab/windows11-26200.8037-x64.json` and `lab/windows11-26100.1742-x64.json`, for a
-five-profile lab registry. These exact module sets come from a Windows 11 Pro
-25H2 8037 image and the official Enterprise LTSC 2024 Evaluation 1742 image.
-The LTSC candidate passed isolated single-monitor lab acceptance for exact
-modules/layout, clock updates/restoration and tray preparation/Stop. Four other
-scenarios remain unvalidated. Its first inspection response failed and a later
-run of the same package passed; the initial cause remains unresolved. The 8037
-candidate still awaits live acceptance, and default builds exclude both.
-Their provenance, changed fields, analyzer rejection tests and runtime
-evidence are recorded in
+The 5.14.1 default registry contains five profiles, adding
+`windows11-26200.8037-x64.json` and `windows11-26100.1742-x64.json` after both
+passed isolated single-monitor lab acceptance for exact modules/layout, clock
+updates/restoration and tray preparation/Stop. These exact module sets come
+from a Windows 11 Pro 25H2 8037 image and the official Enterprise LTSC 2024
+Evaluation 1742 image. Default and explicit `compatibility-lab` builds now
+contain the same five profiles; the feature remains reserved for future
+candidates. The earlier default-three/lab-five artifacts remain historical
+records. The same 5.14.1 default binaries passed the complete six-check scoped
+reruns in both awakened guests, including execution-state restoration and
+normal parent-observed completion. The LTSC rerun used a verified Medium
+parent and hidden Medium child on the same user/session/desktop after reboot;
+the test package and application command deadlines were unchanged.
+
+Four other scenarios remain unvalidated. LTSC's first inspection response
+failed and a later run of the same package passed; the initial cause remains
+unresolved. The 8037 parent wait timed out before its worker finished; the
+original worker's late complete results passed independent review, while the
+parent timeout remains recorded. Screen painting and independent native
+refresh were not validated by either lab run. The default LTSC rerun adds
+five independently inspected screenshots of all three written texts, native
+restoration and a later advancing clock; these sampled images do not establish
+continuous native refresh or callback counts. Its evaluation-license scheduled
+shutdown and first default-launch precondition failure are recorded separately
+from the earlier unresolved taskbar response failure. Their provenance,
+changed fields, analyzer rejection tests and runtime evidence are recorded in
 [the next-version evidence](../../../docs/compatibility-next-versions.md).
 
 The 8457 validation record remains bound to its own tested lab and default
