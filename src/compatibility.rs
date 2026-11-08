@@ -8,6 +8,13 @@ use litetray_adapter_protocol::{
 use serde::Serialize;
 use std::{fs::File, io::Read, path::Path};
 
+#[path = "compatibility_status.rs"]
+mod status;
+pub use status::{
+    DetectionSummary, ImplementationFamily, SupportProfile, ValidationEvidence, ValidationScenario,
+    ValidationStatus, support_catalog,
+};
+
 const MAX_IMAGE: u64 = 128 * 1024 * 1024;
 const MODULE_PATHS: [&str; 3] = [
     "System32/taskbar.dll",

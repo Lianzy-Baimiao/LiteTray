@@ -7,6 +7,8 @@ use std::sync::OnceLock;
 const PROFILE_BYTES: &[&[u8]] = &[
     include_bytes!("../profiles/windows11-26300.9711-x64.json"),
     include_bytes!("../profiles/windows11-26300.9818-x64.json"),
+    #[cfg(feature = "compatibility-lab")]
+    include_bytes!("../profiles/lab/windows11-26200.8457-x64.json"),
 ];
 const MAX_PROFILE: usize = 64 * 1024;
 
@@ -148,10 +150,21 @@ impl Profile {
             module.validate()?;
         }
         if self.taskbar.name != "taskbar.dll"
+            || self.taskbar.relative_path != "System32/taskbar.dll"
             || self.shell.name != "twinui.pcshell.dll"
-            || self.tray.name != "SystemTray.dll"
+            || self.shell.relative_path != "System32/twinui.pcshell.dll"
+            || !matches!(
+                (self.tray.name.as_str(), self.tray.relative_path.as_str()),
+                (
+                    "SystemTray.dll",
+                    "SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy/SystemTray.dll"
+                ) | (
+                    "Taskbar.View.dll",
+                    "SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy/Taskbar.View.dll"
+                )
+            )
         {
-            return Err("当前解析方案不支持该模块角色".into());
+            return Err("当前解析方案不支持该模块角色或系统路径".into());
         }
         self.host.validate()?;
         if self.host.module != self.taskbar.identity {
@@ -211,6 +224,7 @@ fn decode_profiles(sources: &[&[u8]]) -> Result<Vec<Profile>, String> {
 
 /// Validated, embedded evidence only. Registry order is not a compatibility
 /// preference: callers must select an exact module identity, never a default.
+/// Lab candidates enter only through the explicit `compatibility-lab` feature.
 pub fn profiles() -> Result<&'static [Profile], String> {
     static PROFILES: OnceLock<Result<Vec<Profile>, String>> = OnceLock::new();
     PROFILES
@@ -270,6 +284,115 @@ mod tests {
                 profile_for_taskbar(&profile.taskbar.identity).unwrap().id,
                 id
             );
+        }
+    }
+    #[test]
+    fn lab_registry_requires_opt_in_and_keeps_all_module_identities_separate() {
+        // This fixture is compiled into unit tests, never the default registry.
+        let lab = Profile::decode(include_bytes!(
+            "../profiles/lab/windows11-26200.8457-x64.json"
+        ))
+        .unwrap();
+        assert_eq!(lab.id, "windows11-26200.8457-x64");
+        assert_eq!(lab.tray.name, "Taskbar.View.dll");
+        let registry = profiles().unwrap();
+        let ids = registry
+            .iter()
+            .map(|profile| profile.id.as_str())
+            .collect::<Vec<_>>();
+        if cfg!(feature = "compatibility-lab") {
+            assert_eq!(
+                ids,
+                [
+                    "windows11-26300.9711-x64",
+                    "windows11-26300.9818-x64",
+                    "windows11-26200.8457-x64"
+                ]
+            );
+            assert_eq!(
+                profile_for_taskbar(&lab.taskbar.identity).unwrap().id,
+                lab.id
+            );
+            for changed in changed_identities(&lab.taskbar.identity) {
+                assert!(profile_for_taskbar(&changed).is_err());
+            }
+        } else {
+            assert_eq!(
+                ids,
+                ["windows11-26300.9711-x64", "windows11-26300.9818-x64"]
+            );
+            assert!(profile_for_taskbar(&lab.taskbar.identity).is_err());
+        }
+        for stable in registry.iter().filter(|profile| profile.id != lab.id) {
+            for (stable_module, lab_module) in stable.modules().into_iter().zip(lab.modules()) {
+                assert!(!stable_module.matches(&lab_module.sha256, &lab_module.identity));
+                assert!(!lab_module.matches(&stable_module.sha256, &stable_module.identity));
+                assert!(
+                    !stable_module
+                        .matches_loaded(&serde_json::to_value(&lab_module.identity).unwrap())
+                );
+                assert!(
+                    !lab_module
+                        .matches_loaded(&serde_json::to_value(&stable_module.identity).unwrap())
+                );
+            }
+        }
+    }
+    #[test]
+    fn tray_roles_accept_only_explicit_core_name_path_pairs() {
+        let source = profiles().unwrap()[0].clone();
+        for (name, path, accepted) in [
+            (
+                "SystemTray.dll",
+                "SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy/SystemTray.dll",
+                true,
+            ),
+            (
+                "Taskbar.View.dll",
+                "SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy/Taskbar.View.dll",
+                true,
+            ),
+            (
+                "SystemTray.dll",
+                "SystemApps/MicrosoftWindows.Client.CBS_cw5n1h2txyewy/SystemTray.dll",
+                false,
+            ),
+            (
+                "Taskbar.View.dll",
+                "SystemApps/MicrosoftWindows.Client.CBS_cw5n1h2txyewy/Taskbar.View.dll",
+                false,
+            ),
+            (
+                "ExplorerExtensions.dll",
+                "SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy/ExplorerExtensions.dll",
+                false,
+            ),
+            ("Taskbar.View.dll", "System32/Taskbar.View.dll", false),
+            (
+                "SystemTray.dll",
+                "SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy/Taskbar.View.dll",
+                false,
+            ),
+            (
+                "Taskbar.View.dll",
+                "SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy/SystemTray.dll",
+                false,
+            ),
+        ] {
+            let mut profile = source.clone();
+            profile.tray.name = name.into();
+            profile.tray.relative_path = path.into();
+            assert_eq!(profile.validate().is_ok(), accepted, "{name}: {path}");
+        }
+        for taskbar in [true, false] {
+            let mut wrong = source.clone();
+            let module = if taskbar {
+                &mut wrong.taskbar
+            } else {
+                &mut wrong.shell
+            };
+            module.relative_path = format!("SystemApps/{}", module.name);
+            assert!(wrong.validate().is_err());
         }
     }
     #[test]

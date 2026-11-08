@@ -4,6 +4,7 @@
 
 - `taskbar-5.12.0.png`：当前运行的 5.12.0 在副屏上的实际任务栏，按原始像素截取右侧 900 × 40 区域。时钟内容为用户配置的中文模板。
 - `calendar-5.12.0-{zh,en}-{light,dark}.png`：从当前版本的原生日历窗口渲染，使用 `render_settings_artifacts` 内的离线示例天气与日程，不读取用户的日程或天气缓存。中英文及明暗主题分别生成，图像未经缩放。
+- `compatibility-5.14.0-{zh,en}-light.png`：5.14.0 新增兼容性页的原生窗口预览，在私有桌面渲染，系统版本与检测时间使用固定示例，页面中的模块目录来自内置资料。不是宿主实时检测或新版本实测证明；分别来自两个语言输出的 `settings-light-11.png`。
 
 The taskbar is a live capture of version 5.12.0. Calendar previews are rendered from the current native window and controls, with synthetic weather and schedules. They do not contain the user's agenda or weather cache. Each language and theme is rendered separately at its original resolution.
 

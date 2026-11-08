@@ -344,19 +344,19 @@ impl App {
         }
     }
 
-    unsafe fn section(&mut self, text: &str, x: i32, y: i32, width: i32) {
+    pub(super) unsafe fn section(&mut self, text: &str, x: i32, y: i32, width: i32) {
         unsafe {
             let hwnd = self.label(text, x, y, width, 26);
             widgets::heading(hwnd, self.dpi);
         }
     }
-    unsafe fn caption(&mut self, text: &str, x: i32, y: i32, width: i32, height: i32) {
+    pub(super) unsafe fn caption(&mut self, text: &str, x: i32, y: i32, width: i32, height: i32) {
         unsafe {
             let hwnd = self.label(text, x, y, width, height);
             SetPropW(hwnd, wide("LiteTray.Muted").as_ptr(), 1usize as HANDLE);
         }
     }
-    unsafe fn divider(&mut self, x: i32, y: i32, width: i32) {
+    pub(super) unsafe fn divider(&mut self, x: i32, y: i32, width: i32) {
         unsafe {
             let hwnd = self.label("", x, y, width, 1);
             widgets::divider(hwnd);

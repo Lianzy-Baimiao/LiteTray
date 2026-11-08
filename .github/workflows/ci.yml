@@ -19,7 +19,12 @@ jobs:
       # Native UI tests launch isolated desktop processes. Serial execution
       # avoids desktop/font-service contention skewing the latency budget.
       - run: cargo test --workspace --all-targets --locked -- --test-threads=1
+      - name: Check the opt-in candidate registry separately
+        run: cargo test -p litetray-adapter-protocol --locked --features compatibility-lab -- --test-threads=1
+      - name: Check background compatibility detection and snapshot export
+        run: cargo test --bin LiteTray compatibility_check_worker_and_export_preserve_the_real_disk_snapshot -- --ignored --test-threads=1
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # Release artifacts always use the default registry, never lab profiles.
       - run: cargo build --workspace --release --locked
       - name: Check exception callback lifetime in an isolated process
         shell: pwsh
@@ -37,3 +42,12 @@ jobs:
             target/release/LiteTray.exe
             target/release/litetray_taskbar_adapter.dll
             target/release/litetray_popup_hook.dll
+  candidate-tool:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r tools/compatibility/requirements.txt
+      - run: python -m unittest discover -s tools/compatibility -p test_evidence.py -v

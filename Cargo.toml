@@ -13,6 +13,11 @@ members = ["crates/taskbar-adapter", "crates/adapter-protocol", "crates/popup-ho
 exclude = ["tools/xaml-bindgen"]
 resolver = "3"
 
+[features]
+default = []
+# Disposable-VM candidates only; never enable this for release packages.
+compatibility-lab = ["litetray-adapter-protocol/compatibility-lab"]
+
 [dependencies]
 chrono = { version = "0.4.45", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }

@@ -47,6 +47,13 @@ pub(super) unsafe fn finish(hwnd: HWND) {
         }
         let mut client: RECT = std::mem::zeroed();
         GetClientRect(hwnd, &mut client);
+        let mut position = SCROLLINFO {
+            cbSize: size_of::<SCROLLINFO>() as u32,
+            fMask: SIF_POS,
+            ..std::mem::zeroed()
+        };
+        GetScrollInfo(hwnd, SB_VERT, &mut position);
+        let old_position = position.nPos;
         let mut bottom = 0;
         let mut child = GetWindow(hwnd, GW_CHILD);
         while !child.is_null() {
@@ -54,7 +61,9 @@ pub(super) unsafe fn finish(hwnd: HWND) {
             GetWindowRect(child, &mut r);
             MapWindowPoints(null_mut(), hwnd, &mut r as *mut RECT as *mut POINT, 2);
             if GetWindowLongW(child, GWL_STYLE) as u32 & WS_VISIBLE != 0 {
-                bottom = bottom.max(r.bottom);
+                // Child rectangles have already moved with ScrollWindowEx.
+                // Remeasuring expanded/collapsed content needs document space.
+                bottom = bottom.max(r.bottom + old_position);
             }
             child = GetWindow(child, GW_HWNDNEXT);
         }
@@ -67,6 +76,19 @@ pub(super) unsafe fn finish(hwnd: HWND) {
             ..std::mem::zeroed()
         };
         SetScrollInfo(hwnd, SB_VERT, &info, 1);
+        GetScrollInfo(hwnd, SB_VERT, &mut position);
+        if old_position != position.nPos {
+            ScrollWindowEx(
+                hwnd,
+                0,
+                old_position - position.nPos,
+                null(),
+                null(),
+                null_mut(),
+                null_mut(),
+                SW_SCROLLCHILDREN | SW_INVALIDATE | SW_ERASE,
+            );
+        }
         ShowScrollBar(hwnd, SB_VERT, i32::from(info.nMax >= client.bottom));
     }
 }

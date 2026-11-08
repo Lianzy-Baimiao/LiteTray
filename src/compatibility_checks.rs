@@ -250,3 +250,108 @@ fn correct_module_hash_does_not_skip_layout_verification() {
     assert!(result.host_layout(true, true).is_err());
     assert!(result.host_layout(false, false).is_err());
 }
+
+#[test]
+fn support_catalog_keeps_recorded_scope_separate_from_built_in_support() {
+    let catalog = support_catalog().unwrap();
+    let profiles = compatibility::profiles().unwrap();
+    assert_eq!(catalog.len(), profiles.len());
+    for profile in profiles {
+        let entry = catalog
+            .iter()
+            .find(|entry| entry.profile_id == profile.id)
+            .unwrap();
+        assert_eq!(entry.architecture, "x64");
+        assert_eq!(
+            serde_json::to_value(&entry.modules).unwrap(),
+            serde_json::to_value(profile.modules()).unwrap()
+        );
+        assert_eq!(entry.evidence.len(), 7);
+        assert!(entry.evidence.iter().all(|evidence| {
+            !evidence.scope.is_empty()
+                && !evidence.detail.is_empty()
+                && (evidence.status == ValidationStatus::NotRun
+                    || (evidence.recorded_on.is_some() && evidence.reference.is_some()))
+        }));
+    }
+    let historical = catalog
+        .iter()
+        .find(|entry| entry.profile_id == "windows11-26300.9711-x64")
+        .unwrap();
+    assert!(
+        historical
+            .evidence
+            .iter()
+            .all(|evidence| evidence.status != ValidationStatus::Tested)
+    );
+    let sandbox = catalog
+        .iter()
+        .find(|entry| entry.profile_id == "windows11-26300.9818-x64")
+        .unwrap();
+    for scenario in [
+        ValidationScenario::TrayMirroring,
+        ValidationScenario::PointerInteractions,
+        ValidationScenario::MultiMonitor,
+        ValidationScenario::MixedDpi,
+    ] {
+        let evidence = sandbox
+            .evidence
+            .iter()
+            .find(|evidence| evidence.scenario == scenario)
+            .unwrap();
+        assert_eq!(evidence.status, ValidationStatus::NotRun);
+        assert!(evidence.recorded_on.is_none());
+    }
+    let clock = sandbox
+        .evidence
+        .iter()
+        .find(|evidence| evidence.scenario == ValidationScenario::ClockUpdateRestore)
+        .unwrap();
+    assert_eq!(clock.status, ValidationStatus::Tested);
+    let encoded = serde_json::to_value(sandbox).unwrap();
+    assert!(
+        encoded["evidence"].as_array().unwrap().iter().any(|item| {
+            item["scenario"] == "pointer_interactions" && item["status"] == "not_run"
+        })
+    );
+}
+
+#[test]
+fn detection_summary_preserves_disk_limits_and_feature_independence() {
+    let old = Fixture::new(27);
+    let new = Fixture::new(28);
+    let root = SystemRoot::new([&old.images[0], &old.images[1], &new.images[2]]);
+    let inventory = collect_selected(&root.0, Some(26300), |_| Ok(&old.profile));
+    let report = &inventory.report;
+    let before = serde_json::to_value(report).unwrap();
+    let summary = report.summary();
+    assert_eq!(summary.profile_id, Some(old.profile.id.as_str()));
+    assert_eq!(summary.matched_module_count, 2);
+    assert_eq!(summary.required_module_count, 3);
+    assert!(!summary.all_profile_images_matched);
+    assert!(!summary.loaded_modules_checked && !summary.runtime_topology_checked);
+    assert_eq!(summary.scope, "disk_only");
+    assert_eq!(summary.os_build, Some(26300));
+    assert_eq!(
+        summary.features[0].status,
+        FeatureStatus::DiskMatchedLiveCheckRequired
+    );
+    assert_eq!(
+        summary.features[2].status,
+        FeatureStatus::UnsupportedModules
+    );
+    assert_eq!(
+        serde_json::to_value(summary).unwrap()["features"],
+        before["features"]
+    );
+    assert_eq!(serde_json::to_value(report).unwrap(), before);
+    assert!(inventory.host_layout(true, false).is_ok());
+    assert!(inventory.host_layout(false, true).is_err());
+
+    let unknown = collect(&root.0, Some(26300)).unwrap();
+    let summary = serde_json::to_value(unknown.summary()).unwrap();
+    assert!(summary["profile_id"].is_null());
+    assert!(summary["profile_selection_reason"].is_string());
+    assert_eq!(summary["matched_module_count"], 0);
+    assert_eq!(summary["all_profile_images_matched"], false);
+}

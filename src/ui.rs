@@ -1,6 +1,7 @@
 mod agenda;
 mod almanac_tip;
 mod calendar;
+mod compatibility;
 mod dashboard;
 mod design;
 mod forecast;
@@ -52,7 +53,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.13.2";
+const UI_REVISION: &str = "开发版 5.14.0";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -71,7 +72,7 @@ const UPDATE: u16 = 31;
 const OPEN_RELEASE: u16 = 32;
 const EXIT: u16 = 33;
 const CALENDAR: u16 = 34;
-const PAGES: [&str; 11] = [
+const PAGES: [&str; 12] = [
     "日历与天气",
     "时钟显示",
     "多屏托盘",
@@ -83,6 +84,7 @@ const PAGES: [&str; 11] = [
     "日程与待办",
     "闹钟与专注",
     "天气格式",
+    "兼容性",
 ];
 fn revision_label() -> String {
     if i18n::english() {
@@ -115,6 +117,8 @@ thread_local! {static PALETTE:Cell<Option<Palette>>=const{Cell::new(None)};}
 
 enum Event {
     Diagnostics(Result<std::path::PathBuf, String>),
+    Compatibility(Result<Box<compatibility::Snapshot>, String>),
+    CompatibilityExport(Result<std::path::PathBuf, String>),
     Weather(Box<(config::WeatherConfig, weather::WeatherResult)>),
     Update(Result<UpdateStatus, String>),
     Holidays(i32, holidays::Outcome),
@@ -166,6 +170,7 @@ struct App {
     weather_busy: bool,
     update_busy: bool,
     diagnostics_busy: bool,
+    compatibility: compatibility::State,
     next_weather: Instant,
     engine: std::sync::Arc<std::sync::Mutex<weather::Engine>>,
     taskbar_created: u32,
@@ -346,6 +351,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             weather_busy: false,
             update_busy: false,
             diagnostics_busy: false,
+            compatibility: Default::default(),
             next_weather: Instant::now(),
             engine: Default::default(),
             taskbar_created: RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
@@ -916,8 +922,9 @@ impl App {
                     (2, 404),
                     (3, 442),
                     (4, 530),
-                    (5, 568),
-                    (6, 606),
+                    (11, 568),
+                    (5, 606),
+                    (6, 644),
                 ] {
                     self.button(PAGES[i], NAV + i as u16, 16, y, 208);
                 }
@@ -955,6 +962,7 @@ impl App {
                 "记录待办、日程和重要日期。点击保存后保存在本机。",
                 "专注计时、定时提醒与最近提醒记录。",
                 "组合天气属性，决定任务栏里 %weather% 的显示内容。",
+                "查看本机模块匹配、已收录资料与实测范围。",
             ];
             set_text(self.field(902), descriptions[self.page]);
             let c = self.draft.clone();
@@ -981,6 +989,7 @@ impl App {
                     }
                     1 => self.clock_settings(&c, width),
                     10 => self.weather_format_settings(&c, width),
+                    11 => self.compatibility_settings(width),
                     2 => self.tray_settings(&c, width),
                     3 => self.weather_settings(&c, width),
                     4 => self.general_settings(&c, width),
@@ -1013,6 +1022,8 @@ impl App {
                     "选择日程后编辑 · 点击保存后生效".into()
                 } else if self.page == 9 {
                     "使用 Windows 通知 · 最近提醒保存在本机".into()
+                } else if self.page == compatibility::PAGE {
+                    self.compatibility.footer()
                 } else {
                     self.status.clone()
                 },
@@ -1027,13 +1038,13 @@ impl App {
             );
             ShowWindow(
                 self.field(SAVE),
-                if matches!(self.page, 8 | 9) {
+                if matches!(self.page, 8 | 9 | 11) {
                     SW_HIDE
                 } else {
                     SW_SHOWNA
                 },
             );
-            if ((1..8).contains(&self.page) || self.page == 10) && !reused {
+            if ((1..8).contains(&self.page) || matches!(self.page, 10 | 11)) && !reused {
                 page::finish(self.page_host);
             }
             self.update_views();
@@ -1058,6 +1069,9 @@ impl App {
                 null_mut(),
                 RDW_INVALIDATE | RDW_ALLCHILDREN,
             );
+            if self.page == compatibility::PAGE && !self.compatibility.attempted {
+                self.start_compatibility_check();
+            }
         }
     }
 
@@ -1453,6 +1467,8 @@ impl App {
         unsafe {
             while let Ok(event) = self.rx.try_recv() {
                 match event {
+                    Event::Compatibility(result) => self.receive_compatibility(result),
+                    Event::CompatibilityExport(result) => self.receive_compatibility_export(result),
                     Event::Diagnostics(result) => {
                         self.diagnostics_busy = false;
                         match result {
@@ -1852,6 +1868,17 @@ impl App {
                 return false;
             }
             match id {
+                compatibility::CHECK if self.page == compatibility::PAGE => {
+                    self.start_compatibility_check();
+                }
+                compatibility::EXPORT if self.page == compatibility::PAGE => {
+                    self.export_compatibility();
+                }
+                compatibility::DETAILS if self.page == compatibility::PAGE => {
+                    self.compatibility.details_open = !self.compatibility.details_open;
+                    self.sync_compatibility_controls();
+                    page::finish(self.page_host);
+                }
                 settings::OPEN_WEATHER_FORMAT => {
                     self.command(NAV + 10);
                 }
@@ -2876,7 +2903,7 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                 if nav {
                     let icons: [&str; PAGES.len()] = [
                         "\u{e787}", "\u{e823}", "\u{e7f4}", "\u{e753}", "\u{e713}", "\u{e946}",
-                        "\u{e8b5}", "\u{e790}", "\u{e8fd}", "\u{e916}", "\u{e753}",
+                        "\u{e8b5}", "\u{e790}", "\u{e8fd}", "\u{e916}", "\u{e753}", "\u{e73e}",
                     ];
                     let icon_font = make_font(s(17), 400, "Segoe MDL2 Assets");
                     design::text(

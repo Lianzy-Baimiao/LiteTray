@@ -8,6 +8,11 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+default = []
+# Keep the host and injected adapter on the same explicitly selected registry.
+compatibility-lab = ["litetray-adapter-protocol/compatibility-lab"]
+
 [dependencies]
 serde_json = "1.0"
 sha2 = "0.10"

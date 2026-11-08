@@ -27,7 +27,7 @@ A useful clock, tray and calendar on every monitor. A native Windows desktop app
 
 Download `LiteTray-<version>-Setup-x64.exe` from Releases. Installation is per user and needs no administrator privileges. Settings, schedules and weather cache live in `%LOCALAPPDATA%\LiteTray`; upgrades and uninstall preserve user data.
 
-**Compatibility:** 5.13.2 includes profiles for the **x64 system modules from Windows 11 26300.9711 and 26300.9818**, selected by exact module identity. Other modules are rejected. Sandbox checks on 9818 passed real primary-clock takeover, restoration and tray-interface preparation; secondary-display replication and pointer/menu interactions still need separate acceptance. See the [9818 validation record, Chinese](docs/compatibility-9818.md). LiteTray is still in development and the installer is not digitally signed.
+**Compatibility:** 5.14.0 includes profiles for the **x64 system modules from Windows 11 26300.9711 and 26300.9818**, selected by exact module identity. Unmatched modules block the features that depend on them. Sandbox checks on 9818 passed real primary-clock takeover, restoration and tray-interface preparation; secondary-display replication and pointer/menu interactions still need separate acceptance. See the [9818 validation record, Chinese](docs/compatibility-9818.md). LiteTray is still in development and the installer is not digitally signed.
 
 ## Features
 
@@ -42,6 +42,8 @@ Download `LiteTray-<version>-Setup-x64.exe` from Releases. Installation is per u
 ## Getting started
 
 Open settings, choose your displays in the tray page, then enable the taskbar clock. Click the clock to open the calendar. An attached panel closes when you click outside it; a detached panel stays open. Closing settings keeps LiteTray running; use the tray menu to exit.
+
+Open **Settings → Compatibility** to see local module matches, built-in profiles and the recorded scope of acceptance checks. Inspection runs in the background without changing the system, and you can export the displayed report. A disk match still requires runtime checks; it does not confirm every click, menu or multiple-monitor scenario.
 
 [Usage and development guide, Chinese](docs/usage.md) · [Installer guide, Chinese](docs/installer.md) · [Weather templates, Chinese](docs/weather-format.md)
 

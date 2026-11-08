@@ -29,3 +29,12 @@ Add another profile only with its exact module and symbol evidence, a reviewed
 implementation of any new ABI, and explicit validation results. Do not widen
 an OS build range or reuse offsets merely because version labels look similar.
 The profile contains metadata and minimal code prefixes, not system DLLs/PDBs.
+
+The candidate in `lab/windows11-26200.8457-x64.json` is excluded from normal
+builds. Disposable VM builds may opt in with the `compatibility-lab` Cargo
+feature on both the host and taskbar adapter. Its `Taskbar.View.dll` identity,
+field and ABI evidence is recorded in
+[the three-set comparison](../../../docs/windows11-commonality.md).
+Its pending runtime validation must not be described as production support.
+The feature cannot be enabled by a runtime setting, environment variable or
+external JSON. Default packages must be built without this feature.

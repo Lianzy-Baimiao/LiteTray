@@ -83,6 +83,12 @@ mod tests {
         set_language(Language::En);
         assert_eq!(tr("保存设置"), "Save settings");
         assert_eq!(tr("时钟显示"), "Clock content");
+        assert_eq!(tr("兼容性"), "Compatibility");
+        assert_eq!(tr("检测兼容性"), "Check compatibility");
+        assert_eq!(
+            tr("模块匹配 · 运行时仍需验证"),
+            "Modules match · runtime checks still required"
+        );
         assert_eq!(tr("自己的会议 · %date%"), "自己的会议 · %date%");
         let catalog: HashMap<String, String> =
             serde_json::from_str(include_str!("../locales/en.json")).unwrap();

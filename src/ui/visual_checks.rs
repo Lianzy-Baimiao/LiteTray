@@ -1374,6 +1374,386 @@ fn settings_clock_navigation_stays_responsive() {
 }
 
 #[test]
+fn compatibility_results_update_controls_without_rebuilding_or_switching_pages() {
+    on_isolated_desktop(|| unsafe {
+        use litetray::compatibility::{Feature, FeatureStatus, ModuleStatus};
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-compatibility-ui-unused.json"),
+        );
+        let saved = serde_json::to_value(&app.saved).unwrap();
+        let draft = serde_json::to_value(&app.draft).unwrap();
+        app.compatibility.snapshot = None;
+        app.compatibility.busy = true;
+        app.page = compatibility::PAGE;
+        app.render();
+        let page = app.page_host;
+        let status = app.field(955);
+        let clock = app.field(960);
+        assert_eq!(IsWindowEnabled(app.field(compatibility::CHECK)), 0);
+        assert_eq!(IsWindowEnabled(app.field(compatibility::EXPORT)), 0);
+        assert!(window_text(status).contains("正在检测"));
+        app.tx
+            .send(Event::Compatibility(Ok(Box::new(
+                compatibility_snapshot_for_check(),
+            ))))
+            .unwrap();
+        app.receive();
+        assert_eq!(app.page_host, page);
+        assert_eq!(app.field(955), status);
+        assert_eq!(app.field(960), clock);
+        assert_ne!(IsWindowEnabled(app.field(compatibility::CHECK)), 0);
+        assert_ne!(IsWindowEnabled(app.field(compatibility::EXPORT)), 0);
+        assert!(window_text(status).contains("检测完成"));
+        for id in 960..964 {
+            assert_eq!(window_text(app.field(id)), "模块匹配 · 运行时仍需验证");
+        }
+        assert!(window_text(app.field(970)).contains("尚未验收"));
+
+        let mut partial = compatibility_snapshot_for_check();
+        partial.report.all_profile_images_matched = false;
+        partial.report.modules[2].status = ModuleStatus::UnknownImage;
+        partial.report.modules[2].reason = Some("synthetic tray mismatch".into());
+        for feature in &mut partial.report.features {
+            if matches!(
+                feature.feature,
+                Feature::TrayMirroring | Feature::SystemAreas
+            ) {
+                feature.status = FeatureStatus::UnsupportedModules;
+                feature.reasons = vec!["synthetic tray mismatch".into()];
+            }
+        }
+        app.tx
+            .send(Event::Compatibility(Ok(Box::new(partial))))
+            .unwrap();
+        app.receive();
+        assert_eq!(app.field(960), clock);
+        assert_eq!(window_text(clock), "模块匹配 · 运行时仍需验证");
+        assert!(window_text(app.field(962)).contains("暂不支持接管"));
+        assert!(window_text(app.field(954)).contains("适用功能见下方"));
+        assert!(window_text(app.field(970)).contains("不能套用"));
+
+        app.command(NAV + 7);
+        let other_page = app.page_host;
+        let other_control = app.field(205);
+        let completed = app.compatibility.snapshot.as_ref().unwrap().checked_at;
+        app.compatibility.busy = true;
+        app.compatibility.export_busy = true;
+        app.tx
+            .send(Event::Compatibility(Err("synthetic rescan failure".into())))
+            .unwrap();
+        let export = std::env::temp_dir().join("compatibility-display-only.json");
+        app.tx
+            .send(Event::CompatibilityExport(Ok(export.clone())))
+            .unwrap();
+        app.receive();
+        assert_eq!(app.page, 7);
+        assert_eq!(app.page_host, other_page);
+        assert_eq!(app.field(205), other_control);
+        assert_eq!(
+            app.compatibility.snapshot.as_ref().unwrap().checked_at,
+            completed
+        );
+        assert!(!app.compatibility.busy && !app.compatibility.export_busy);
+        app.command(NAV + compatibility::PAGE as u16);
+        assert!(window_text(app.field(955)).contains("检测失败"));
+        assert!(window_text(app.field(955)).contains("上次完成"));
+        assert!(window_text(app.field(956)).contains(&export.display().to_string()));
+        assert!(window_text(app.field(STATUS)).contains("报告已保存"));
+        app.tx
+            .send(Event::CompatibilityExport(Err(
+                "synthetic export failure".into()
+            )))
+            .unwrap();
+        app.receive();
+        assert!(window_text(app.field(956)).contains("报告保存失败"));
+        assert!(window_text(app.field(STATUS)).contains("报告保存失败"));
+        assert_eq!(serde_json::to_value(&app.saved).unwrap(), saved);
+        assert_eq!(serde_json::to_value(&app.draft).unwrap(), draft);
+        assert_eq!(IsWindowVisible(app.hwnd), 0);
+        assert!(
+            app.rx.try_recv().is_err(),
+            "fixtures must not start detection workers"
+        );
+        assert_external_foreground();
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+    });
+}
+
+#[test]
+#[ignore = "explicit disk-only E2E: reads current Windows modules on a private desktop"]
+fn compatibility_check_worker_and_export_preserve_the_real_disk_snapshot() {
+    on_isolated_desktop(|| unsafe {
+        struct TestProfile {
+            directory: std::path::PathBuf,
+            parent: std::path::PathBuf,
+            previous: Option<std::ffi::OsString>,
+        }
+        impl Drop for TestProfile {
+            fn drop(&mut self) {
+                // The harness starts a dedicated process before changing the
+                // environment; this cannot redirect another test/user's data.
+                unsafe {
+                    if let Some(previous) = &self.previous {
+                        std::env::set_var("LITETRAY_DATA_DIR", previous);
+                    } else {
+                        std::env::remove_var("LITETRAY_DATA_DIR");
+                    }
+                }
+                if let Ok(resolved) = std::fs::canonicalize(&self.directory)
+                    && resolved == self.directory
+                    && resolved.parent() == Some(self.parent.as_path())
+                {
+                    // Resolve and verify the exact test-created directory
+                    // immediately before deleting this temporary tree.
+                    let _ = std::fs::remove_dir_all(resolved);
+                }
+            }
+        }
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(15);
+        assert!(std::env::var_os("LITETRAY_ISOLATED_SETTINGS_TEST").is_some());
+        let parent = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        let directory = parent.join(format!(
+            "litetray-compatibility-worker-e2e-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let profile = TestProfile {
+            directory: std::fs::canonicalize(directory).unwrap(),
+            parent,
+            previous: std::env::var_os("LITETRAY_DATA_DIR"),
+        };
+        assert_eq!(profile.directory.parent(), Some(profile.parent.as_path()));
+        std::env::set_var("LITETRAY_DATA_DIR", &profile.directory);
+        assert_eq!(config::data_dir(), profile.directory);
+
+        let mut app = app_for_check(false, 96, &profile.directory.join("agenda.json"));
+        assert!(app.taskbar.is_none() && app.preview.is_none());
+        let saved = serde_json::to_value(&app.saved).unwrap();
+        let draft = serde_json::to_value(&app.draft).unwrap();
+        // Replace the display fixture. Only the real CHECK command can fill
+        // this state; suppress auto-start so the explicit button is exercised.
+        app.compatibility = compatibility::State {
+            attempted: true,
+            ..Default::default()
+        };
+        app.page = compatibility::PAGE;
+        app.render();
+        assert!(app.rx.try_recv().is_err());
+        app.command(compatibility::CHECK);
+        assert!(app.compatibility.busy);
+        assert_eq!(IsWindowEnabled(app.field(compatibility::CHECK)), 0);
+        app.command(NAV + 4);
+        let other_page = app.page_host;
+
+        // Poll the actual typed worker channel without dispatching unrelated
+        // native messages. Put the same event back for App::receive; no result
+        // is fabricated and the normal UI event dispatcher still consumes it.
+        let receive_worker = |app: &mut App, exporting: bool| {
+            loop {
+                assert!(
+                    Instant::now() < deadline,
+                    "compatibility worker E2E exceeded 15 seconds"
+                );
+                match app.rx.try_recv() {
+                    Ok(event) => {
+                        match &event {
+                            Event::Compatibility(result) if !exporting => {
+                                assert!(result.is_ok(), "real disk collector failed: {result:?}");
+                            }
+                            Event::CompatibilityExport(result) if exporting => {
+                                assert!(result.is_ok(), "real export worker failed: {result:?}");
+                            }
+                            _ => {
+                                panic!("unexpected event in the isolated compatibility worker test")
+                            }
+                        }
+                        app.tx.send(event).unwrap();
+                        app.receive();
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => thread::sleep(Duration::from_millis(5)),
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        panic!("compatibility worker channel disconnected")
+                    }
+                }
+            }
+        };
+        receive_worker(&mut app, false);
+        assert!(!app.compatibility.busy);
+        assert!(app.compatibility.error.is_none());
+        assert_eq!(
+            app.page, 4,
+            "completion must not navigate back to compatibility"
+        );
+        assert_eq!(app.page_host, other_page);
+        let snapshot = app.compatibility.snapshot.clone().unwrap();
+        assert_eq!(snapshot.report.scope, "disk_only");
+        assert!(!snapshot.report.explorer_accessed);
+        assert!(!snapshot.report.network_accessed);
+        assert!(!snapshot.report.loaded_modules_checked);
+        assert!(!snapshot.report.runtime_topology_checked);
+        assert!(snapshot.os.build > 0);
+        assert_eq!(snapshot.report.os_build, Some(snapshot.os.build));
+        assert_eq!(snapshot.report.modules.len(), 3);
+        let expected = serde_json::to_value(&snapshot.report).unwrap();
+        let timestamp = serde_json::to_value(snapshot.checked_at).unwrap();
+        let mut exports = vec![];
+        for _ in 0..2 {
+            app.command(NAV + compatibility::PAGE as u16);
+            assert!(
+                !app.compatibility.busy,
+                "returning to the page must retain the completed scan"
+            );
+            assert!(window_text(app.field(955)).contains("检测完成"));
+            app.command(compatibility::EXPORT);
+            assert!(app.compatibility.export_busy);
+            assert_eq!(IsWindowEnabled(app.field(compatibility::EXPORT)), 0);
+            app.command(NAV + 4);
+            let waiting_page = app.page_host;
+            receive_worker(&mut app, true);
+            assert!(!app.compatibility.export_busy);
+            assert!(app.compatibility.export_error.is_none());
+            assert_eq!(app.page, 4);
+            assert_eq!(app.page_host, waiting_page);
+            assert!(std::sync::Arc::ptr_eq(
+                app.compatibility.snapshot.as_ref().unwrap(),
+                &snapshot
+            ));
+            let path = app.compatibility.export_path.clone().unwrap();
+            let resolved = std::fs::canonicalize(&path).unwrap();
+            assert_eq!(
+                resolved.parent(),
+                Some(profile.directory.join("reports").as_path())
+            );
+            assert_eq!(
+                path.extension().and_then(|part| part.to_str()),
+                Some("json")
+            );
+            let bytes = std::fs::read(&path).unwrap();
+            let report: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(report["kind"], "litetray_compatibility_check");
+            assert_eq!(report["checked_at"], timestamp);
+            assert_eq!(report["compatibility"], expected);
+            assert_eq!(report["os"], serde_json::to_value(&snapshot.os).unwrap());
+            assert_eq!(
+                report["supported_profiles"],
+                serde_json::to_value(&snapshot.supported_profiles).unwrap()
+            );
+            exports.push((path, bytes));
+        }
+        assert_ne!(exports[0].0, exports[1].0);
+        assert_eq!(std::fs::read(&exports[0].0).unwrap(), exports[0].1);
+        assert_eq!(
+            std::fs::read_dir(profile.directory.join("reports"))
+                .unwrap()
+                .count(),
+            2
+        );
+        assert!(!profile.directory.join("config.json").exists());
+        assert!(!profile.directory.join("taskbar-events.log").exists());
+        assert_eq!(serde_json::to_value(&app.saved).unwrap(), saved);
+        assert_eq!(serde_json::to_value(&app.draft).unwrap(), draft);
+        assert_eq!(IsWindowVisible(app.hwnd), 0);
+        assert!(app.taskbar.is_none() && app.preview.is_none());
+        assert_external_foreground();
+        assert!(started.elapsed() < Duration::from_secs(15));
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+        drop(app);
+        let directory = profile.directory.clone();
+        drop(profile);
+        assert!(!directory.exists(), "temporary E2E profile was not removed");
+    });
+}
+
+#[test]
+fn compatibility_details_remain_reachable_when_toggled_after_scrolling() {
+    on_isolated_desktop(|| unsafe {
+        for dark in [false, true] {
+            let mut app = app_for_check(
+                dark,
+                96,
+                &std::env::temp_dir().join("litetray-compatibility-scroll-unused.json"),
+            );
+            SetWindowPos(
+                app.hwnd,
+                null_mut(),
+                0,
+                0,
+                app.scale(1060),
+                app.scale(820),
+                SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
+            );
+            app.page = compatibility::PAGE;
+            app.render();
+            let page = app.page_host;
+            let scroll = || {
+                let mut info = SCROLLINFO {
+                    cbSize: size_of::<SCROLLINFO>() as u32,
+                    fMask: SIF_ALL,
+                    ..std::mem::zeroed()
+                };
+                assert_ne!(GetScrollInfo(page, SB_VERT, &mut info), 0);
+                info
+            };
+            let rect = |child| {
+                let mut bounds: RECT = std::mem::zeroed();
+                GetWindowRect(child, &mut bounds);
+                MapWindowPoints(null_mut(), page, &mut bounds as *mut _ as *mut POINT, 2);
+                bounds
+            };
+            let details = app.field(972);
+            let original = rect(details);
+            let collapsed_range = scroll().nMax;
+            assert_eq!(GetWindowLongW(details, GWL_STYLE) as u32 & WS_VISIBLE, 0);
+            for _ in 0..3 {
+                SendMessageW(page, WM_VSCROLL, SB_BOTTOM as usize, 0);
+                let before = scroll();
+                assert!(before.nPos > 0);
+                assert_eq!(rect(details).top + before.nPos, original.top);
+                app.command(compatibility::DETAILS);
+                assert_ne!(GetWindowLongW(details, GWL_STYLE) as u32 & WS_VISIBLE, 0);
+                assert!(scroll().nMax > collapsed_range);
+                SendMessageW(page, WM_VSCROLL, SB_BOTTOM as usize, 0);
+                let expanded = scroll();
+                let visible = rect(details);
+                let mut viewport: RECT = std::mem::zeroed();
+                GetClientRect(page, &mut viewport);
+                assert!(visible.top >= 0, "details start cannot be reached");
+                assert!(
+                    visible.bottom <= viewport.bottom,
+                    "details end cannot be reached"
+                );
+                assert_eq!(visible.top + expanded.nPos, original.top);
+                page::finish(page);
+                assert_eq!(
+                    scroll().nMax,
+                    expanded.nMax,
+                    "range changed without content changes"
+                );
+                app.command(compatibility::DETAILS);
+                assert_eq!(GetWindowLongW(details, GWL_STYLE) as u32 & WS_VISIBLE, 0);
+                assert_eq!(scroll().nMax, collapsed_range);
+                assert_eq!(rect(details).top + scroll().nPos, original.top);
+                SendMessageW(page, WM_VSCROLL, SB_TOP as usize, 0);
+                assert_eq!(scroll().nPos, 0);
+                assert_eq!(rect(details).top, original.top);
+                assert!(!app.compatibility.busy);
+            }
+            assert_eq!(IsWindowVisible(app.hwnd), 0);
+            assert_external_foreground();
+            DestroyWindow(app.hwnd);
+            app.release_resources();
+        }
+    });
+}
+
+#[test]
 fn language_choice_persists_rebuilds_labels_and_preserves_user_text() {
     on_isolated_desktop(|| unsafe {
         let path =
@@ -1410,7 +1790,7 @@ fn language_choice_persists_rebuilds_labels_and_preserves_user_text() {
         assert!(app.draft.clock.top_style.font_family.is_none());
         assert!(app.draft.clock.top_style.font_size.is_none());
         let mut untranslated = std::collections::BTreeSet::new();
-        for page in [1, 2, 3, 4, 5, 6, 7, 10] {
+        for page in [1, 2, 3, 4, 5, 6, 7, 10, 11] {
             app.command(NAV + page);
             for &child in &app.children {
                 let mut class = [0u16; 32];
@@ -1601,7 +1981,9 @@ fn ui_audit_text_and_geometry_across_pages_and_timer_tabs() {
                         app.page = page;
                         app.render();
                         let tag = format!("{} {width}x{height} dpi={} dark={dark}", name, app.dpi);
-                        if GetWindowLongW(app.page_host, GWL_STYLE) as u32 & WS_VSCROLL != 0 {
+                        if page != compatibility::PAGE
+                            && GetWindowLongW(app.page_host, GWL_STYLE) as u32 & WS_VSCROLL != 0
+                        {
                             failures.push(format!("{tag}: unnecessary outer scrollbar"));
                         }
                         audit_native_layout(app.hwnd, &tag, &mut failures);
@@ -1659,6 +2041,16 @@ unsafe fn audit_native_layout(parent: HWND, tag: &str, failures: &mut Vec<String
         let mut parent_class = [0u16; 128];
         let parent_len = GetClassNameW(parent, parent_class.as_mut_ptr(), 128) as usize;
         let parent_class = String::from_utf16_lossy(&parent_class[..parent_len]);
+        let scrolling_page = parent_class == "LiteTray.Page.1"
+            && GetWindowLongW(parent, GWL_STYLE) as u32 & WS_VSCROLL != 0;
+        let mut scroll = SCROLLINFO {
+            cbSize: size_of::<SCROLLINFO>() as u32,
+            fMask: SIF_ALL,
+            ..std::mem::zeroed()
+        };
+        if scrolling_page {
+            GetScrollInfo(parent, SB_VERT, &mut scroll);
+        }
         let mut child = GetWindow(parent, GW_CHILD);
         while !child.is_null() {
             let style = GetWindowLongW(child, GWL_STYLE) as u32;
@@ -1684,11 +2076,12 @@ unsafe fn audit_native_layout(parent: HWND, tag: &str, failures: &mut Vec<String
                     siblings.push((id, text.clone(), r));
                 }
                 let preview = id == widgets::PREVIEW as i32;
-                if r.left < -1
-                    || r.top < -1
-                    || r.right > bounds.right + 1
-                    || r.bottom > bounds.bottom + 1
-                {
+                let outside_vertical = if scrolling_page {
+                    r.top + scroll.nPos < -1 || r.bottom + scroll.nPos > scroll.nMax + 2
+                } else {
+                    r.top < -1 || r.bottom > bounds.bottom + 1
+                };
+                if r.left < -1 || r.right > bounds.right + 1 || outside_vertical {
                     failures.push(format!(
                         "{tag}: {class}/{id} [{},{},{},{}] outside {}x{}",
                         r.left, r.top, r.right, r.bottom, bounds.right, bounds.bottom
@@ -1726,7 +2119,11 @@ unsafe fn audit_native_layout(parent: HWND, tag: &str, failures: &mut Vec<String
                         } else if color_edit {
                             20
                         } else if is_button {
-                            if (100..111).contains(&id) { 58 } else { 20 }
+                            if (NAV as i32..NAV as i32 + PAGES.len() as i32).contains(&id) {
+                                58
+                            } else {
+                                20
+                            }
                         } else {
                             0
                         };
@@ -2426,6 +2823,103 @@ fn settings_date_patterns_preview_validate_and_survive_navigation() {
         app.release_resources();
     });
 }
+fn compatibility_snapshot_for_check() -> compatibility::Snapshot {
+    use litetray::compatibility::{
+        Feature, FeatureReport, FeatureStatus, ModuleReport, ModuleStatus, Report,
+    };
+    // Deterministic display data, never a scan of the host or evidence of a
+    // live session. Every settings fixture suppresses automatic collection.
+    let supported_profiles = litetray::compatibility::support_catalog().unwrap();
+    let profile = supported_profiles
+        .iter()
+        .find(|profile| profile.profile_id == "windows11-26300.9818-x64")
+        .unwrap();
+    let modules = profile
+        .modules
+        .iter()
+        .map(|module| ModuleReport {
+            name: module.name.clone(),
+            relative_path: module.relative_path.clone(),
+            status: ModuleStatus::Matched,
+            image: Some(litetray::pe::ImageIdentity {
+                machine: module.identity.machine,
+                image_size: module.identity.image_size,
+                timestamp: module.identity.timestamp,
+                sha256: module.sha256.clone(),
+                pdb_name: format!("{}.pdb", module.name.trim_end_matches(".dll")),
+                pdb_key: "synthetic-display-only".into(),
+                pdb_guid: module.identity.pdb_guid,
+                pdb_age: module.identity.pdb_age,
+            }),
+            reason: None,
+        })
+        .collect();
+    let features = [
+        Feature::ClockAppearance,
+        Feature::ClockInput,
+        Feature::TrayMirroring,
+        Feature::SystemAreas,
+    ]
+    .into_iter()
+    .map(|feature| FeatureReport {
+        feature,
+        status: FeatureStatus::DiskMatchedLiveCheckRequired,
+        required_modules: profile.modules[..if matches!(
+            feature,
+            Feature::ClockAppearance | Feature::ClockInput
+        ) {
+            2
+        } else {
+            3
+        }]
+            .iter()
+            .map(|module| module.name.clone())
+            .collect(),
+        reasons: vec![],
+        baseline_limitations: match feature {
+            Feature::ClockAppearance => vec![],
+            Feature::ClockInput => vec!["notification_click_crash_report_unresolved"],
+            Feature::TrayMirroring => {
+                vec!["third_party_hover_popups_require_separate_validation"]
+            }
+            Feature::SystemAreas => vec![
+                "system_icon_and_cross_monitor_menu_validation_incomplete",
+                "notification_click_crash_report_unresolved",
+            ],
+        },
+    })
+    .collect();
+    compatibility::Snapshot {
+        checked_at: chrono::DateTime::parse_from_rfc3339("2026-11-08T14:42:06Z")
+            .unwrap()
+            .with_timezone(&Utc),
+        os: compatibility::OperatingSystem {
+            build: 26300,
+            ubr: Some(9818),
+            display_version: Some("26H2".into()),
+            edition: Some("Professional (sample)".into()),
+            architecture: "x64".into(),
+        },
+        report: Report {
+            schema: 1,
+            scope: "disk_only",
+            os_build: Some(26300),
+            collector_architecture: "x86_64",
+            explorer_accessed: false,
+            network_accessed: false,
+            loaded_modules_checked: false,
+            runtime_topology_checked: false,
+            profile_id: Some(profile.profile_id.clone()),
+            profile_selection_reason: None,
+            all_profile_images_matched: true,
+            modules,
+            other_images: vec![],
+            features,
+        },
+        supported_profiles,
+    }
+}
+
 unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path) -> App {
     unsafe {
         let _ = RoInitialize(RO_INIT_SINGLETHREADED);
@@ -2555,6 +3049,11 @@ unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path) -> App {
             weather_busy: false,
             update_busy: false,
             diagnostics_busy: false,
+            compatibility: compatibility::State {
+                snapshot: Some(std::sync::Arc::new(compatibility_snapshot_for_check())),
+                attempted: true,
+                ..Default::default()
+            },
             next_weather: Instant::now(),
             engine: Default::default(),
             taskbar_created: 0,
@@ -2630,143 +3129,162 @@ pub(super) unsafe fn write_window(hwnd: HWND, path: &std::path::Path) {
 #[test]
 #[ignore = "Renders hidden native settings controls; set LITETRAY_RENDER_DIR"]
 fn render_settings_artifacts() {
-    let output = std::path::PathBuf::from(
-        std::env::var_os("LITETRAY_RENDER_DIR").expect("explicit render directory"),
-    );
-    std::fs::create_dir_all(&output).unwrap();
-    unsafe {
-        let previous_dpi = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        for dark in [false, true] {
-            let mut app = app_for_check(dark, 120, &output.join("unused-agenda.json"));
-            let english = std::env::var("LITETRAY_RENDER_LANGUAGE").as_deref() == Ok("en");
-            if english {
-                app.saved.language = Language::En;
-                app.draft.language = Language::En;
-                app.status = "UI preview · sample entries · no reminders".into();
-                app.recreate_resources();
-            }
-            // Public documentation previews use synthetic data, never the live
-            // profile or a network request. Exercise the current hourly UI too.
-            app.saved.weather.enabled = true;
-            app.saved.weather.city = if english {
-                "Shenzhen (sample)"
-            } else {
-                "示例 · 深圳"
-            }
-            .into();
-            app.draft.weather = app.saved.weather.clone();
-            let now = Utc::now();
-            let hour = chrono::DateTime::from_timestamp(now.timestamp() / 3600 * 3600, 0).unwrap();
-            app.weather = Some(weather::WeatherResult {
-                weather: Some(weather::Weather {
-                    provider: config::Provider::OpenMeteo,
-                    city: app.saved.weather.city.clone(),
-                    latitude: 22.6,
-                    longitude: 114.0,
-                    data_at: hour,
-                    fetched_at: now,
-                    temperature_c: 24.0,
-                    feels_like_c: Some(26.0),
-                    humidity_percent: Some(68.0),
-                    wind_kmh: Some(12.0),
-                    wind_degrees: Some(135.0),
-                    pressure_hpa: Some(1013.0),
-                    visibility_km: Some(20.0),
-                    description: "多云".into(),
-                    kind: if english {
-                        "Sample data"
-                    } else {
-                        "示例数据"
-                    }
-                    .into(),
-                    days: (0..3)
-                        .map(|i| weather::DailyForecast {
-                            date: (Local::now().date_naive() + Days::new(i)).to_string(),
-                            low_c: 21.0 + i as f64,
-                            high_c: 27.0 + i as f64,
-                            description: "多云".into(),
-                        })
-                        .collect(),
-                    hourly: (0..24)
-                        .map(|i| weather::HourlyForecast {
-                            at: hour + chrono::Duration::hours(i),
-                            temperature_c: 24.0 + (i % 3) as f64,
-                            description: ["多云", "晴", "晴间多云", "小雨"][i as usize % 4].into(),
-                            precipitation_probability: Some([10.0, 0.0, 5.0, 65.0][i as usize % 4]),
-                        })
-                        .collect(),
-                }),
-                cached: false,
-                fallback: false,
-                attempts: vec![],
-                cache_error: None,
-            });
-            for page in 0..PAGES.len() {
-                let (width, height) = (1060, 820);
-                SetWindowPos(
-                    app.hwnd,
-                    null_mut(),
-                    0,
-                    0,
-                    app.scale(width),
-                    app.scale(height),
-                    SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
-                );
-                app.page = page;
-                app.render();
-                write_window(
-                    app.hwnd,
-                    &output.join(format!(
-                        "settings-{}-{page}.bmp",
-                        if dark { "dark" } else { "light" }
-                    )),
-                );
-                if matches!(page, 8 | 9) {
-                    SendMessageW(app.page_host, WM_VSCROLL, SB_BOTTOM as usize, 0);
+    on_isolated_desktop(|| {
+        let output = std::path::PathBuf::from(
+            std::env::var_os("LITETRAY_RENDER_DIR").expect("explicit render directory"),
+        );
+        std::fs::create_dir_all(&output).unwrap();
+        unsafe {
+            let previous_dpi =
+                SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            for dark in [false, true] {
+                let mut app = app_for_check(dark, 120, &output.join("unused-agenda.json"));
+                let english = std::env::var("LITETRAY_RENDER_LANGUAGE").as_deref() == Ok("en");
+                if english {
+                    app.saved.language = Language::En;
+                    app.draft.language = Language::En;
+                    app.status = "UI preview · sample entries · no reminders".into();
+                    app.recreate_resources();
+                }
+                // Public documentation previews use synthetic data, never the live
+                // profile or a network request. Exercise the current hourly UI too.
+                app.saved.weather.enabled = true;
+                app.saved.weather.city = if english {
+                    "Shenzhen (sample)"
+                } else {
+                    "示例 · 深圳"
+                }
+                .into();
+                app.draft.weather = app.saved.weather.clone();
+                let now = Utc::now();
+                let hour =
+                    chrono::DateTime::from_timestamp(now.timestamp() / 3600 * 3600, 0).unwrap();
+                app.weather = Some(weather::WeatherResult {
+                    weather: Some(weather::Weather {
+                        provider: config::Provider::OpenMeteo,
+                        city: app.saved.weather.city.clone(),
+                        latitude: 22.6,
+                        longitude: 114.0,
+                        data_at: hour,
+                        fetched_at: now,
+                        temperature_c: 24.0,
+                        feels_like_c: Some(26.0),
+                        humidity_percent: Some(68.0),
+                        wind_kmh: Some(12.0),
+                        wind_degrees: Some(135.0),
+                        pressure_hpa: Some(1013.0),
+                        visibility_km: Some(20.0),
+                        description: "多云".into(),
+                        kind: if english {
+                            "Sample data"
+                        } else {
+                            "示例数据"
+                        }
+                        .into(),
+                        days: (0..3)
+                            .map(|i| weather::DailyForecast {
+                                date: (Local::now().date_naive() + Days::new(i)).to_string(),
+                                low_c: 21.0 + i as f64,
+                                high_c: 27.0 + i as f64,
+                                description: "多云".into(),
+                            })
+                            .collect(),
+                        hourly: (0..24)
+                            .map(|i| weather::HourlyForecast {
+                                at: hour + chrono::Duration::hours(i),
+                                temperature_c: 24.0 + (i % 3) as f64,
+                                description: ["多云", "晴", "晴间多云", "小雨"][i as usize % 4]
+                                    .into(),
+                                precipitation_probability: Some(
+                                    [10.0, 0.0, 5.0, 65.0][i as usize % 4],
+                                ),
+                            })
+                            .collect(),
+                    }),
+                    cached: false,
+                    fallback: false,
+                    attempts: vec![],
+                    cache_error: None,
+                });
+                for page in 0..PAGES.len() {
+                    let (width, height) = (1060, 820);
+                    SetWindowPos(
+                        app.hwnd,
+                        null_mut(),
+                        0,
+                        0,
+                        app.scale(width),
+                        app.scale(height),
+                        SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
+                    );
+                    app.page = page;
+                    app.render();
                     write_window(
                         app.hwnd,
                         &output.join(format!(
-                            "settings-{}-{page}-bottom.bmp",
+                            "settings-{}-{page}.bmp",
                             if dark { "dark" } else { "light" }
                         )),
                     );
-                }
-                if page == 9 {
-                    for tab in 1..4 {
-                        SendMessageW(app.field(agenda::ID), WM_COMMAND, 4300 + tab, 0);
+                    if matches!(page, 8 | 9) || page == compatibility::PAGE {
+                        SendMessageW(app.page_host, WM_VSCROLL, SB_BOTTOM as usize, 0);
                         write_window(
                             app.hwnd,
                             &output.join(format!(
-                                "settings-{}-9-tab{tab}.bmp",
+                                "settings-{}-{page}-bottom.bmp",
                                 if dark { "dark" } else { "light" }
                             )),
                         );
                     }
+                    if page == compatibility::PAGE {
+                        app.command(compatibility::DETAILS);
+                        SendMessageW(app.page_host, WM_VSCROLL, SB_BOTTOM as usize, 0);
+                        write_window(
+                            app.hwnd,
+                            &output.join(format!(
+                                "settings-{}-{page}-details.bmp",
+                                if dark { "dark" } else { "light" }
+                            )),
+                        );
+                        app.command(compatibility::DETAILS);
+                    }
+                    if page == 9 {
+                        for tab in 1..4 {
+                            SendMessageW(app.field(agenda::ID), WM_COMMAND, 4300 + tab, 0);
+                            write_window(
+                                app.hwnd,
+                                &output.join(format!(
+                                    "settings-{}-9-tab{tab}.bmp",
+                                    if dark { "dark" } else { "light" }
+                                )),
+                            );
+                        }
+                    }
                 }
+                app.prewarm_panels();
+                let popup = app.panel;
+                write_window(
+                    popup,
+                    &output.join(format!(
+                        "settings-{}-flyout.bmp",
+                        if dark { "dark" } else { "light" }
+                    )),
+                );
+                panel::set_detached(popup, true);
+                write_window(
+                    popup,
+                    &output.join(format!(
+                        "settings-{}-detached.bmp",
+                        if dark { "dark" } else { "light" }
+                    )),
+                );
+                app.close_panel();
+                DestroyWindow(app.hwnd);
+                app.release_resources();
             }
-            app.prewarm_panels();
-            let popup = app.panel;
-            write_window(
-                popup,
-                &output.join(format!(
-                    "settings-{}-flyout.bmp",
-                    if dark { "dark" } else { "light" }
-                )),
-            );
-            panel::set_detached(popup, true);
-            write_window(
-                popup,
-                &output.join(format!(
-                    "settings-{}-detached.bmp",
-                    if dark { "dark" } else { "light" }
-                )),
-            );
-            app.close_panel();
-            DestroyWindow(app.hwnd);
-            app.release_resources();
+            SetThreadDpiAwarenessContext(previous_dpi);
         }
-        SetThreadDpiAwarenessContext(previous_dpi);
-    }
+    });
 }
 
 #[test]
