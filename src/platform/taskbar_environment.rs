@@ -30,6 +30,7 @@ impl Environment {
         // Failed or incomplete discovery is never proof that routing stayed
         // unchanged. Existing restore/reconnect validation handles this case.
         if !snapshot.monitor_warnings.is_empty()
+            || snapshot.taskbar_discovery_error.is_some()
             || snapshot.monitors.is_empty()
             || snapshot.taskbars.is_empty()
         {
@@ -89,6 +90,7 @@ mod tests {
             monitor_selection: None,
             target_plan: None,
             target_plan_error: None,
+            taskbar_discovery_error: None,
             monitors: (1..=2)
                 .map(|i| monitors::Display {
                     device: format!(r"\\.\DISPLAY{i}"),
@@ -165,6 +167,9 @@ mod tests {
         observed.monitor_warnings.push("hotplug in progress".into());
         assert!(Environment::from_diagnostics(&observed).is_none());
         observed.monitor_warnings.clear();
+        observed.taskbar_discovery_error = Some("incomplete window query".into());
+        assert!(Environment::from_diagnostics(&observed).is_none());
+        observed.taskbar_discovery_error = None;
         observed.taskbars[0].display_device = None;
         assert!(Environment::from_diagnostics(&observed).is_none());
     }

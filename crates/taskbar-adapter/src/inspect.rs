@@ -1,4 +1,4 @@
-use crate::{class_name, read_memory, wide, xaml};
+use crate::{read_memory, wide, xaml};
 use litetray_adapter_protocol::{
     HostLayout, InspectResponse, SymbolRole, TaskbarInspection, VERSION,
 };
@@ -211,14 +211,21 @@ pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
                     return response;
                 }
             };
-        let mut windows = Vec::<HWND>::new();
-        EnumThreadWindows(
-            GetCurrentThreadId(),
-            Some(collect),
-            &mut windows as *mut _ as isize,
-        );
-        for hwnd in windows {
-            let secondary = class_name(hwnd) == "Shell_SecondaryTrayWnd";
+        let windows = match crate::taskbar_windows::current_thread() {
+            Ok(windows) => windows,
+            Err(error) => {
+                response.error = Some(error);
+                return response;
+            }
+        };
+        for window in windows {
+            if let Err(error) = window.validate_current() {
+                response.taskbars.clear();
+                response.error = Some(error);
+                return response;
+            }
+            let hwnd = window.handle as HWND;
+            let secondary = window.secondary;
             let mut report = TaskbarInspection {
                 hwnd: hwnd as u64,
                 secondary,
@@ -329,17 +336,5 @@ pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
             response.taskbars.push(report);
         }
         response
-    }
-}
-unsafe extern "system" fn collect(hwnd: HWND, data: LPARAM) -> i32 {
-    unsafe {
-        if crate::is_taskbar(hwnd) {
-            let windows = &mut *(data as *mut Vec<HWND>);
-            if windows.len() >= 16 {
-                return 0;
-            }
-            windows.push(hwnd);
-        }
-        1
     }
 }

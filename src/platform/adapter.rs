@@ -238,11 +238,7 @@ fn inspect_with_layout(layout: HostLayout) -> Result<InspectResponse, String> {
         layout.validate()?;
         let library = super::dll::load(super::dll::Kind::Taskbar)?;
         let diagnostics = super::diagnostics::collect();
-        let taskbar = diagnostics
-            .taskbars
-            .iter()
-            .find(|t| t.class == "Shell_TrayWnd")
-            .ok_or("没有找到任务栏")?;
+        let taskbar = diagnostics.primary_taskbar()?;
         let class = super::wide(RECEIVER_CLASS);
         let instance = GetModuleHandleW(null());
         let wc = WNDCLASSW {

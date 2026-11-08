@@ -26,6 +26,7 @@ mod session;
 mod shell_source_checks;
 mod taskbar;
 mod taskbar_source;
+mod taskbar_windows;
 mod tray;
 mod tray_checks;
 mod tray_interaction;
@@ -243,12 +244,15 @@ unsafe fn class_name(hwnd: HWND) -> String {
 }
 unsafe fn report(reply: HWND, nonce: u64) {
     unsafe {
-        let mut windows = Vec::<serde_json::Value>::new();
-        EnumThreadWindows(
-            GetCurrentThreadId(),
-            Some(enum_window),
-            &mut windows as *mut _ as isize,
-        );
+        let (windows, error) = match taskbar_windows::current_thread().and_then(|windows| {
+            windows
+                .iter()
+                .map(|window| window_report(window))
+                .collect::<Result<Vec<_>, _>>()
+        }) {
+            Ok(windows) => (windows, None),
+            Err(error) => (Vec::new(), Some(error)),
+        };
         let mut modules = Vec::new();
         for name in [
             "explorer.exe",
@@ -266,7 +270,7 @@ unsafe fn report(reply: HWND, nonce: u64) {
             let n = GetModuleFileNameW(module, path.as_mut_ptr(), path.len() as u32) as usize;
             modules.push(serde_json::json!({"name":name,"base":module as usize,"path":String::from_utf16_lossy(&path[..n.min(path.len())]),"loaded_identity":loaded_identity(module as usize)}));
         }
-        let payload = serde_json::json!({"protocol":1,"nonce":nonce,"process_id":GetCurrentProcessId(),"thread_id":GetCurrentThreadId(),"taskbars":windows,"modules":modules,"changes_applied":false});
+        let payload = serde_json::json!({"protocol":1,"nonce":nonce,"process_id":GetCurrentProcessId(),"thread_id":GetCurrentThreadId(),"taskbars":windows,"modules":modules,"changes_applied":false,"error":error});
         let Ok(bytes) = serde_json::to_vec(&payload) else {
             return;
         };
@@ -365,17 +369,27 @@ unsafe fn loaded_identity(base: usize) -> Option<serde_json::Value> {
         None
     }
 }
-unsafe extern "system" fn enum_window(hwnd: HWND, data: LPARAM) -> i32 {
+unsafe fn window_report(
+    window: &taskbar_windows::TaskbarWindow,
+) -> Result<serde_json::Value, String> {
     unsafe {
-        if !is_taskbar(hwnd) {
-            return 1;
-        }
+        window.validate_current()?;
+        let hwnd = window.handle as HWND;
         let mut rect = std::mem::zeroed();
-        GetWindowRect(hwnd, &mut rect);
+        if GetWindowRect(hwnd, &mut rect) == 0 {
+            return Err("无法读取任务栏窗口边界，稍后重新检测".into());
+        }
         let mut children = Vec::<serde_json::Value>::new();
         EnumChildWindows(hwnd, Some(enum_child), &mut children as *mut _ as isize);
-        (&mut *(data as *mut Vec<serde_json::Value>)).push(serde_json::json!({"hwnd":hwnd as usize,"class":class_name(hwnd),"rect":[rect.left,rect.top,rect.right,rect.bottom],"children":children}));
-        1
+        window.validate_current()?;
+        let class = if window.secondary {
+            "Shell_SecondaryTrayWnd"
+        } else {
+            "Shell_TrayWnd"
+        };
+        Ok(
+            serde_json::json!({"hwnd":hwnd as usize,"class":class,"rect":[rect.left,rect.top,rect.right,rect.bottom],"children":children}),
+        )
     }
 }
 unsafe extern "system" fn enum_child(hwnd: HWND, data: LPARAM) -> i32 {

@@ -111,12 +111,10 @@ fn require_restored(before: &ClockObservation, after: &ClockObservation) -> Resu
 }
 fn inspect_primary(pid: u32, tid: u32, hwnd: u64) -> Result<InspectResponse, String> {
     let desktop = diagnostics::collect();
-    if !desktop.taskbars.iter().any(|bar| {
-        bar.class == "Shell_TrayWnd"
-            && bar.hwnd as u64 == hwnd
-            && bar.process_id == pid
-            && bar.thread_id == tid
-    }) {
+    let primary = desktop
+        .primary_taskbar()
+        .map_err(|error| format!("Explorer 主任务栏发现无效：{error}"))?;
+    if primary.hwnd as u64 != hwnd || primary.process_id != pid || primary.thread_id != tid {
         return Err("Explorer 主任务栏进程、线程或窗口在检查期间已变化".into());
     }
     let snapshot = crate::platform::adapter::inspect()?;
@@ -169,15 +167,9 @@ pub fn check_compatibility(config: &Config) -> Value {
             pump(Duration::from_millis(100));
         }
         let desktop = diagnostics::collect();
-        let primaries: Vec<_> = desktop
-            .taskbars
-            .iter()
-            .filter(|bar| bar.class == "Shell_TrayWnd")
-            .collect();
-        if primaries.len() != 1 {
-            return Err("未找到唯一的原生主任务栏，未接管".into());
-        }
-        let primary = primaries[0];
+        let primary = desktop
+            .primary_taskbar()
+            .map_err(|error| format!("未找到唯一的原生主任务栏，未接管：{error}"))?;
         let (pid, tid, hwnd) = (primary.process_id, primary.thread_id, primary.hwnd as u64);
         identity = Some((pid, tid, hwnd));
         report["explorer_before"] = json!({"process_id":pid,"thread_id":tid,"taskbar":hwnd});

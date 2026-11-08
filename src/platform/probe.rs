@@ -15,11 +15,8 @@ thread_local! {static RESPONSE:RefCell<Option<Value>>=const{RefCell::new(None)};
 /// integration check, not the long-lived adapter lifecycle.
 pub fn run() -> Result<Value, String> {
     unsafe {
-        let taskbars = super::diagnostics::collect().taskbars;
-        let taskbar = taskbars
-            .iter()
-            .find(|t| t.class == "Shell_TrayWnd")
-            .ok_or("未找到系统任务栏")?;
+        let diagnostics = super::diagnostics::collect();
+        let taskbar = diagnostics.primary_taskbar()?;
         let library = super::dll::load(super::dll::Kind::Taskbar)?;
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
