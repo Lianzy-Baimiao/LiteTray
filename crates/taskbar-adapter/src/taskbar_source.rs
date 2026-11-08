@@ -6,7 +6,7 @@ use crate::{
 };
 use litetray_adapter_protocol::{
     HostLayout,
-    compatibility::{self, SourceRecipe},
+    compatibility::{self, Profile, SourceRecipe},
 };
 use std::{mem::size_of, ptr::null_mut};
 use windows_sys::{Win32::Foundation::*, core::GUID};
@@ -14,21 +14,19 @@ const IID_CHILD: GUID = GUID::from_u128(0xec97afd0_5c0d_581b_9508_074773c6f1e0);
 pub(crate) struct Source {
     pub root: Object,
     pub source: Object,
+    pub profile: &'static Profile,
     // Keep the private host alive while source and discovery are consumed.
     _host: inspect::SharedHost,
     _child: Object,
 }
 pub(crate) unsafe fn resolve(hwnd: HWND, layout: &HostLayout) -> Result<Source, String> {
     unsafe {
-        let profile = compatibility::builtin()?;
+        let profile = compatibility::profile_for_taskbar(&layout.module)?;
         if layout != &profile.host {
             return Err("宿主布局与内置兼容资料不一致".into());
         }
-        let base = crate::compatibility::loaded(&profile.taskbar)?;
+        let base = inspect::validate_loaded(layout)?;
         let shell = crate::compatibility::loaded(&profile.shell)?;
-        if inspect::validate_loaded(layout)? != base {
-            return Err("任务栏模块不匹配".into());
-        }
         let host = inspect::host(
             hwnd,
             crate::class_name(hwnd) == "Shell_SecondaryTrayWnd",
@@ -73,6 +71,7 @@ pub(crate) unsafe fn resolve(hwnd: HWND, layout: &HostLayout) -> Result<Source, 
         Ok(Source {
             root,
             source,
+            profile,
             _host: host,
             _child: child,
         })

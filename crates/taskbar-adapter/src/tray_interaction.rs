@@ -735,10 +735,17 @@ unsafe extern "system" fn flyout_options(
 ) -> i32 {
     unsafe { show(&FLYOUT_OPTIONS_ORIGINAL, this, target, Some(options)) }
 }
-pub(crate) fn install() -> Result<(), String> {
-    static INSTALLED: OnceLock<Result<(), String>> = OnceLock::new();
-    INSTALLED.get_or_init(|| unsafe {
-        let addresses = crate::tray_symbols::resolve()?;
+pub(crate) fn install(
+    profile: &'static litetray_adapter_protocol::compatibility::Profile,
+) -> Result<(), String> {
+    // Every new session must still match the same disk and loaded image.
+    // Only the first installation checks unpatched function prefixes below.
+    unsafe {
+        crate::compatibility::loaded(&profile.tray)?;
+    }
+    static INSTALLED: OnceLock<Result<&'static str, String>> = OnceLock::new();
+    let installed = INSTALLED.get_or_init(|| unsafe {
+        let addresses = crate::tray_symbols::resolve(profile)?;
         let user32 = GetModuleHandleW(crate::wide("user32.dll").as_ptr());
         let dispatch_address = GetProcAddress(user32, c"DispatchMessageW".as_ptr().cast()).ok_or("DispatchMessageW 不可用")? as usize;
         let mut entries = vec![
@@ -758,8 +765,13 @@ pub(crate) fn install() -> Result<(), String> {
             entries.push(Entry { target: base.table::<IFlyoutBase_Vtbl>().ShowAt as usize, detour: regular, original: old, arguments: 2 });
             entries.push(Entry { target: base5.table::<IFlyoutBase5_Vtbl>().ShowAt as usize, detour: options, original: old_options, arguments: 3 });
         }
-            hooks::install(&entries, 5)
-    }).clone()
+            hooks::install(&entries, 5)?;
+            Ok(profile.id.as_str())
+    }).as_ref().map_err(Clone::clone)?;
+    if *installed != profile.id {
+        return Err("托盘钩子已绑定其他兼容资料，拒绝混用布局".into());
+    }
+    Ok(())
 }
 #[cfg(test)]
 mod tests {

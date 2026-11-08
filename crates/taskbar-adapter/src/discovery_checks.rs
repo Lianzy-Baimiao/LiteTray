@@ -117,7 +117,11 @@ pub(crate) fn run(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, Strin
         "choose clock texts separately from notification bell",
     )?;
     require(
-        View::discover(&crate::xaml::root_content(&source_panel)?).is_err(),
+        View::discover(
+            &crate::xaml::root_content(&source_panel)?,
+            litetray_adapter_protocol::compatibility::Topology::SystemTrayFrameV1,
+        )
+        .is_err(),
         "fixture does not impersonate production frame",
     )?;
     let mut checks = vec![

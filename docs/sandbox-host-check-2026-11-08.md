@@ -110,3 +110,9 @@ All WCP store corruptions were fixed
 此次 `checks_passed` 表示隔离检查按预期完成，不能将四项功能的 `unsupported_modules` 记为当前系统适配通过。自动 Explorer 接管未执行，时钟接管、托盘交互、退出恢复和多屏验证仍为 `not_run`；vGPU 关闭下的结果也不代表物理显卡或多屏验收。
 
 跨版本测试基础已准备好，见 [Sandbox / VM 使用说明](sandbox-compatibility.md)。真正的第二个 Windows 分支仍计划使用已有 25H2 Pro 26200.8457 镜像建立独立 VM；尚未创建或验收。
+
+## 后续 5.13.2 候选版客体接管验证
+
+22:41:41–22:42:06，加入精确 `windows11-26300.9818-x64` 档案后的 5.13.2 候选版，在禁网、vGPU 关闭的全新 Sandbox 中完成四项隔离检查、6 项私有 Shell 自检和真实主屏时钟接管检查；六个子进程实际退出码均为 0，无超时。真实时钟文字及 `240 → 320` DIP 宽度更新、Stop 后原生文字/布局/可见性恢复和托盘五区准备通过，Explorer 原进程 PID `4796` 保持不变。日历、滚轮、悬浮、托盘菜单、模型复制及多屏仍未验收。
+
+结果及后台自动流程见 [Sandbox / VM 使用说明](sandbox-compatibility.md)，模块与 ABI 依据见 [9818 兼容证据](compatibility-9818.md)。这是新候选版的后续验证，不改变上文 5.13.1 的退出码采集失败记录、模块不支持结论或宿主修复阶段的测量。

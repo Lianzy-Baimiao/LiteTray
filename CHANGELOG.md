@@ -2,6 +2,13 @@
 
 [返回项目介绍](README.md) · [GitHub Releases](https://github.com/Lianzy-Baimiao/LiteTray/releases)
 
+## 5.13.2
+
+- 新增 Windows 11 `26300.9818` 对应 x64 Shell 模块的兼容资料，保留 `26300.9711`。使用匹配微软 PDB 重新核对宿主入口、对象字段、虚表和托盘坐标 ABI，已在沙盒实际完成主屏时钟接管、更新和停止恢复，以及托盘接口准备检查。
+- EXE、Explorer 适配器和私有宿主检查按完整模块身份选择同一份资料；未知、歧义和混合模块继续拒绝相关接管。报告在没有匹配资料时返回 `profile_id: null`，不会错误显示旧版本资料已适用。
+- 新增 `--test-taskbar-compatibility <新报告.json>` 及独立 Sandbox live 检查脚本，记录接管前、活动时和恢复后的实际文字/布局与 Explorer 进程连续性。修复 Windows PowerShell 5.1 的退出码采集，失败和超时不会被正确 JSON 掩盖。
+- 新版的单屏沙盒结果不代表多屏复制、混合 DPI、真实鼠标菜单或全部历史 Windows 已验收。精确模块、测试范围与二进制哈希见 [9818 兼容验证](docs/compatibility-9818.md)。
+
 ## 5.13.1
 
 - 普通设备变更通知先核对显示器与任务栏身份；拓扑未变时保留时钟连接，避免 USB、蓝牙等无关变化导致原生时钟短暂闪回。连接准备期间的变更会保留到连接后复查，真实显示变化与 Explorer 重建仍触发恢复。

@@ -17,9 +17,10 @@ function Run-Export([string]$Name,[string[]]$Arguments,[bool]$ShouldSucceed=$tru
     $stdout=Join-Path $directory "$Name.stdout.txt"
     $stderr=Join-Path $directory "$Name.stderr.txt"
     $process=Start-Process -FilePath $isolated -ArgumentList $Arguments -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $null=$process.Handle
     if(-not $process.WaitForExit(15000)) { $process.Kill(); throw "Compatibility export timed out: $directory" }
     $process.WaitForExit()
-    if(($process.ExitCode -eq 0) -ne $ShouldSucceed) { throw "Unexpected exit $($process.ExitCode): $(Get-Content -LiteralPath $stderr -Raw)" }
+    if($null -eq $process.ExitCode -or ($process.ExitCode -eq 0) -ne $ShouldSucceed) { throw "Unexpected exit $($process.ExitCode): $(Get-Content -LiteralPath $stderr -Raw)" }
 }
 try {
     $env:LITETRAY_DATA_DIR=$data
@@ -36,7 +37,7 @@ try {
     $missing=Join-Path $directory 'offline.json'
     Run-Export 'offline' @('--compatibility-report',('"'+$missing+'"'),'--system-root',('"'+$offline+'"'))
     $result=Get-Content -LiteralPath $missing -Raw|ConvertFrom-Json
-    if($null -ne $result.os_build -or $result.all_profile_images_matched -ne $false -or $result.modules[0].status -ne 'invalid_image' -or $result.modules[1].status -ne 'missing' -or $result.features[0].status -ne 'inspection_failed') {throw 'Offline failures misreported as support'}
+    if($null -ne $result.os_build -or $null -ne $result.profile_id -or [string]::IsNullOrWhiteSpace($result.profile_selection_reason) -or $result.all_profile_images_matched -ne $false -or $result.modules[0].status -ne 'invalid_image' -or $result.modules[1].status -ne 'missing' -or $result.features[0].status -ne 'inspection_failed') {throw 'Offline failures misreported as support'}
     if((Get-FileHash -LiteralPath $config).Hash -ne $before -or (Test-Path -LiteralPath (Join-Path $data 'symbols')) -or (Test-Path -LiteralPath (Join-Path $data 'adapters'))) {throw 'Disk export changed config or created symbol caches'}
     [pscustomobject]@{Passed=$true; Checks=5; CurrentImagesMatched=$report.all_profile_images_matched; Logs=$directory}
 } finally { [Environment]::SetEnvironmentVariable('LITETRAY_DATA_DIR',$previous,'Process') }

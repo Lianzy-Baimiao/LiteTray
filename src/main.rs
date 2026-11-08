@@ -20,6 +20,7 @@ fn main() {
                     | "--self-test-clock"
                     | "--test-secondary-clock"
                     | "--test-secondary-tray"
+                    | "--test-taskbar-compatibility"
                     | "--self-test-shell-source"
                     | "--self-test-preview-recovery"
                     | "--self-test-clock-owner"
@@ -110,6 +111,38 @@ fn run() -> Result<(), String> {
     }
     let config = config::load(&config::data_dir().join("config.json"))?;
     match arguments.first().map(String::as_str) {
+        Some("--test-taskbar-compatibility") => {
+            if arguments.len() != 2 {
+                return Err("用法：--test-taskbar-compatibility <新报告.json>（显式接管主屏后恢复，仅在隔离测试系统运行）".into());
+            }
+            // Create the report first: an invalid/existing output must not
+            // initiate a live Explorer transaction without preserving evidence.
+            use std::io::Write;
+            let output = std::path::Path::new(&arguments[1]);
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(output)
+                .map_err(|e| format!("实机检查报告无法创建，未接管任务栏：{e}"))?;
+            file.write_all(
+                b"{\"passed\":false,\"status\":\"started\",\"scope\":\"primary_taskbar_live\"}\n",
+            )
+            .and_then(|_| file.sync_all())
+            .map_err(|e| e.to_string())?;
+            drop(file);
+            let result = platform::taskbar_clock::check_compatibility(&config);
+            let text = serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?;
+            config::atomic_write(output, text.as_bytes())?;
+            println!("{text}");
+            if result["passed"] == true {
+                Ok(())
+            } else {
+                Err(format!(
+                    "任务栏实机兼容检查未通过，详情见 {}",
+                    output.display()
+                ))
+            }
+        }
         Some("--test-secondary-clock") | Some("--test-secondary-tray") => {
             let report = arguments.get(1).ok_or("请提供副屏实机测试报告路径")?;
             let result = if arguments[0] == "--test-secondary-tray" {
@@ -236,7 +269,7 @@ fn run() -> Result<(), String> {
         }
         Some("--help") => {
             println!(
-                "LiteTray [--settings | --calendar | --clock-preview | --background | --show-secondary [calendar|agenda|timers|clock|weather-format|appearance] | --diagnose [file] | --compatibility-report <new-report.json> [--system-root <Windows-directory>] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-app-icon | --self-test-clock | --self-test-shell-source | --self-test-preview-recovery | --test-secondary-clock <report.json> | --test-secondary-tray <report.json> | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
+                "LiteTray [--settings | --calendar | --clock-preview | --background | --show-secondary [calendar|agenda|timers|clock|weather-format|appearance] | --diagnose [file] | --compatibility-report <new-report.json> [--system-root <Windows-directory>] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-app-icon | --self-test-clock | --self-test-shell-source | --self-test-preview-recovery | --test-secondary-clock <report.json> | --test-secondary-tray <report.json> | --test-taskbar-compatibility <new-report.json> (LIVE primary takeover and restore; isolated test systems only) | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
             );
             Ok(())
         }

@@ -5,25 +5,19 @@ use litetray_adapter_protocol::{
 use std::{ffi::c_void, mem::size_of, ptr::null_mut};
 use windows_sys::Win32::{
     Foundation::*,
-    System::{LibraryLoader::*, Memory::*, Threading::*},
+    System::{Memory::*, Threading::*},
     UI::WindowsAndMessaging::*,
 };
 
 /// All entry addresses are validated before any undocumented function is called.
 pub(crate) unsafe fn validate_loaded(layout: &HostLayout) -> Result<usize, String> {
     unsafe {
-        layout.validate()?;
-        let module = GetModuleHandleW(wide("taskbar.dll").as_ptr()) as usize;
-        if module == 0 {
-            return Err("taskbar.dll 尚未加载".into());
+        let profile =
+            litetray_adapter_protocol::compatibility::profile_for_taskbar(&layout.module)?;
+        if layout != &profile.host {
+            return Err("宿主布局与内置兼容资料不一致".into());
         }
-        let loaded = crate::loaded_identity(module).ok_or("无法读取已加载模块的完整 PDB 身份")?;
-        let expected = serde_json::to_value(&layout.module).map_err(|e| e.to_string())?;
-        for field in ["machine", "timestamp", "image_size", "pdb_guid", "pdb_age"] {
-            if loaded[field] != expected[field] {
-                return Err(format!("已加载 taskbar.dll 与符号不匹配：{field}"));
-            }
-        }
+        let module = crate::compatibility::loaded(&profile.taskbar)?;
         for symbol in &layout.symbols {
             let address = module
                 .checked_add(symbol.rva as usize)
@@ -209,6 +203,14 @@ pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
                 return response;
             }
         };
+        let profile =
+            match litetray_adapter_protocol::compatibility::profile_for_taskbar(&layout.module) {
+                Ok(profile) => profile,
+                Err(error) => {
+                    response.error = Some(error);
+                    return response;
+                }
+            };
         let mut windows = Vec::<HWND>::new();
         EnumThreadWindows(
             GetCurrentThreadId(),
@@ -230,14 +232,16 @@ pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
                 geometry_error: None,
             };
             match content(hwnd, secondary, module, layout).and_then(|root| {
-                report.topology = Some(match crate::discovery::View::discover(&root) {
-                    Ok(view) => view.report,
-                    Err(error) => litetray_adapter_protocol::topology::Report {
-                        elements: vec![],
-                        selection: None,
-                        error: Some(error),
+                report.topology = Some(
+                    match crate::discovery::View::discover(&root, profile.topology) {
+                        Ok(view) => view.report,
+                        Err(error) => litetray_adapter_protocol::topology::Report {
+                            elements: vec![],
+                            selection: None,
+                            error: Some(error),
+                        },
                     },
-                });
+                );
                 let binding = crate::taskbar_source::resolve(hwnd, layout).and_then(|source| {
                     crate::island::Binding::capture(hwnd, &source.source, &root)
                 });

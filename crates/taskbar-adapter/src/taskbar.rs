@@ -84,7 +84,7 @@ unsafe fn prepare(request: &Prepare) -> Result<Reply, String> {
             .collect::<Result<Vec<_>, _>>()?;
         let views = sources
             .iter()
-            .map(|s| View::discover(&s.root))
+            .map(|s| View::discover(&s.root, s.profile.topology))
             .collect::<Result<Vec<_>, _>>()?;
         let bound = routes
             .iter()
@@ -105,7 +105,10 @@ unsafe fn prepare(request: &Prepare) -> Result<Reply, String> {
         }
         let receiver = request.owner.receiver as HWND;
         let interaction = if request.mirror_icons {
-            crate::tray_interaction::install()?;
+            let profile = litetray_adapter_protocol::compatibility::profile_for_taskbar(
+                &request.layout.module,
+            )?;
+            crate::tray_interaction::install(profile)?;
             Some(crate::tray_interaction::Runtime::new(
                 bound
                     .iter()

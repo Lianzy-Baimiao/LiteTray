@@ -4,7 +4,10 @@ use crate::{HostLayout, ModuleIdentity};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
-const PROFILE_BYTES: &[u8] = include_bytes!("../profiles/windows11-26300.9711-x64.json");
+const PROFILE_BYTES: &[&[u8]] = &[
+    include_bytes!("../profiles/windows11-26300.9711-x64.json"),
+    include_bytes!("../profiles/windows11-26300.9818-x64.json"),
+];
 const MAX_PROFILE: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -191,27 +194,104 @@ impl Profile {
     }
 }
 
-pub fn builtin() -> Result<&'static Profile, String> {
-    static PROFILE: OnceLock<Result<Profile, String>> = OnceLock::new();
-    PROFILE
-        .get_or_init(|| Profile::decode(PROFILE_BYTES))
+fn decode_profiles(sources: &[&[u8]]) -> Result<Vec<Profile>, String> {
+    if sources.is_empty() {
+        return Err("没有内置兼容资料".into());
+    }
+    let profiles = sources
+        .iter()
+        .map(|bytes| Profile::decode(bytes))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut ids = std::collections::BTreeSet::new();
+    if profiles.iter().any(|profile| !ids.insert(&profile.id)) {
+        return Err("内置兼容资料标识重复".into());
+    }
+    Ok(profiles)
+}
+
+/// Validated, embedded evidence only. Registry order is not a compatibility
+/// preference: callers must select an exact module identity, never a default.
+pub fn profiles() -> Result<&'static [Profile], String> {
+    static PROFILES: OnceLock<Result<Vec<Profile>, String>> = OnceLock::new();
+    PROFILES
+        .get_or_init(|| decode_profiles(PROFILE_BYTES))
         .as_ref()
+        .map(Vec::as_slice)
         .map_err(Clone::clone)
+}
+
+fn select_taskbar<'a>(
+    profiles: &'a [Profile],
+    identity: &ModuleIdentity,
+) -> Result<&'a Profile, String> {
+    identity.validate()?;
+    let mut matching = profiles
+        .iter()
+        .filter(|profile| profile.taskbar.identity == *identity);
+    let profile = matching
+        .next()
+        .ok_or("尚无与 taskbar.dll 完整身份匹配的内置兼容资料")?;
+    if matching.next().is_some() {
+        return Err("多个内置兼容资料匹配同一 taskbar.dll 身份，拒绝选择".into());
+    }
+    Ok(profile)
+}
+
+/// Selects a single coherent profile from the complete taskbar identity.
+/// Disk callers must additionally check its SHA-256; loaded callers must check
+/// every required loaded module against this same profile before activation.
+pub fn profile_for_taskbar(identity: &ModuleIdentity) -> Result<&'static Profile, String> {
+    select_taskbar(profiles()?, identity)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn changed_identities(original: &ModuleIdentity) -> Vec<ModuleIdentity> {
+        let mut changed = vec![original.clone(); 5];
+        changed[0].machine = 0xaa64;
+        changed[1].timestamp ^= 1;
+        changed[2].image_size += 4096;
+        changed[3].pdb_age += 1;
+        changed[4].pdb_guid[0] ^= 0xff;
+        changed
+    }
+
     #[test]
-    fn embedded_profile_is_complete_and_round_trips() {
-        let profile = builtin().unwrap();
-        let encoded = serde_json::to_vec(profile).unwrap();
-        assert_eq!(Profile::decode(&encoded).unwrap().host, profile.host);
-        assert_eq!(profile.tray_entries.len(), 3);
+    fn embedded_profiles_are_complete_and_selected_by_exact_taskbar_identity() {
+        let profiles = profiles().unwrap();
+        for id in ["windows11-26300.9711-x64", "windows11-26300.9818-x64"] {
+            let profile = profiles.iter().find(|profile| profile.id == id).unwrap();
+            let encoded = serde_json::to_vec(profile).unwrap();
+            assert_eq!(Profile::decode(&encoded).unwrap().host, profile.host);
+            assert_eq!(profile.tray_entries.len(), 3);
+            assert_eq!(
+                profile_for_taskbar(&profile.taskbar.identity).unwrap().id,
+                id
+            );
+        }
+    }
+    #[test]
+    fn unknown_or_ambiguous_taskbar_identity_never_selects_a_default_profile() {
+        let profile = profiles().unwrap()[0].clone();
+        for unknown in changed_identities(&profile.taskbar.identity) {
+            assert!(profile_for_taskbar(&unknown).is_err());
+        }
+        let mut duplicate = profile.clone();
+        duplicate.id = "ambiguous-test-profile".into();
+        assert!(select_taskbar(&[profile.clone(), duplicate], &profile.taskbar.identity).is_err());
+        assert!(select_taskbar(&[], &profile.taskbar.identity).is_err());
+    }
+    #[test]
+    fn invalid_registry_entries_or_duplicate_ids_reject_the_registry() {
+        assert!(decode_profiles(&[]).is_err());
+        assert!(decode_profiles(&[PROFILE_BYTES[0], b"{}"]).is_err());
+        assert!(decode_profiles(&[PROFILE_BYTES[0], PROFILE_BYTES[0]]).is_err());
     }
     #[test]
     fn malformed_profiles_cannot_supply_paths_abis_or_out_of_bounds_addresses() {
-        let original: serde_json::Value = serde_json::from_slice(PROFILE_BYTES).unwrap();
+        let original: serde_json::Value = serde_json::from_slice(PROFILE_BYTES[0]).unwrap();
         for (path, value) in [
             ("/schema", serde_json::json!(2)),
             ("/source/recipe", serde_json::json!("scan_any_pointer")),
@@ -241,13 +321,23 @@ mod tests {
     }
     #[test]
     fn disk_and_loaded_identities_are_independent_requirements() {
-        let module = &builtin().unwrap().taskbar;
-        assert!(module.matches(&module.sha256, &module.identity));
-        assert!(!module.matches(&"0".repeat(64), &module.identity));
-        let mut loaded = serde_json::to_value(&module.identity).unwrap();
-        assert!(module.matches_loaded(&loaded));
-        loaded["pdb_age"] = serde_json::json!(module.identity.pdb_age + 1);
-        assert!(!module.matches_loaded(&loaded));
-        assert!(!module.matches_loaded(&serde_json::json!({})));
+        for profile in profiles().unwrap() {
+            for module in profile.modules() {
+                assert!(module.matches(&module.sha256, &module.identity));
+                assert!(!module.matches(&"0".repeat(64), &module.identity));
+                let loaded = serde_json::to_value(&module.identity).unwrap();
+                assert!(module.matches_loaded(&loaded));
+                for changed in changed_identities(&module.identity) {
+                    assert!(!module.matches(&module.sha256, &changed));
+                    assert!(!module.matches_loaded(&serde_json::to_value(changed).unwrap()));
+                }
+                assert!(!module.matches_loaded(&serde_json::json!({})));
+            }
+        }
+        let profiles = profiles().unwrap();
+        for (old, new) in profiles[0].modules().into_iter().zip(profiles[1].modules()) {
+            assert!(!old.matches(&new.sha256, &new.identity));
+            assert!(!old.matches_loaded(&serde_json::to_value(&new.identity).unwrap()));
+        }
     }
 }

@@ -1,9 +1,8 @@
 //! Exact-build SystemTray entry points, resolved from the matching Microsoft
 //! PDB offline. Reject changed images and pre-existing function patches.
-use litetray_adapter_protocol::compatibility::{self, TrayAbi};
-pub(crate) fn resolve() -> Result<[usize; 3], String> {
+use litetray_adapter_protocol::compatibility::{Profile, TrayAbi};
+pub(crate) fn resolve(profile: &Profile) -> Result<[usize; 3], String> {
     unsafe {
-        let profile = compatibility::builtin()?;
         let TrayAbi::SystemTrayCoordinatesX64V1 = profile.tray_abi;
         let module = crate::compatibility::loaded(&profile.tray)?;
         let mut addresses = [0; 3];

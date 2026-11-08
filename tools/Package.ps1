@@ -78,6 +78,7 @@ $documents += @('docs/stability-5.13.1.md')
 $documents += @('docs/sandbox-compatibility.md','docs/compatibility-matrix.template.json')
 $documents += @('docs/sandbox-host-check-2026-11-08.md')
 $documents += @('crates/adapter-protocol/profiles/README.md','crates/adapter-protocol/profiles/windows11-26300.9711-x64.json')
+$documents += @('crates/adapter-protocol/profiles/windows11-26300.9818-x64.json','docs/compatibility-9818.md')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null

@@ -26,7 +26,7 @@ use windows_sys::Win32::{
 pub const WM_ACTIVATED: u32 = WM_APP + 12;
 #[path = "taskbar_live_checks.rs"]
 mod live_checks;
-pub use live_checks::{check_secondary, check_secondary_tray};
+pub use live_checks::{check_compatibility, check_secondary, check_secondary_tray};
 pub struct Native {
     main: HWND,
 }

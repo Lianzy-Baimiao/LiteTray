@@ -15,7 +15,7 @@ use crate::{
 };
 use litetray_adapter_protocol::{
     clock::{Frame, Owner, Style, Text},
-    compatibility::builtin,
+    compatibility::{Profile, profiles},
     routing::{Options, Plan, Route},
 };
 use std::{
@@ -75,11 +75,14 @@ impl Drop for Parent {
         }
     }
 }
-struct Module(HMODULE);
+struct Module {
+    handle: HMODULE,
+    profile: &'static Profile,
+}
 impl Drop for Module {
     fn drop(&mut self) {
         unsafe {
-            FreeLibrary(self.0);
+            FreeLibrary(self.handle);
         }
     }
 }
@@ -99,18 +102,30 @@ fn inspected_module() -> Result<Module, String> {
         cfg!(target_arch = "x86_64"),
         "only inspected x64 ABI is supported",
     )?;
-    let profile = builtin()?;
-    let path = crate::compatibility::verified_file(&profile.shell)?;
-    let module = Module(unsafe {
-        LoadLibraryExW(
-            wide(&path.to_string_lossy()).as_ptr(),
-            null_mut(),
-            LOAD_LIBRARY_SEARCH_SYSTEM32,
-        )
-    });
-    require(!module.0.is_null(), "load inspected system module")?;
+    let mut candidates = profiles()?
+        .iter()
+        .filter(|profile| crate::compatibility::verified_file(&profile.taskbar).is_ok());
+    let profile = candidates
+        .next()
+        .ok_or("没有与当前任务栏模块匹配的内置兼容资料")?;
     require(
-        unsafe { crate::compatibility::loaded(&profile.shell)? } == module.0 as usize,
+        candidates.next().is_none(),
+        "one exact taskbar compatibility profile",
+    )?;
+    let path = crate::compatibility::verified_file(&profile.shell)?;
+    let module = Module {
+        handle: unsafe {
+            LoadLibraryExW(
+                wide(&path.to_string_lossy()).as_ptr(),
+                null_mut(),
+                LOAD_LIBRARY_SEARCH_SYSTEM32,
+            )
+        },
+        profile,
+    };
+    require(!module.handle.is_null(), "load inspected system module")?;
+    require(
+        unsafe { crate::compatibility::loaded(&profile.shell)? } == module.handle as usize,
         "loaded image and PDB identity",
     )?;
     Ok(module)
@@ -165,13 +180,13 @@ impl Host {
             };
             require(
                 pointer(host.child.raw() as usize)?
-                    == module.0 as usize + builtin()?.source.child_vtable_rva as usize,
+                    == module.handle as usize + module.profile.source.child_vtable_rva as usize,
                 "inspected concrete child vtable",
             )?;
             // Exact image + exact interface vtable + own freshly created host.
             // Offline getter chain: ABI this - 0x10, then member + 0x20.
             let source = pointer(
-                host.child.raw() as usize + builtin()?.source.child_source_offset as usize,
+                host.child.raw() as usize + module.profile.source.child_source_offset as usize,
             )?;
             let source = Object::query_borrowed(source as *mut _, &IID_IDesktopWindowXamlSource)?;
             let native = source.query(&IID_NATIVE)?;
@@ -377,7 +392,7 @@ pub(crate) fn run() -> Result<serde_json::Value, String> {
     let factory = factory(CLASS, &IID_FACTORY)?;
     require(
         pointer(factory.raw() as usize)?
-            == module.0 as usize + builtin()?.source.factory_vtable_rva as usize,
+            == module.handle as usize + module.profile.source.factory_vtable_rva as usize,
         "inspected concrete factory vtable",
     )?;
     let first = Host::create(&module, &factory)?;
@@ -565,6 +580,7 @@ pub(crate) fn run() -> Result<serde_json::Value, String> {
     checks.push("shell_own_host_close_invalidates_public_source_binding");
     Ok(
         serde_json::json!({ "passed": true, "environment": "isolated_private_shell_host_in_app_process", "explorer_accessed": false,
-        "module_sha256": builtin()?.shell.sha256, "checks": checks, "production_taskbar_verified": false, "input_method": "retained_native_delegate" }),
+        "profile_id": module.profile.id, "module_sha256": module.profile.shell.sha256,
+        "checks": checks, "production_taskbar_verified": false, "input_method": "retained_native_delegate" }),
     )
 }

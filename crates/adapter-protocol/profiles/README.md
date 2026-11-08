@@ -8,8 +8,16 @@ Provenance: [source binding](../../../docs/taskbar-source-binding.md),
 [adapter ABI](../../taskbar-adapter/ABI.md) and
 [live acceptance](../../../docs/live-clock-acceptance.md).
 
-The JSON is compiled into both host and adapter with `include_bytes!`.
-`compatibility::builtin()` validates it once. The production path does not
+`windows11-26300.9818-x64.json` adds the exact updated module set. Its symbol,
+layout and validation evidence is recorded in
+[the 9818 compatibility record](../../../docs/compatibility-9818.md).
+
+The JSON files are compiled into both host and adapter with `include_bytes!`.
+`compatibility::profiles()` validates the registry once. Selection uses the
+complete taskbar image identity and additionally requires its disk SHA-256;
+the selected profile supplies all required shell and tray evidence. Unknown
+or ambiguous taskbar identities do not fall back to another profile, and
+modules from different profiles cannot be combined. The production path does not
 accept external JSON overrides. Recipe and ABI enums name Rust implementations;
 data cannot add a new calling convention or arbitrary memory operation.
 

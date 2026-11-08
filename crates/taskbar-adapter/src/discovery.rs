@@ -110,9 +110,11 @@ impl View {
     }
     /// Only this entry is used for a native TaskbarHost root. It deliberately
     /// has no fallback to recursive substring/name matching.
-    pub(crate) fn discover(root: &Object) -> Result<Self, String> {
-        let litetray_adapter_protocol::compatibility::Topology::SystemTrayFrameV1 =
-            litetray_adapter_protocol::compatibility::builtin()?.topology;
+    pub(crate) fn discover(
+        root: &Object,
+        topology: litetray_adapter_protocol::compatibility::Topology,
+    ) -> Result<Self, String> {
+        let litetray_adapter_protocol::compatibility::Topology::SystemTrayFrameV1 = topology;
         let frames = children(root)?
             .into_iter()
             .filter_map(|node| match node.class_name() {
