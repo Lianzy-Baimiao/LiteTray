@@ -2,6 +2,7 @@ pub mod almanac;
 pub mod clock;
 pub mod compatibility;
 pub mod config;
+pub mod event_log;
 pub mod festivals;
 pub mod holidays;
 pub mod http;

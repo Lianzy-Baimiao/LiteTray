@@ -247,6 +247,7 @@ impl Watchdog {
                 let allowed = context
                     .with_session(|session| session.validate_input(unsafe { GetTickCount64() }));
                 if let Err(error) = allowed {
+                    crate::events::record("input validation stopped", &error);
                     *context.error.borrow_mut() = Some(error);
                     return false;
                 }
@@ -386,7 +387,13 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     let bytes =
                         std::slice::from_raw_parts(copy.lpData.cast::<u8>(), copy.cbData as usize)
                             .to_vec();
-                    context.receive(&bytes).is_ok()
+                    match context.receive(&bytes) {
+                        Ok(()) => true,
+                        Err(error) => {
+                            crate::events::record("command rejected", &error);
+                            false
+                        }
+                    }
                 } else {
                     // A reentrant timer is skipped, without replacing the last
                     // error or extending the session's lease.
@@ -395,6 +402,11 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     }
                     let result = context
                         .with_session(|session| session.poll(GetTickCount64(), context.alive()));
+                    if let Err(error) = &result
+                        && context.error.borrow().as_ref() != Some(error)
+                    {
+                        crate::events::record("session poll stopped", error);
+                    }
                     *context.error.borrow_mut() = result.err();
                     false
                 };

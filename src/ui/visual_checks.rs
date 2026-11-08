@@ -3017,6 +3017,143 @@ fn inline_draft_survives_hidden_flyout_theme_refresh_and_failed_save() {
 }
 
 #[test]
+fn device_notifications_preserve_open_calendar_until_display_layout_changes() {
+    on_isolated_desktop(|| unsafe {
+        struct ProfileGuard {
+            directory: std::path::PathBuf,
+            parent: std::path::PathBuf,
+            previous: Option<std::ffi::OsString>,
+        }
+        impl Drop for ProfileGuard {
+            fn drop(&mut self) {
+                // This runs only in the dedicated child process, including
+                // assertion unwinding, so test logging never uses the profile.
+                unsafe {
+                    if let Some(previous) = &self.previous {
+                        std::env::set_var("LITETRAY_DATA_DIR", previous);
+                    } else {
+                        std::env::remove_var("LITETRAY_DATA_DIR");
+                    }
+                }
+                if let Ok(resolved) = std::fs::canonicalize(&self.directory)
+                    && resolved == self.directory
+                    && resolved.parent() == Some(self.parent.as_path())
+                {
+                    // Check the resolved absolute target immediately before
+                    // recursively removing only this test-created directory.
+                    let _ = std::fs::remove_dir_all(resolved);
+                }
+            }
+        }
+        assert!(std::env::var_os("LITETRAY_ISOLATED_SETTINGS_TEST").is_some());
+        let parent = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        let directory = parent.join(format!(
+            "litetray-panel-device-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let directory = std::fs::canonicalize(directory).unwrap();
+        assert_eq!(directory.parent(), Some(parent.as_path()));
+        let profile = ProfileGuard {
+            directory,
+            parent,
+            previous: std::env::var_os("LITETRAY_DATA_DIR"),
+        };
+        std::env::set_var("LITETRAY_DATA_DIR", &profile.directory);
+        let mut app = app_for_check(false, 96, &profile.directory.join("agenda.json"));
+        app.monitor_snapshot = displays::collect();
+        assert!(!app.monitor_snapshot.displays.is_empty());
+        app.prewarm_panels();
+        let hwnd = app.hwnd;
+        let popup = app.panel_cache[0];
+        app.panel = popup;
+        ShowWindow(popup, SW_SHOWNOACTIVATE);
+        let view = GetDlgItem(popup, dashboard::ID as i32);
+        STATE.with(|state| *state.borrow_mut() = Some(app));
+
+        // Replay the actual notification/timer path, including a nested
+        // message while settings holds App. No shell service or tray icon is
+        // registered by this fixture, and only its own windows receive it.
+        STATE.with(|state| {
+            let _held = state.borrow_mut();
+            SendMessageW(hwnd, WM_DEVICECHANGE, DBT_DEVNODES_CHANGED as usize, 0);
+            SendMessageW(hwnd, WM_TIMER, 2, 0);
+        });
+        SendMessageW(hwnd, WM_TIMER, 2, 0);
+        assert_ne!(
+            IsWindowVisible(popup),
+            0,
+            "device noise closed the calendar"
+        );
+        assert_eq!(GetDlgItem(popup, dashboard::ID as i32), view);
+        assert_eq!(
+            STATE.with(|state| state.borrow().as_ref().unwrap().panel),
+            popup
+        );
+
+        // A changed work area must still rebuild the attached layout, even
+        // when the only available notification was the generic device event.
+        STATE.with(|state| {
+            state
+                .borrow_mut()
+                .as_mut()
+                .unwrap()
+                .monitor_snapshot
+                .displays[0]
+                .work[3] -= 1;
+        });
+        SendMessageW(hwnd, WM_DEVICECHANGE, DBT_DEVNODES_CHANGED as usize, 0);
+        SendMessageW(hwnd, WM_TIMER, 2, 0);
+        assert_eq!(IsWindow(popup), 0, "changed work area retained stale panel");
+
+        // Display and power events explicitly invalidate caches even if the
+        // same geometry returns. A later soft event cannot clear that intent.
+        for (message, value) in [
+            (WM_DISPLAYCHANGE, 0),
+            (WM_POWERBROADCAST, PBT_APMRESUMEAUTOMATIC as usize),
+        ] {
+            let popup = STATE.with(|state| {
+                let mut state = state.borrow_mut();
+                let app = state.as_mut().unwrap();
+                app.prewarm_panels();
+                let popup = app.panel_cache[0];
+                app.panel = popup;
+                ShowWindow(popup, SW_SHOWNOACTIVATE);
+                popup
+            });
+            STATE.with(|state| {
+                let _held = state.borrow_mut();
+                SendMessageW(hwnd, message, value, 0);
+                SendMessageW(hwnd, WM_DEVICECHANGE, DBT_DEVNODES_CHANGED as usize, 0);
+                SendMessageW(hwnd, WM_TIMER, 2, 0);
+            });
+            SendMessageW(hwnd, WM_TIMER, 2, 0);
+            assert_eq!(
+                IsWindow(popup),
+                0,
+                "hard notification lost while App was borrowed"
+            );
+        }
+        STATE.with(|state| {
+            let mut app = state.borrow_mut().take().unwrap();
+            app.close_panel();
+            DestroyWindow(hwnd);
+            app.release_resources();
+        });
+        RoUninitialize();
+        assert_external_foreground();
+        let events = std::fs::read_to_string(profile.directory.join("taskbar-events.log")).unwrap();
+        assert!(events.contains(&format!("pid={} ", std::process::id())));
+        assert!(events.contains("devices changed: WM_DEVICECHANGE"));
+        eprintln!("isolated panel notification log pid={}", std::process::id());
+        let directory = profile.directory.clone();
+        drop(profile);
+        assert!(!directory.exists(), "isolated profile was not removed");
+    });
+}
+
+#[test]
 fn hidden_calendar_cache_reuses_controls_and_tracks_new_anchor() {
     on_isolated_desktop(|| unsafe {
         let mut app = app_for_check(

@@ -21,6 +21,38 @@ pub struct Snapshot {
     pub displays: Vec<Display>,
     pub warnings: Vec<String>,
 }
+/// Calendar placement depends on the desktop/work areas and their physical
+/// targets, not display enumeration order or a refreshed friendly name. This
+/// comparison is only for UI cache invalidation, never taskbar ABI validation.
+pub fn same_panel_layout(previous: &Snapshot, current: &Snapshot) -> bool {
+    if previous.displays.is_empty() || current.displays.is_empty() {
+        return false;
+    }
+    let layout = |snapshot: &Snapshot| {
+        let mut areas = snapshot
+            .displays
+            .iter()
+            .map(|display| {
+                let mut targets = display
+                    .targets
+                    .iter()
+                    .map(|target| target.id.to_ascii_lowercase())
+                    .collect::<Vec<_>>();
+                targets.sort();
+                (
+                    display.device.to_ascii_lowercase(),
+                    display.primary,
+                    display.rect,
+                    display.work,
+                    targets,
+                )
+            })
+            .collect::<Vec<_>>();
+        areas.sort();
+        areas
+    };
+    layout(previous) == layout(current)
+}
 #[derive(Debug, Clone, Serialize)]
 pub struct Selection {
     /// GDI source names to resolve to current taskbars, never persisted.

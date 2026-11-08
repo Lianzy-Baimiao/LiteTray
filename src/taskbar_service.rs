@@ -14,6 +14,9 @@ use std::{
 
 pub trait Session {
     fn update(&self, frame: &Frame) -> Result<(), String>;
+    /// Read-only comparison with the display/taskbar snapshot used at connect.
+    /// An inconclusive observation must return false.
+    fn environment_matches(&self) -> bool;
     /// Success proves restoration, or that the retained native process exited.
     fn stop(&self) -> Result<(), String>;
     fn take_activation(&self) -> Option<Activation>;
@@ -89,6 +92,7 @@ pub struct Service<B: Backend> {
     // borrow a connection while its XAML/WM_COPYDATA call is in progress.
     driver: RefCell<Option<Driver<B>>>,
     invalidated: Cell<bool>,
+    devices_changed: Cell<bool>,
     stop_requested: Cell<bool>,
 }
 impl<B: Backend> Service<B> {
@@ -106,6 +110,7 @@ impl<B: Backend> Service<B> {
                 pending: None,
             })),
             invalidated: Cell::new(false),
+            devices_changed: Cell::new(false),
             stop_requested: Cell::new(false),
         })
     }
@@ -164,6 +169,10 @@ impl<B: Backend> Service<B> {
     pub fn invalidate(&self) {
         self.invalidated.set(true);
     }
+    /// A device notification may concern an unrelated USB/Bluetooth device.
+    pub fn devices_changed(&self) {
+        self.devices_changed.set(true);
+    }
     pub fn retry(&self, now: u64) -> Result<(), String> {
         self.with_driver(now, |driver| {
             driver.recovery.retry(now);
@@ -178,8 +187,25 @@ impl<B: Backend> Service<B> {
     }
     pub fn tick(&self, now: u64, wall_time: DateTime<Local>) -> Result<(), String> {
         self.with_driver(now, |driver| {
-            if self.invalidated.replace(false) && driver.enabled {
+            let invalidated = self.invalidated.replace(false);
+            let check_devices = self.devices_changed.replace(false);
+            if invalidated && driver.enabled {
                 driver.restart(now, "任务栏或显示环境已变化");
+            } else if check_devices
+                && driver.enabled
+                && matches!(driver.recovery.phase(), Phase::Running { .. })
+                && let Some(connection) = &driver.connection
+            {
+                if connection.environment_matches() {
+                    crate::event_log::record("devices unchanged", "taskbar session retained");
+                } else {
+                    driver.restart(now, "设备通知后任务栏或显示器拓扑已变化");
+                }
+            } else if check_devices && driver.enabled && !invalidated {
+                // A preflight worker may already hold the old topology. Keep
+                // the observation pending until its connection can be checked;
+                // unrelated notifications must not reset failure backoff.
+                self.devices_changed.set(true);
             }
             driver.tick(&self.backend, now, wall_time);
             Ok(())
@@ -259,6 +285,7 @@ impl<B: Backend> Service<B> {
 }
 impl<B: Backend> Driver<B> {
     fn restart(&mut self, now: u64, reason: &str) {
+        crate::event_log::record("restart", reason);
         self.revision = self.revision.wrapping_add(1);
         self.recovery = if self.connection.is_some() {
             Recovery::restarting(reason)
@@ -276,10 +303,12 @@ impl<B: Backend> Driver<B> {
     fn restore(&mut self, now: u64) -> Result<(), String> {
         if let Some(connection) = &self.connection {
             if let Err(error) = connection.stop() {
+                crate::event_log::record("restore failed", &error);
                 self.recovery.restore_failed(&error);
                 return Err(error);
             }
             self.connection.take();
+            crate::event_log::record("restored", "native clock and tray state confirmed");
             self.recovery.restored(now);
         }
         Ok(())
@@ -292,7 +321,10 @@ impl<B: Backend> Driver<B> {
                 clock::frame_with_weather(&self.config.clock, self.weather.as_ref(), wall_time);
             match connection.update(&frame) {
                 Ok(()) => self.recovery.healthy(now),
-                Err(error) => self.recovery.fault(&error),
+                Err(error) => {
+                    crate::event_log::record("session fault", &error);
+                    self.recovery.fault(&error)
+                }
             }
         }
         if self.recovery.phase() == Phase::Restoring {
@@ -325,16 +357,19 @@ impl<B: Backend> Driver<B> {
                     .and_then(|prepared| backend.connect(prepared, &frame));
                 match connected {
                     Ok(connection) => {
+                        crate::event_log::record("connected", "taskbar session active");
                         self.connection = Some(connection);
                         self.recovery.connected(now);
                     }
                     Err(failure) => {
                         self.connection = failure.pending;
                         if self.connection.is_some() {
+                            crate::event_log::record("start failed", &failure.error);
                             self.recovery.connected(now);
                             self.recovery.fault(&failure.error);
                             let _ = self.restore(now);
                         } else {
+                            crate::event_log::record("connect failed", &failure.error);
                             self.recovery.connect_failed(now, &failure.error);
                         }
                     }
@@ -373,6 +408,8 @@ mod tests {
         fail_start: Cell<bool>,
         fail_update: Cell<bool>,
         fail_restore: Cell<bool>,
+        environment_changed: Cell<bool>,
+        environment_checks: Cell<usize>,
     }
     struct Fake(Rc<NativeState>);
     struct Lease(Rc<NativeState>);
@@ -400,6 +437,12 @@ mod tests {
         }
     }
     impl Session for Lease {
+        fn environment_matches(&self) -> bool {
+            self.0
+                .environment_checks
+                .set(self.0.environment_checks.get() + 1);
+            !self.0.environment_changed.get()
+        }
         fn update(&self, frame: &Frame) -> Result<(), String> {
             if self.0.fail_update.get() {
                 return Err("native clock lost".into());
@@ -539,6 +582,63 @@ mod tests {
         assert_eq!(native.connects.get(), 1);
     }
     #[test]
+    fn unrelated_device_notifications_preserve_the_running_clock() {
+        let (service, native, _) = fixture();
+        connect(&service, &native);
+        for now in 2..=5 {
+            // Replay the burst of DBT_DEVNODES_CHANGED notifications seen in
+            // the event log while the taskbars and displays were unchanged.
+            service.devices_changed();
+            service.devices_changed();
+            service.tick(now, time(now as i64)).unwrap();
+            assert_eq!(service.snapshot().status, Status::Running);
+        }
+        assert_eq!(native.stops.get(), 0, "native clock must not flash back");
+        assert_eq!(native.connects.get(), 1);
+        assert_eq!(native.frames.borrow().len(), 5);
+        assert_eq!(native.environment_checks.get(), 4);
+    }
+    #[test]
+    fn a_real_device_topology_change_restores_before_reconnecting() {
+        let (service, native, _) = fixture();
+        connect(&service, &native);
+        native.environment_changed.set(true);
+        service.devices_changed();
+        service.tick(20, time(1)).unwrap();
+        assert_eq!(native.stops.get(), 1);
+        assert_eq!(service.snapshot().status, Status::Waiting);
+        service.tick(1020, time(2)).unwrap();
+        assert_eq!(native.prepared.get(), 2);
+        complete(&native, Ok(()));
+        service.tick(1021, time(2)).unwrap();
+        assert_eq!(native.connects.get(), 2);
+    }
+    #[test]
+    fn a_device_change_during_preflight_is_checked_after_connecting() {
+        let (service, native, _) = fixture();
+        service.tick(0, time(0)).unwrap();
+        // The worker already sampled the old desktop when hotplug arrived.
+        service.devices_changed();
+        native.environment_changed.set(true);
+        service.tick(1, time(0)).unwrap();
+        complete(&native, Ok(()));
+        service.tick(2, time(0)).unwrap();
+        service.tick(3, time(0)).unwrap();
+        assert_eq!(native.environment_checks.get(), 1);
+        assert_eq!(native.stops.get(), 1, "stale routes must be restored");
+        assert_eq!(service.snapshot().status, Status::Waiting);
+    }
+    #[test]
+    fn explorer_notifications_always_restore_even_if_devices_match() {
+        let (service, native, _) = fixture();
+        connect(&service, &native);
+        service.devices_changed();
+        service.invalidate();
+        service.tick(20, time(1)).unwrap();
+        assert_eq!(native.stops.get(), 1);
+        assert_eq!(native.environment_checks.get(), 0);
+    }
+    #[test]
     fn failed_start_retains_restore_obligation_and_blocks_reconnect() {
         let (service, native, _) = fixture();
         native.fail_start.set(true);
@@ -595,6 +695,7 @@ mod tests {
             service.tick(now + 1, time(0)).unwrap();
         }
         assert_eq!(service.snapshot().status, Status::Suspended);
+        service.devices_changed();
         service.tick(90000, time(90)).unwrap();
         assert_eq!(native.prepared.get(), 3);
         service.retry(90000).unwrap();

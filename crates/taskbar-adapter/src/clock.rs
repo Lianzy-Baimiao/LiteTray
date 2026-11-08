@@ -69,7 +69,7 @@ fn font_family(name: &str) -> Result<Object, String> {
 pub(crate) struct ClockLease {
     properties: Vec<Property>,
     live: bool,
-    identities: [usize; 3],
+    identities: Vec<usize>,
     last_text: Option<(String, String)>,
     decorations: crate::clock_style::Decorations,
     native_text: Option<[crate::clock_text::TextLayer; 2]>,
@@ -122,7 +122,7 @@ impl ClockLease {
             Ok(Self {
                 properties,
                 live: false,
-                identities: [
+                identities: vec![
                     time.query(&IID_IUnknown)?.raw() as usize,
                     date.query(&IID_IUnknown)?.raw() as usize,
                     container.query(&IID_IUnknown)?.raw() as usize,
@@ -134,6 +134,20 @@ impl ClockLease {
                 compact_two_lines: false,
             })
         }
+    }
+    pub(crate) fn with_tooltip_targets(
+        mut self,
+        primary: &Object,
+        targets: &[Object],
+    ) -> Result<Self, String> {
+        self.decorations.configure_tooltips(primary, targets)?;
+        for target in targets.iter().chain(std::iter::once(primary)) {
+            let identity = target.query(&IID_IUnknown)?.raw() as usize;
+            if !self.identities.contains(&identity) {
+                self.identities.push(identity);
+            }
+        }
+        Ok(self)
     }
     pub(crate) fn update(
         &mut self,

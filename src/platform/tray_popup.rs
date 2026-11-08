@@ -108,7 +108,7 @@ unsafe fn send(receiver: HWND, host: HWND, targets: &[usize]) -> bool {
 fn run(rx: mpsc::Receiver<Option<(TrayConfig, usize)>>) {
     let mut current = None;
     let mut hooks: Vec<Hook> = vec![];
-    let mut module: HMODULE = null_mut();
+    let mut module: Option<super::dll::Library> = None;
     loop {
         match rx.recv_timeout(Duration::from_secs(10)) {
             Ok(Some(configuration)) => current = Some(configuration),
@@ -145,23 +145,17 @@ fn run(rx: mpsc::Receiver<Option<(TrayConfig, usize)>>) {
                 }
                 continue;
             }
-            if module.is_null() {
-                let path = std::env::current_exe()
-                    .ok()
-                    .and_then(|p| p.parent().map(|p| p.join("litetray_popup_hook.dll")));
-                if let Some(path) = path {
-                    module = LoadLibraryExW(
-                        wide(&path.to_string_lossy()).as_ptr(),
-                        null_mut(),
-                        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
-                    );
+            let mut load_error = None;
+            if module.is_none() {
+                match super::dll::load(super::dll::Kind::Popup) {
+                    Ok(library) => module = Some(library),
+                    Err(error) => load_error = Some(error),
                 }
             }
-            let callback = if module.is_null() {
-                None
-            } else {
-                GetProcAddress(module, c"LiteTrayPopupHook".as_ptr().cast())
-            };
+            let callback = module.as_ref().and_then(|library| {
+                GetProcAddress(library.handle(), c"LiteTrayPopupHook".as_ptr().cast())
+                    .map(|entry| (entry, library.handle()))
+            });
             let mut receivers: Vec<(u32, usize)> = vec![];
             EnumWindows(Some(find_receivers), &mut receivers as *mut _ as isize);
             hooks.retain(|h| {
@@ -176,12 +170,12 @@ fn run(rx: mpsc::Receiver<Option<(TrayConfig, usize)>>) {
                     continue;
                 }
                 let tid = GetWindowThreadProcessId(receiver as HWND, null_mut());
-                if let Some(callback) = callback {
+                if let Some((callback, handle)) = callback {
                     let callback = std::mem::transmute::<
                         unsafe extern "system" fn() -> isize,
                         unsafe extern "system" fn(i32, WPARAM, LPARAM) -> LRESULT,
                     >(callback);
-                    let hook = SetWindowsHookExW(WH_CALLWNDPROC, Some(callback), module, tid);
+                    let hook = SetWindowsHookExW(WH_CALLWNDPROC, Some(callback), handle, tid);
                     if !hook.is_null() {
                         hooks.push(Hook {
                             receiver: receiver as HWND,
@@ -193,7 +187,7 @@ fn run(rx: mpsc::Receiver<Option<(TrayConfig, usize)>>) {
                 }
             }
             let live = hooks.iter().map(|h| serde_json::json!({"process":h.pid,"thread":h.thread,"receiver":h.receiver as usize,"ready":send(h.receiver,*host as HWND,&targets)})).collect::<Vec<_>>();
-            let report = serde_json::json!({"mode":"before_window_position","module_loaded":!module.is_null(),"hooks":live,"secondary_taskbars":targets.len()});
+            let report = serde_json::json!({"mode":"before_window_position","module_loaded":module.is_some(),"load_error":load_error,"hooks":live,"secondary_taskbars":targets.len()});
             if let Ok(bytes) = serde_json::to_vec_pretty(&report) {
                 let _ = crate::config::atomic_write(
                     &crate::config::data_dir().join("popup-placement.json"),
@@ -212,9 +206,6 @@ fn run(rx: mpsc::Receiver<Option<(TrayConfig, usize)>>) {
             }
         }
         hooks.clear();
-        if !module.is_null() {
-            FreeLibrary(module);
-        }
     }
 }
 pub fn diagnostics() -> serde_json::Value {

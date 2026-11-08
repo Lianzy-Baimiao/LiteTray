@@ -296,6 +296,38 @@ pub fn analyze_panel(nodes: &[ElementInfo], truncated: bool) -> Result<Topology,
 }
 /// The input boundary is separate from the text/formatting boundary.
 pub fn clock_input_node(nodes: &[ElementInfo], clock: &Clock) -> Result<usize, String> {
+    let path = clock_boundary_path(nodes, clock)?;
+    let boundary = *path.last().expect("clock container present");
+    if nodes[boundary].class_name == "SystemTray.IconView" {
+        // Handle padded clicks before the native DateTimeIconContent and
+        // IconView class handlers run.
+        if let Some(&content) = path
+            .iter()
+            .take_while(|&&content| nodes[content].class_name != "SystemTray.DateTimeIconContent")
+            .find(|&&content| {
+                layout(&nodes[content].class_name)
+                    && nodes[content].width == nodes[boundary].width
+                    && nodes[content].height == nodes[boundary].height
+            })
+        {
+            return Ok(content);
+        }
+    }
+    Ok(clock.container)
+}
+
+/// Tooltips may be attached to the clock's outer IconView rather than its
+/// text layout. Include that ancestor only when its whole subtree belongs to
+/// this clock; never reach a notification button shared with a bell/action.
+pub fn clock_tooltip_nodes(nodes: &[ElementInfo], clock: &Clock) -> Result<Vec<usize>, String> {
+    let mut targets = clock_boundary_path(nodes, clock)?;
+    targets.extend([clock.time, clock.date]);
+    targets.sort_unstable();
+    targets.dedup();
+    Ok(targets)
+}
+
+fn clock_boundary_path(nodes: &[ElementInfo], clock: &Clock) -> Result<Vec<usize>, String> {
     let tree = Tree::new(nodes, false)?;
     if [clock.container, clock.time, clock.date]
         .iter()
@@ -322,23 +354,8 @@ pub fn clock_input_node(nodes: &[ElementInfo], clock: &Clock) -> Result<usize, S
                         )
                 })
             {
-                // Choose the innermost full-size layout so the event is handled
-                // before BOTH DateTimeIconContent and IconView class handlers.
-                // The outer template Grid is too late for a content override.
-                if let Some(&content) = path
-                    .iter()
-                    .take_while(|&&content| {
-                        nodes[content].class_name != "SystemTray.DateTimeIconContent"
-                    })
-                    .find(|&&content| {
-                        layout(&nodes[content].class_name)
-                            && nodes[content].width == nodes[index].width
-                            && nodes[content].height == nodes[index].height
-                    })
-                {
-                    return Ok(content);
-                }
-                break;
+                path.push(index);
+                return Ok(path);
             }
             break;
         }
@@ -348,7 +365,7 @@ pub fn clock_input_node(nodes: &[ElementInfo], clock: &Clock) -> Result<usize, S
         path.push(index);
         cursor = tree.parents[index];
     }
-    Ok(clock.container)
+    Ok(vec![clock.container])
 }
 
 #[cfg(test)]
@@ -418,12 +435,22 @@ mod tests {
             6,
             "top/bottom padding must activate the calendar"
         );
+        assert_eq!(
+            clock_tooltip_nodes(&nodes, &clock).unwrap(),
+            (2..=9).collect::<Vec<_>>(),
+            "clock tooltip includes its exclusive IconView and excludes the bell"
+        );
         nodes.insert(10, node("OtherAction", "Button", 3));
         let clock = analyze_panel(&nodes, false).unwrap().clock.unwrap();
         assert_eq!(
             clock_input_node(&nodes, &clock).unwrap(),
             7,
             "unknown actions prevent expansion"
+        );
+        assert_eq!(
+            clock_tooltip_nodes(&nodes, &clock).unwrap(),
+            vec![7, 8, 9],
+            "unknown actions prevent suppressing a shared ancestor tooltip"
         );
     }
     fn fixture() -> Vec<ElementInfo> {

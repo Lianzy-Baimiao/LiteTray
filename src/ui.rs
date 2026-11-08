@@ -52,7 +52,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.13.0";
+const UI_REVISION: &str = "开发版 5.13.1";
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -98,6 +98,7 @@ thread_local! {static PREVIEW:RefCell<Option<Rc<clock_preview::Preview>>>=const{
 thread_local! {static TASKBAR:RefCell<Option<Rc<taskbar_clock::Service>>>=const{RefCell::new(None)};}
 thread_local! {static TASKBAR_CREATED:Cell<u32>=const{Cell::new(0)};}
 thread_local! {static TRAY_READD:Cell<bool>=const{Cell::new(false)};}
+thread_local! {static PANELS_INVALIDATED:Cell<bool>=const{Cell::new(false)};}
 thread_local! {static CLOCK_RETRY:Cell<Option<Instant>>=const{Cell::new(None)};}
 #[derive(Clone, Copy)]
 struct Palette {
@@ -1256,8 +1257,10 @@ impl App {
         }
         text
     }
-    unsafe fn refresh_displays(&mut self) {
+    unsafe fn refresh_displays(&mut self) -> bool {
         unsafe {
+            let snapshot = displays::collect();
+            let layout_changed = !monitors::same_panel_layout(&self.monitor_snapshot, &snapshot);
             if self.page == 2 {
                 // An unidentified row cannot be persisted. Clear only those
                 // temporary selections so Refresh can recover a missing ID.
@@ -1271,12 +1274,13 @@ impl App {
                 && let Err(error) = self.collect_page()
             {
                 self.set_status(error);
-                return;
+                return layout_changed;
             }
-            self.monitor_snapshot = displays::collect();
+            self.monitor_snapshot = snapshot;
             if self.page == 2 {
                 self.render();
             }
+            layout_changed
         }
     }
     unsafe fn save(&mut self) -> Result<(), String> {
@@ -1965,7 +1969,9 @@ impl App {
                     self.status = "本页已重置；字体和字号沿用公共设置，点击保存后保留".into();
                     self.render();
                 }
-                307 => self.refresh_displays(),
+                307 => {
+                    self.refresh_displays();
+                }
                 SAVE => {
                     if self.page == 0 {
                         self.page = 1;
@@ -2285,7 +2291,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             id.get() != 0 && msg == id.get()
         });
         if created {
+            litetray::event_log::record("invalidate", "TaskbarCreated");
             TRAY_READD.with(|pending| pending.set(true));
+            PANELS_INVALIDATED.with(|pending| pending.set(true));
             if let Some(service) = TASKBAR.with(|p| p.borrow().clone()) {
                 service.invalidate();
             }
@@ -2300,6 +2308,8 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     | PBT_APMRESUMECRITICAL
             )
         {
+            litetray::event_log::record("invalidate", &format!("power resume 0x{w:x}"));
+            PANELS_INVALIDATED.with(|pending| pending.set(true));
             if let Some(service) = TASKBAR.with(|p| p.borrow().clone()) {
                 service.invalidate();
             }
@@ -2312,8 +2322,27 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     DBT_DEVNODES_CHANGED | DBT_DEVICEARRIVAL | DBT_DEVICEREMOVECOMPLETE
                 )
         {
+            if msg == WM_DISPLAYCHANGE {
+                PANELS_INVALIDATED.with(|pending| pending.set(true));
+            }
+            litetray::event_log::record(
+                if msg == WM_DISPLAYCHANGE {
+                    "invalidate"
+                } else {
+                    "devices changed"
+                },
+                &if msg == WM_DISPLAYCHANGE {
+                    "WM_DISPLAYCHANGE".to_string()
+                } else {
+                    format!("WM_DEVICECHANGE 0x{w:x}")
+                },
+            );
             if let Some(service) = TASKBAR.with(|p| p.borrow().clone()) {
-                service.invalidate();
+                if msg == WM_DISPLAYCHANGE {
+                    service.invalidate();
+                } else {
+                    service.devices_changed();
+                }
             }
             // Debounce bursts; a modal settings borrow leaves this timer alive
             // so the next dispatch can refresh without dropping draft choices.
@@ -2499,15 +2528,18 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 }
                 WM_TIMER if w == 2 => {
                     KillTimer(hwnd, 2);
+                    let invalidated = PANELS_INVALIDATED.with(|pending| pending.replace(false));
                     if TRAY_READD.with(|pending| pending.replace(false)) {
                         app.add_tray();
                     }
-                    app.refresh_displays();
-                    app.clear_attached_panels();
-                    for &panel in &app.panel_cache {
-                        panel::clamp_to_workarea(panel);
+                    let layout_changed = app.refresh_displays();
+                    if invalidated || layout_changed {
+                        app.clear_attached_panels();
+                        for &panel in &app.panel_cache {
+                            panel::clamp_to_workarea(panel);
+                        }
+                        PostMessageW(hwnd, WM_PREPARE_PANELS, 0, 0);
                     }
-                    PostMessageW(hwnd, WM_PREPARE_PANELS, 0, 0);
                     Some(0)
                 }
                 WM_TIMER => {

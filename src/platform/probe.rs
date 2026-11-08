@@ -20,14 +20,7 @@ pub fn run() -> Result<Value, String> {
             .iter()
             .find(|t| t.class == "Shell_TrayWnd")
             .ok_or("未找到系统任务栏")?;
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let path = exe
-            .parent()
-            .ok_or("程序目录无效")?
-            .join("litetray_taskbar_adapter.dll");
-        if !path.is_file() {
-            return Err("缺少 litetray_taskbar_adapter.dll，请构建完整 workspace".into());
-        }
+        let library = super::dll::load(super::dll::Kind::Taskbar)?;
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|e| e.to_string())?
@@ -61,27 +54,22 @@ pub fn run() -> Result<Value, String> {
         if hwnd.is_null() {
             return Err("创建探测窗口失败".into());
         }
-        let library = LoadLibraryExW(
-            super::wide(&path.to_string_lossy()).as_ptr(),
-            null_mut(),
-            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
-        );
-        if library.is_null() {
-            let error = std::io::Error::last_os_error();
-            DestroyWindow(hwnd);
-            return Err(format!("加载任务栏 DLL 失败：{error}"));
-        }
-        let Some(address) = GetProcAddress(library, c"LiteTrayCallWndProc".as_ptr().cast()) else {
-            FreeLibrary(library);
+        let Some(address) =
+            GetProcAddress(library.handle(), c"LiteTrayCallWndProc".as_ptr().cast())
+        else {
             DestroyWindow(hwnd);
             return Err("任务栏 DLL 缺少兼容入口".into());
         };
         let callback: unsafe extern "system" fn(i32, WPARAM, LPARAM) -> LRESULT =
             std::mem::transmute(address);
-        let hook = SetWindowsHookExW(WH_CALLWNDPROC, Some(callback), library, taskbar.thread_id);
+        let hook = SetWindowsHookExW(
+            WH_CALLWNDPROC,
+            Some(callback),
+            library.handle(),
+            taskbar.thread_id,
+        );
         if hook.is_null() {
             let error = std::io::Error::last_os_error();
-            FreeLibrary(library);
             DestroyWindow(hwnd);
             return Err(format!("无法接入任务栏线程：{error}"));
         }
@@ -99,7 +87,6 @@ pub fn run() -> Result<Value, String> {
             &mut result,
         );
         UnhookWindowsHookEx(hook);
-        FreeLibrary(library);
         DestroyWindow(hwnd);
         if sent == 0 {
             return Err("任务栏线程探测超时或消息被拒绝".into());

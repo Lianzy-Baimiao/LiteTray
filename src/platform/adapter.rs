@@ -6,7 +6,6 @@ use litetray_adapter_protocol::{
 };
 use std::{
     cell::RefCell,
-    path::Path,
     ptr::{null, null_mut},
 };
 use windows_sys::Win32::{
@@ -20,7 +19,7 @@ thread_local! {
 }
 struct Session {
     window: HWND,
-    library: HMODULE,
+    library: super::dll::Library,
     hook: HHOOK,
 }
 /// Exercise XAML controls in this process and a child of this same executable.
@@ -37,27 +36,12 @@ fn isolated_check(
     include_recovery: bool,
 ) -> Result<serde_json::Value, String> {
     unsafe {
-        let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-        let dll = executable
-            .parent()
-            .ok_or("程序目录无效")?
-            .join("litetray_taskbar_adapter.dll");
         let session = Session {
             window: null_mut(),
             hook: null_mut(),
-            library: LoadLibraryExW(
-                super::wide(&dll.to_string_lossy()).as_ptr(),
-                null_mut(),
-                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
-            ),
+            library: super::dll::load(super::dll::Kind::Taskbar)?,
         };
-        if session.library.is_null() {
-            return Err(format!(
-                "加载适配 DLL 失败：{}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        let function = GetProcAddress(session.library, export.as_ptr().cast())
+        let function = GetProcAddress(session.library.handle(), export.as_ptr().cast())
             .ok_or("适配 DLL 缺少隔离检查接口")?;
         let check: unsafe extern "system" fn(*mut u8, usize) -> i32 = std::mem::transmute(function);
         let mut output = vec![0u8; 16384];
@@ -235,9 +219,6 @@ impl Drop for Session {
             if !self.hook.is_null() {
                 UnhookWindowsHookEx(self.hook);
             }
-            if !self.library.is_null() {
-                FreeLibrary(self.library);
-            }
             if !self.window.is_null() {
                 DestroyWindow(self.window);
             }
@@ -250,21 +231,12 @@ pub fn inspect() -> Result<InspectResponse, String> {
         .map(std::path::PathBuf::from)
         .ok_or("SystemRoot 不可用")?;
     let layout = crate::compatibility::preflight(&system, true, false)?;
-    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-    inspect_with_layout(
-        &executable
-            .parent()
-            .ok_or("程序目录无效")?
-            .join("litetray_taskbar_adapter.dll"),
-        layout,
-    )
+    inspect_with_layout(layout)
 }
-fn inspect_with_layout(dll: &Path, layout: HostLayout) -> Result<InspectResponse, String> {
+fn inspect_with_layout(layout: HostLayout) -> Result<InspectResponse, String> {
     unsafe {
         layout.validate()?;
-        if !dll.is_file() {
-            return Err("缺少任务栏适配 DLL".into());
-        }
+        let library = super::dll::load(super::dll::Kind::Taskbar)?;
         let diagnostics = super::diagnostics::collect();
         let taskbar = diagnostics
             .taskbars
@@ -297,31 +269,23 @@ fn inspect_with_layout(dll: &Path, layout: HostLayout) -> Result<InspectResponse
                 instance,
                 null(),
             ),
-            library: null_mut(),
+            library,
             hook: null_mut(),
         };
         if session.window.is_null() {
             return Err("无法创建适配接收窗口".into());
         }
-        session.library = LoadLibraryExW(
-            super::wide(&dll.to_string_lossy()).as_ptr(),
-            null_mut(),
-            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
-        );
-        if session.library.is_null() {
-            return Err(format!(
-                "加载适配 DLL 失败：{}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        let function = GetProcAddress(session.library, c"LiteTrayCallWndProc".as_ptr().cast())
-            .ok_or("适配 DLL 版本不匹配")?;
+        let function = GetProcAddress(
+            session.library.handle(),
+            c"LiteTrayCallWndProc".as_ptr().cast(),
+        )
+        .ok_or("适配 DLL 版本不匹配")?;
         let hook: unsafe extern "system" fn(i32, WPARAM, LPARAM) -> LRESULT =
             std::mem::transmute(function);
         session.hook = SetWindowsHookExW(
             WH_CALLWNDPROC,
             Some(hook),
-            session.library,
+            session.library.handle(),
             taskbar.thread_id,
         );
         if session.hook.is_null() {

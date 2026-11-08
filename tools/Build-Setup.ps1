@@ -60,5 +60,9 @@ $manifest = [ordered]@{
     binaries = [ordered]@{}
 }
 for ($i = 0; $i -lt $names.Count; $i++) { $manifest.binaries[$names[$i]] = $hashes[$i] }
+for ($i = 1; $i -lt $names.Count; $i++) {
+    $contentName=[IO.Path]::GetFileNameWithoutExtension($names[$i])+'.'+$hashes[$i]+'.dll'
+    $manifest.binaries[$contentName] = $hashes[$i]
+}
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $output "$setupBase.manifest.json") -Encoding utf8
 [pscustomobject]@{ Setup = $setup; Version = $version; BuildId = $buildId; SizeMiB = [math]::Round((Get-Item -LiteralPath $setup).Length / 1MB, 2); SHA256 = $setupHash }

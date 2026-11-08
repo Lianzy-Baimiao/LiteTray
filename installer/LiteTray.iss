@@ -57,6 +57,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#PayloadDir}\LiteTray.exe"; DestDir: "{app}\versions\{#BuildId}"; Flags: ignoreversion; Check: NeedsBinary('LiteTray.exe', '{#ExeHash}')
 Source: "{#PayloadDir}\litetray_taskbar_adapter.dll"; DestDir: "{app}\versions\{#BuildId}"; Flags: ignoreversion; Check: NeedsBinary('litetray_taskbar_adapter.dll', '{#AdapterHash}')
 Source: "{#PayloadDir}\litetray_popup_hook.dll"; DestDir: "{app}\versions\{#BuildId}"; Flags: ignoreversion; Check: NeedsBinary('litetray_popup_hook.dll', '{#HookHash}')
+; Pre-stage immutable paths so a read-only installation needs no DLL writes.
+Source: "{#PayloadDir}\litetray_taskbar_adapter.{#AdapterHash}.dll"; DestDir: "{app}\versions\{#BuildId}"; Flags: ignoreversion; Check: NeedsImmutableBinary('litetray_taskbar_adapter.{#AdapterHash}.dll', '{#AdapterHash}')
+Source: "{#PayloadDir}\litetray_popup_hook.{#HookHash}.dll"; DestDir: "{app}\versions\{#BuildId}"; Flags: ignoreversion; Check: NeedsImmutableBinary('litetray_popup_hook.{#HookHash}.dll', '{#HookHash}')
 Source: "{#PayloadDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\README.en.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
@@ -106,6 +109,18 @@ begin
   Result := True;
   if FileExists(Path) then
     Result := CompareText(GetSHA256OfFile(Path), ExpectedHash) <> 0;
+end;
+
+function NeedsImmutableBinary(Name, ExpectedHash: String): Boolean;
+var
+  Path: String;
+begin
+  Path := ExpandConstant('{app}\versions\{#BuildId}\') + Name;
+  if DirExists(Path) then
+    RaiseException('Content-named DLL path is a directory: ' + Path);
+  Result := not FileExists(Path);
+  if (not Result) and (CompareText(GetSHA256OfFile(Path), ExpectedHash) <> 0) then
+    RaiseException('Content-named DLL is damaged and will not be overwritten: ' + Path);
 end;
 
 function StopHost(OnlyInstalled: Boolean): Boolean;

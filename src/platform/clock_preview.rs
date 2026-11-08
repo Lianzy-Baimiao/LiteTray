@@ -41,7 +41,7 @@ struct Connection {
 /// One XAML hosting lifetime per service/STA, spanning every connection.
 /// Connections also pin it so a reentrant service drop cannot unload native code.
 struct Environment {
-    module: HMODULE,
+    module: super::dll::Library,
     handle: *mut c_void,
     destroy: Action,
     _thread: PhantomData<Rc<()>>,
@@ -49,34 +49,21 @@ struct Environment {
 impl Environment {
     fn open() -> Result<Rc<Self>, String> {
         unsafe {
-            let dll = std::env::current_exe()
-                .map_err(|e| e.to_string())?
-                .with_file_name("litetray_taskbar_adapter.dll");
-            let module = LoadLibraryExW(
-                super::wide(&dll.to_string_lossy()).as_ptr(),
-                null_mut(),
-                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
-            );
-            if module.is_null() {
-                return Err("无法加载原生时钟预览组件".into());
-            }
-            struct Library(HMODULE);
-            impl Drop for Library {
-                fn drop(&mut self) {
-                    unsafe {
-                        FreeLibrary(self.0);
-                    }
-                }
-            }
-            let guard = Library(module);
+            let module = super::dll::load(super::dll::Kind::Taskbar)?;
             let create: unsafe extern "system" fn(*mut u8, usize) -> *mut c_void =
                 std::mem::transmute(
-                    GetProcAddress(module, c"LiteTrayPreviewRuntimeCreate".as_ptr().cast())
-                        .ok_or("缺少预览运行环境入口")?,
+                    GetProcAddress(
+                        module.handle(),
+                        c"LiteTrayPreviewRuntimeCreate".as_ptr().cast(),
+                    )
+                    .ok_or("缺少预览运行环境入口")?,
                 );
             let destroy: Action = std::mem::transmute(
-                GetProcAddress(module, c"LiteTrayPreviewRuntimeDestroy".as_ptr().cast())
-                    .ok_or("缺少预览运行环境关闭入口")?,
+                GetProcAddress(
+                    module.handle(),
+                    c"LiteTrayPreviewRuntimeDestroy".as_ptr().cast(),
+                )
+                .ok_or("缺少预览运行环境关闭入口")?,
             );
             let mut error = vec![0u8; 2048];
             let handle = create(error.as_mut_ptr(), error.len());
@@ -84,7 +71,6 @@ impl Environment {
                 let n = error.iter().position(|b| *b == 0).unwrap_or(error.len());
                 return Err(String::from_utf8_lossy(&error[..n]).into());
             }
-            std::mem::forget(guard);
             Ok(Rc::new(Self {
                 module,
                 handle,
@@ -98,7 +84,6 @@ impl Drop for Environment {
     fn drop(&mut self) {
         unsafe {
             (self.destroy)(self.handle);
-            FreeLibrary(self.module);
         }
     }
 }
@@ -145,7 +130,7 @@ mod frame_tests {
 impl Connection {
     fn open(environment: Rc<Environment>, receiver: HWND, frame: Frame) -> Result<Self, String> {
         unsafe {
-            let module = environment.module;
+            let module = environment.module.handle();
             let create: Create = std::mem::transmute(
                 GetProcAddress(module, c"LiteTrayPreviewCreate".as_ptr().cast())
                     .ok_or("缺少原生预览入口")?,

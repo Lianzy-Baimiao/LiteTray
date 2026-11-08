@@ -1,8 +1,9 @@
-//! Optional appearance overrides own properties only while enabled. Returning
-//! to Native restores the exact binding/local/unset snapshot and releases it.
+//! Optional appearance overrides own properties only while enabled. Tooltip
+//! leases stay active until the clock stops: an empty template hides the
+//! native tooltip, while a nonempty template shows the user's literal text.
 use crate::{
     clock::{boxed_text, load},
-    property::{Property, property},
+    property::{Property, property, same_object},
     tray::read,
     xaml::{Object, check, factory},
     xaml_abi::*,
@@ -39,6 +40,16 @@ impl Override {
             }
         }
     }
+    fn capture(&mut self) -> Result<(), String> {
+        if self.lease.is_none() {
+            self.lease = Some(Property::capture(&self.target, self.property.clone())?);
+        }
+        Ok(())
+    }
+    fn set_tooltip(&mut self, value: Option<&Object>) -> Result<(), String> {
+        self.capture()?;
+        self.lease.as_mut().expect("captured").set_nullable(value)
+    }
     fn validate(&self) -> Result<(), String> {
         if let Some(lease) = &self.lease
             && !lease.owns_current()?
@@ -50,6 +61,7 @@ impl Override {
 }
 pub(crate) struct Decorations {
     values: [Override; 5],
+    suppressed_tooltips: Vec<Override>,
     last: Option<Applied>,
 }
 #[derive(PartialEq)]
@@ -62,6 +74,7 @@ struct Applied {
 pub(crate) struct Prepared {
     next: Applied,
     pending: Vec<(usize, Option<Object>)>,
+    suppress_native: bool,
 }
 impl Decorations {
     pub(crate) fn capture(
@@ -98,8 +111,34 @@ impl Decorations {
                 Override::new(date, alignment),
                 Override::new(container, tooltip),
             ],
+            suppressed_tooltips: Vec::new(),
             last: None,
         })
+    }
+    pub(crate) fn configure_tooltips(
+        &mut self,
+        primary: &Object,
+        targets: &[Object],
+    ) -> Result<(), String> {
+        if self.last.is_some() || !self.clean() {
+            return Err("不能更换已接管时钟的提示目标".into());
+        }
+        let property = self.values[4].property.clone();
+        let mut suppressed: Vec<Override> = Vec::new();
+        for target in targets {
+            if same_object(primary, target)? {
+                continue;
+            }
+            for item in &suppressed {
+                if same_object(&item.target, target)? {
+                    return Err("时钟提示目标重复".into());
+                }
+            }
+            suppressed.push(Override::new(target, property.clone()));
+        }
+        self.values[4] = Override::new(primary, property);
+        self.suppressed_tooltips = suppressed;
+        Ok(())
     }
     pub(crate) fn prepare(&mut self, frame: &Frame) -> Result<Option<Prepared>, String> {
         self.validate()?;
@@ -153,33 +192,62 @@ impl Decorations {
         // synchronous callback cannot change a later original unnoticed.
         for (i, value) in &pending {
             let target = &mut self.values[*i];
-            if value.is_some() && target.lease.is_none() {
-                target.lease = Some(Property::capture(&target.target, target.property.clone())?);
+            if value.is_some() || *i == 4 {
+                target.capture()?;
+            }
+        }
+        let suppress_native = self.last.is_none();
+        if suppress_native {
+            for target in &mut self.suppressed_tooltips {
+                target.capture()?;
             }
         }
         self.validate()?;
-        Ok(Some(Prepared { next, pending }))
+        Ok(Some(Prepared {
+            next,
+            pending,
+            suppress_native,
+        }))
     }
     pub(crate) fn apply(&mut self, prepared: Option<Prepared>) -> Result<(), String> {
         self.validate()?;
-        let Some(Prepared { next, pending }) = prepared else {
+        let Some(Prepared {
+            next,
+            pending,
+            suppress_native,
+        }) = prepared
+        else {
             return Ok(());
         };
+        if suppress_native {
+            for target in &mut self.suppressed_tooltips {
+                target.set_tooltip(None)?;
+            }
+        }
         for (i, value) in pending {
-            self.values[i].set(value.as_ref())?;
+            if i == 4 {
+                self.values[i].set_tooltip(value.as_ref())?;
+            } else {
+                self.values[i].set(value.as_ref())?;
+            }
         }
         self.last = Some(next);
         Ok(())
     }
     pub(crate) fn validate(&self) -> Result<(), String> {
-        for value in &self.values {
+        for value in self.values.iter().chain(&self.suppressed_tooltips) {
             value.validate()?;
         }
         Ok(())
     }
     pub(crate) fn restore(&mut self) -> Result<(), String> {
         let mut errors = Vec::new();
-        for value in self.values.iter_mut().rev() {
+        for value in self
+            .values
+            .iter_mut()
+            .chain(&mut self.suppressed_tooltips)
+            .rev()
+        {
             if let Err(error) = value.set(None) {
                 errors.push(error);
             }
@@ -194,6 +262,7 @@ impl Decorations {
     pub(crate) fn clean(&self) -> bool {
         self.values
             .iter()
+            .chain(&self.suppressed_tooltips)
             .all(|value| value.lease.as_ref().is_none_or(|lease| !lease.dirty))
     }
 }

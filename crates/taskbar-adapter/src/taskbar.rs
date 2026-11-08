@@ -205,13 +205,15 @@ pub(crate) unsafe fn request(taskbar: HWND, sender: HWND, data: isize) {
         {
             return;
         }
-        let reply = prepare(&request).unwrap_or_else(|error| Reply {
-            version: VERSION,
-            owner: request.owner.clone(),
-            endpoint: 0,
-            targets: vec![],
-            error: Some(error.chars().take(1000).collect()),
-        });
+        let reply = crate::events::install_fault_beacon()
+            .and_then(|()| prepare(&request))
+            .unwrap_or_else(|error| Reply {
+                version: VERSION,
+                owner: request.owner.clone(),
+                endpoint: 0,
+                targets: vec![],
+                error: Some(error.chars().take(1000).collect()),
+            });
         let Ok(bytes) = serde_json::to_vec(&reply) else {
             return;
         };
@@ -230,6 +232,10 @@ pub(crate) unsafe fn request(taskbar: HWND, sender: HWND, data: isize) {
             1000,
             &mut accepted,
         );
+        match &reply.error {
+            Some(error) => crate::events::record("prepare refused", error),
+            None => crate::events::record("prepared", "session awaiting start"),
+        }
         if (sent == 0 || accepted != 1)
             && reply.error.is_none()
             && let Some(active) = ACTIVE.with(|v| v.borrow().clone())

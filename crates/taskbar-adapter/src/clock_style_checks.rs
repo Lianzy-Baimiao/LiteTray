@@ -1,9 +1,9 @@
 //! Real XAML property and session checks for optional appearance overrides.
 use crate::{
     clock::{ClockLease, boxed_text, load},
-    property::{property, same_object},
+    property::{Original, Property, property, same_object},
     tray::read,
-    xaml::{Object, check, factory},
+    xaml::{Object, StringHandle, check, factory},
     xaml_abi::*,
 };
 use litetray_adapter_protocol::clock::{
@@ -83,6 +83,8 @@ fn context(node: &Object, value: &Object) -> Result<(), String> {
     }
 }
 pub(crate) fn run() -> Result<Vec<&'static str>, String> {
+    empty_tooltip_hides_native()?;
+    scoped_tooltips()?;
     let time = load(
         r##"<TextBlock xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Text="Original time" Foreground="{Binding}" TextAlignment="Left"/>"##,
     )?;
@@ -124,7 +126,14 @@ pub(crate) fn run() -> Result<Vec<&'static str>, String> {
             && tip(&container)? == frame.text.tooltip.as_deref().unwrap(),
         "independent colors, exact enum and literal tooltip",
     )?;
-    let mut checks = vec!["clock_style_colors_alignment_and_literal_tooltip"];
+    let mut checks = vec![
+        "clock_style_colors_alignment_and_literal_tooltip",
+        "clock_empty_tooltip_template_hides_native_until_stop",
+        "clock_tooltips_scope_excludes_notification_bell",
+        "clock_tooltips_restore_binding_local_null_and_unset",
+        "clock_tooltips_custom_template_survives_native_suppression",
+        "clock_tooltips_external_writer_preserved_on_stop",
+    ];
     let brush = foreground(&time)?;
     frame.text.tooltip = Some("Next second".into());
     lease.update(&frame, false)?;
@@ -151,8 +160,8 @@ pub(crate) fn run() -> Result<Vec<&'static str>, String> {
         color(&time)? == [255, 68, 85, 102]
             && color(&date)? == [255, 17, 34, 51]
             && alignment(&time)? == TextAlignment::Left.0
-            && tip(&container)? == "Original tip",
-        "native restores original values and binding",
+            && read(&container, &tip_property()?)?.is_none(),
+        "native appearance restores style while an empty tooltip stays hidden",
     )?;
     let new_original = load(
         r##"<SolidColorBrush xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Color="#FFABCDEF"/>"##,
@@ -161,8 +170,8 @@ pub(crate) fn run() -> Result<Vec<&'static str>, String> {
     context(&container, &boxed_text("Bound tip changed")?)?;
     lease.update(&frame, false)?;
     require(
-        color(&time)? == [255, 171, 205, 239] && tip(&container)? == "Bound tip changed",
-        "native keeps binding reactive",
+        color(&time)? == [255, 171, 205, 239] && read(&container, &tip_property()?)?.is_none(),
+        "native appearance binding reacts while tooltip remains hidden",
     )?;
     frame.style.top_color = Some("#010203".into());
     frame.text.tooltip = Some("temporary".into());
@@ -176,12 +185,15 @@ pub(crate) fn run() -> Result<Vec<&'static str>, String> {
         "reenable captures current original and stop restores all",
     )?;
     checks.push("clock_style_native_restore_binding_and_reenable");
-    // Once restored to Native, external replacement is valid and must become
-    // the next override's original; stale capture must not resurrect a binding.
+    // After stopping, external replacement is valid and must become the next
+    // session's original; a stale capture must not resurrect a binding.
+    drop(lease);
     let mut lease = ClockLease::capture(&time, &date, &container)?;
     lease.update(&frame, true)?;
     frame.text.tooltip = None;
     lease.update(&frame, false)?;
+    lease.restore()?;
+    drop(lease);
     let dep = container.query(&IID_IDependencyObject)?;
     unsafe {
         check(
@@ -193,16 +205,18 @@ pub(crate) fn run() -> Result<Vec<&'static str>, String> {
             "Replace restored tooltip binding",
         )?;
     }
-    lease.update(&frame, false)?;
+    let mut lease = ClockLease::capture(&time, &date, &container)?;
+    lease.update(&frame, true)?;
     frame.text.tooltip = Some("temporary again".into());
     lease.update(&frame, false)?;
     lease.restore()?;
     context(&container, &boxed_text("Old binding must stay detached")?)?;
     require(
         tip(&container)? == "New native local tip",
-        "reenabling captures replacement local value after Native",
+        "new session captures replacement local tooltip after stop",
     )?;
-    checks.push("clock_style_native_external_replacement_becomes_new_original");
+    checks.push("clock_style_stopped_external_replacement_becomes_new_original");
+    drop(lease);
     let owner = Owner {
         nonce: 777,
         process_id: unsafe { windows_sys::Win32::System::Threading::GetCurrentProcessId() },
@@ -299,6 +313,171 @@ pub(crate) fn run() -> Result<Vec<&'static str>, String> {
     checks.push("clock_style_unset_alignment_restored");
     checks.extend(line_styles()?);
     Ok(checks)
+}
+
+fn empty_tooltip_hides_native() -> Result<(), String> {
+    let time = load(
+        r#"<TextBlock xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Text="System time"/>"#,
+    )?;
+    let date = load(
+        r#"<TextBlock xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Text="System date"/>"#,
+    )?;
+    let container = load(
+        r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" ToolTipService.ToolTip="Native date tooltip"/>"#,
+    )?;
+    let frame: Frame = serde_json::from_value(serde_json::json!({
+        "text": {"top": "12:34", "bottom": "LiteTray"},
+        "style": {"font_family": "Segoe UI", "font_size": 12, "width": 0}
+    }))
+    .map_err(|e| e.to_string())?;
+    let mut lease = ClockLease::capture(&time, &date, &container)?;
+    lease.update(&frame, true)?;
+    require(
+        read(&container, &tip_property()?)?.is_none(),
+        "empty tooltip template suppresses the native tooltip while active",
+    )?;
+    lease.restore()?;
+    require(
+        tip(&container)? == "Native date tooltip" && lease.clean(),
+        "stopping restores the native tooltip",
+    )
+}
+
+fn scoped_tooltips() -> Result<(), String> {
+    let root = load(
+        r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+          <Grid x:Name="Clock" ToolTipService.ToolTip="{Binding}" DataContext="Native clock tip">
+            <Grid x:Name="Input"><StackPanel x:Name="Lines" ToolTipService.ToolTip="Native layout tip">
+              <TextBlock x:Name="Time" Text="System time" ToolTipService.ToolTip="{x:Null}"/>
+              <TextBlock x:Name="Date" Text="System date"/>
+            </StackPanel></Grid>
+          </Grid>
+          <Button x:Name="Bell" ToolTipService.ToolTip="Native notification tip"/>
+        </Grid>"#,
+    )?;
+    let find = |name: &str| -> Result<Object, String> {
+        let root = root.query(&IID_IFrameworkElement)?;
+        let name = StringHandle::new(name)?;
+        let mut value = null_mut();
+        unsafe {
+            check(
+                (root.table::<IFrameworkElement_Vtbl>().FindName)(root.raw(), name.0, &mut value),
+                "Find scoped tooltip fixture",
+            )?;
+            Object::owned(value)
+        }
+    };
+    let clock = find("Clock")?;
+    let input = find("Input")?;
+    let lines = find("Lines")?;
+    let time = find("Time")?;
+    let date = find("Date")?;
+    let bell = find("Bell")?;
+    let targets = [
+        clock.clone(),
+        input.clone(),
+        lines.clone(),
+        time.clone(),
+        date.clone(),
+    ];
+    let mut frame: Frame = serde_json::from_value(serde_json::json!({
+        "text": {"top": "12:34", "bottom": "LiteTray"},
+        "style": {"font_family": "Segoe UI", "font_size": 12, "width": 0}
+    }))
+    .map_err(|e| e.to_string())?;
+    let property = tip_property()?;
+    require(
+        matches!(
+            Property::capture(&clock, property.clone())?.original,
+            Original::Binding(_)
+        ) && matches!(
+            Property::capture(&input, property.clone())?.original,
+            Original::Unset
+        ) && matches!(
+            Property::capture(&time, property.clone())?.original,
+            Original::Local(None)
+        ),
+        "fixture captures binding, unset and explicit null tooltips",
+    )?;
+    let capture =
+        || ClockLease::capture(&time, &date, &lines)?.with_tooltip_targets(&input, &targets);
+    let mut lease = capture()?;
+    require(
+        tip(&clock)? == "Native clock tip" && tip(&lines)? == "Native layout tip",
+        "preparing keeps native clock tooltips",
+    )?;
+    lease.update(&frame, true)?;
+    for target in &targets {
+        require(
+            read(target, &property)?.is_none(),
+            "active clock hides all scoped native tooltips",
+        )?;
+    }
+    require(
+        tip(&bell)? == "Native notification tip",
+        "notification bell tooltip is unchanged",
+    )?;
+    frame.text.tooltip = Some("Custom clock tip".into());
+    lease.update(&frame, false)?;
+    require(
+        tip(&input)? == "Custom clock tip"
+            && read(&clock, &property)?.is_none()
+            && read(&lines, &property)?.is_none(),
+        "custom tooltip uses the full clock input area without native ancestor tooltips",
+    )?;
+    frame.text.tooltip = None;
+    context(&clock, &boxed_text("Latest native clock tip")?)?;
+    lease.update(&frame, false)?;
+    require(
+        read(&input, &property)?.is_none(),
+        "clearing a custom tooltip keeps native tooltips hidden",
+    )?;
+    lease.restore()?;
+    require(
+        lease.clean()
+            && tip(&clock)? == "Latest native clock tip"
+            && tip(&lines)? == "Native layout tip"
+            && tip(&bell)? == "Native notification tip"
+            && matches!(
+                Property::capture(&input, property.clone())?.original,
+                Original::Unset
+            )
+            && matches!(
+                Property::capture(&time, property.clone())?.original,
+                Original::Local(None)
+            ),
+        "stop restores original tooltip kinds and the latest binding source",
+    )?;
+    drop(lease);
+    {
+        let mut lease = capture()?;
+        lease.update(&frame, true)?;
+    }
+    require(
+        tip(&clock)? == "Latest native clock tip",
+        "drop restores scoped tooltip bindings",
+    )?;
+    let mut lease = capture()?;
+    lease.update(&frame, true)?;
+    let dependency = clock.query(&IID_IDependencyObject)?;
+    unsafe {
+        check(
+            (dependency.table::<IDependencyObject_Vtbl>().SetValue)(
+                dependency.raw(),
+                property.query(&IID_IDependencyProperty)?.raw(),
+                boxed_text("External tooltip owner")?.raw(),
+            ),
+            "External native ancestor tooltip replacement",
+        )?;
+    }
+    require(
+        lease.update(&frame, false).is_err()
+            && lease.clean()
+            && tip(&clock)? == "External tooltip owner"
+            && tip(&lines)? == "Native layout tip"
+            && text(&time)? == "System time",
+        "ancestor tooltip conflict preserves the external writer and restores the clock",
+    )
 }
 
 fn font_object(node: &Object) -> Result<Object, String> {

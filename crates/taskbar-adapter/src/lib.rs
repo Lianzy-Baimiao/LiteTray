@@ -10,6 +10,7 @@ mod clock_text_checks;
 mod compatibility;
 mod discovery;
 mod discovery_checks;
+mod events;
 mod hooks;
 mod input;
 mod input_checks;
@@ -98,6 +99,13 @@ pub unsafe extern "system" fn LiteTraySelfTestShellSource(output: *mut u8, capac
         *output.add(bytes.len()) = 0;
     }
     status
+}
+/// Exercises the production fault-handler registration in an isolated test
+/// process. The caller must release its LoadLibrary reference and verify that
+/// this entry point remains mapped before ending that process.
+#[unsafe(no_mangle)]
+pub extern "system" fn LiteTraySelfTestFaultBeacon() -> i32 {
+    i32::from(events::self_test_fault_beacon().is_err())
 }
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()

@@ -162,10 +162,12 @@ Session 启动和有效命令批次前后、poll、输入发布前核对所持 g
 
 ## 可选时钟样式与提示
 
-`Style` 增加可缺省的 `top_color`/`bottom_color` 与 `alignment`；`Text` 增加可缺省的 `tooltip`。旧消息可解码为保留原样。颜色仅接受 #RRGGBB/#AARRGGBB；提示是最多 4096 字节的普通字符串，格式化在宿主执行。配置的 `tooltip_line` 和两行模板一样最多 1024 字节，未知变量拒绝保存；天气字符串不会再作为模板解释。
+`Style` 增加可缺省的 `top_color`/`bottom_color` 与 `alignment`；省略时保留原有颜色和对齐。`Text` 的可选 `tooltip` 在省略或为 null 时隐藏原生时钟提示，非空模板继续显示用户设置的提示。颜色仅接受 #RRGGBB/#AARRGGBB；提示是最多 4096 字节的普通字符串，格式化在宿主执行。配置的 `tooltip_line` 和两行模板一样最多 1024 字节，未知变量拒绝保存；天气字符串不会再作为模板解释。
 
-`clock_style::Decorations` 管理 Foreground、TextAlignment、ToolTipService.ToolTip 的可选租约。先构造值和捕获新启用字段的原始状态，再写文字与样式；已有归属在写入前复查。改回 Native 时恢复 binding/local/unset 并释放该字段的租约，之后外部改动可以正常发生。再次启用时重新捕获最新原值。提示每秒变化不会重建未改变的画刷或对齐对象。新增 WinRT 接口及属性槽从同一 Windows metadata 生成；枚举判等仅接受精确 IReference<TextAlignment>，不将任意 OtherType 当作整数。
+`clock_style::Decorations` 管理 Foreground、TextAlignment、ToolTipService.ToolTip 的租约。先构造值和捕获新启用字段的原始状态，再写文字与样式；已有归属在写入前复查。颜色和对齐改回 Native 时恢复 binding/local/unset 并释放该字段的租约，之后外部改动可以正常发生。再次启用时重新捕获最新原值。提示租约在整个时钟接管期间保留：清空模板写入 null，停止接管才还原 binding/local/null/unset。提示每秒变化不会重建未改变的画刷或对齐对象。新增 WinRT 接口及属性槽从同一 Windows metadata 生成；枚举判等仅接受精确 IReference<TextAlignment>，不将任意 OtherType 当作整数。
+
+提示的目标沿已核验的时钟祖先链扩展至独立 `SystemTray.IconView`，前提是该子树仅含时钟两行和已知布局节点。共享通知按钮、铃铛及含未知操作的祖先不会被纳入；无法确认独立边界时仅处理两行和已识别的文字容器。自定义提示放在同一独立时钟的完整点击区域，并清除边界内其他节点的原生提示，避免父级提示与自定义提示竞争。停止及 Drop 恢复原值；如果外部组件替换了提示，则保留外部值并停止时钟接管。
 
 样式冲突在时钟更新时停止会话，恢复仍由 ClockLease/Session 统一执行并保留外部写入。没有声称直接修改同一画刷对象内部颜色也能通过 COM 身份比较检测到；所有权检测针对依赖属性值/绑定的替换。
 
-新增 8 项真实 XAML 场景覆盖独立 ARGB、对齐、提示特殊字符、只更新提示时画刷身份保持、无效颜色写入前拒绝、绑定/未设置值恢复、Native 后外部替换再启用的最新原值、会话冲突恢复和 Drop。通用原生场景合计 126 项；6 项版本限定的自有 Shell 宿主检查也启用了颜色/对齐/提示并通过。实际悬停 UI 和真实任务栏应用尚待验收。
+真实 XAML 场景覆盖独立 ARGB、对齐、提示特殊字符、只更新提示时画刷身份保持、无效颜色写入前拒绝、绑定/未设置值恢复、停止后外部替换再启用的最新原值、会话冲突恢复和 Drop。2026-11-08 增加空模板隐藏、祖先提示抑制、自定义提示保留、binding/local/null/unset 精确恢复与外部提示写入保护；拓扑用例另核对铃铛和未知操作边界。`tools/Test-XamlClock.ps1` 在本进程创建的真实控件上通过，报告 `explorer_accessed=false`；实际 Explorer 悬停和音量浮层仍须单独验收。

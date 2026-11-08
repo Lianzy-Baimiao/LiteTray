@@ -62,6 +62,7 @@ pub fn export(tray: &crate::config::TrayConfig) -> Result<serde_json::Value, Str
     let compatibility = crate::compatibility::collect(&root, Some(diagnostics.build))?;
     let mut value = serde_json::to_value(diagnostics).map_err(|e| e.to_string())?;
     value["compatibility"] = serde_json::to_value(compatibility).map_err(|e| e.to_string())?;
+    value["recent_events"] = crate::event_log::tail(40);
     Ok(value)
 }
 pub fn collect_for(tray: &crate::config::TrayConfig) -> Diagnostics {

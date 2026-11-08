@@ -225,6 +225,11 @@ impl View {
                 .clone()
                 .unwrap_or("原生时钟未就绪".into())
         })?;
+        let tooltip_target = topology::clock_input_node(&fresh.report.elements, clock)?;
+        let tooltip_nodes = topology::clock_tooltip_nodes(&fresh.report.elements, clock)?
+            .into_iter()
+            .map(|index| fresh.objects[index].clone())
+            .collect::<Vec<_>>();
         Ok(Target {
             id,
             clock: (if fresh.native_clock {
@@ -235,7 +240,8 @@ impl View {
                 &fresh.objects[clock.time],
                 &fresh.objects[clock.date],
                 &fresh.objects[clock.container],
-            )?,
+            )?
+            .with_tooltip_targets(&fresh.objects[tooltip_target], &tooltip_nodes)?,
         })
     }
     pub(crate) fn clock_input_element(&self) -> Result<Object, String> {

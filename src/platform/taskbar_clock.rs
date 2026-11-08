@@ -65,6 +65,14 @@ impl taskbar_service::Backend for Native {
     }
 }
 impl taskbar_service::Session for Connection {
+    fn environment_matches(&self) -> bool {
+        self.verify_endpoint().is_ok()
+            && self.environment.as_ref().is_some_and(|original| {
+                super::taskbar_environment::Environment::from_diagnostics(&diagnostics::collect())
+                    .as_ref()
+                    == Some(original)
+            })
+    }
     fn update(&self, frame: &Frame) -> Result<(), String> {
         self.update(frame.clone())
     }
@@ -84,6 +92,7 @@ pub struct Preflight {
     source: Option<Route>,
     clocks: bool,
     mirror_icons: bool,
+    environment: Option<super::taskbar_environment::Environment>,
 }
 pub fn preflight(config: &Config) -> Result<Preflight, String> {
     let system = std::env::var_os("SystemRoot")
@@ -100,6 +109,7 @@ pub fn preflight(config: &Config) -> Result<Preflight, String> {
     tray.show_control_center = false;
     tray.copied_taskbars_only = true;
     let snapshot = diagnostics::collect_for(&tray);
+    let environment = super::taskbar_environment::Environment::from_diagnostics(&snapshot);
     if let Some(error) = snapshot.target_plan_error {
         return Err(error);
     }
@@ -116,6 +126,7 @@ pub fn preflight(config: &Config) -> Result<Preflight, String> {
         source: plan.source,
         clocks: config.tray.clock_enabled,
         mirror_icons: config.tray.enabled && config.tray.show_icons,
+        environment,
     })
 }
 struct Context {
@@ -137,6 +148,7 @@ pub struct Connection {
     last: RefCell<Option<Frame>>,
     busy: Cell<bool>,
     failure: RefCell<Option<String>>,
+    environment: Option<super::taskbar_environment::Environment>,
 }
 struct Call<'a>(&'a Cell<bool>);
 impl Drop for Call<'_> {
@@ -146,16 +158,13 @@ impl Drop for Call<'_> {
 }
 struct Hook {
     hook: HHOOK,
-    module: HMODULE,
+    module: super::dll::Library,
 }
 impl Drop for Hook {
     fn drop(&mut self) {
         unsafe {
             if !self.hook.is_null() {
                 UnhookWindowsHookEx(self.hook);
-            }
-            if !self.module.is_null() {
-                FreeLibrary(self.module);
             }
         }
     }
@@ -207,6 +216,7 @@ impl Connection {
                 last: RefCell::new(None),
                 busy: Cell::new(false),
                 failure: RefCell::new(None),
+                environment: preflight.environment,
             };
             let class = wide(RECEIVER_CLASS);
             let instance = GetModuleHandleW(null());
@@ -250,24 +260,13 @@ impl Connection {
             );
             let request = &connection.context.request;
             request.plan()?;
-            let dll = std::env::current_exe()
-                .map_err(|e| e.to_string())?
-                .parent()
-                .ok_or("程序目录无效")?
-                .join("litetray_taskbar_adapter.dll");
             let mut hook = Hook {
                 hook: null_mut(),
-                module: LoadLibraryExW(
-                    wide(&dll.to_string_lossy()).as_ptr(),
-                    null_mut(),
-                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
-                ),
+                module: super::dll::load(super::dll::Kind::Taskbar)?,
             };
-            if hook.module.is_null() {
-                return Err("无法加载同目录任务栏适配 DLL".into());
-            }
-            let entry = GetProcAddress(hook.module, c"LiteTrayCallWndProc".as_ptr().cast())
-                .ok_or("DLL 缺少任务栏入口")?;
+            let entry =
+                GetProcAddress(hook.module.handle(), c"LiteTrayCallWndProc".as_ptr().cast())
+                    .ok_or("DLL 缺少任务栏入口")?;
             let mut actual = 0;
             if GetWindowThreadProcessId(taskbar, &mut actual) != tid
                 || actual != pid
@@ -281,7 +280,7 @@ impl Connection {
                     unsafe extern "system" fn() -> isize,
                     unsafe extern "system" fn(i32, WPARAM, LPARAM) -> LRESULT,
                 >(entry)),
-                hook.module,
+                hook.module.handle(),
                 tid,
             );
             if hook.hook.is_null() {
@@ -679,6 +678,7 @@ mod activation_checks {
                 last: RefCell::new(None),
                 busy: Cell::new(false),
                 failure: RefCell::new(None),
+                environment: None,
             };
             let accepted = connection.take_activation();
             CloseHandle(connection.process);

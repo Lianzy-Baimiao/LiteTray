@@ -914,7 +914,7 @@ impl App {
                 22,
             );
             self.divider(224, 462, total);
-            self.label("鼠标悬停提示 · 留空使用系统提示", 224, 477, total, 22);
+            self.label("鼠标悬停提示 · 留空隐藏提示", 224, 477, total, 22);
             let tip = self.control(
                 "EDIT",
                 &c.clock.tooltip_line.replace('\n', "\r\n"),
@@ -930,7 +930,7 @@ impl App {
                 tip,
                 EM_SETCUEBANNER,
                 0,
-                wide(tr("留空使用系统提示；支持内容模板中的变量与换行")).as_ptr() as isize,
+                wide(tr("留空隐藏提示；支持内容模板中的变量与换行")).as_ptr() as isize,
             );
             self.button("预览原生时钟", 209, 224, 562, half);
             self.button("重置样式", 805, 248 + half, 562, half);
