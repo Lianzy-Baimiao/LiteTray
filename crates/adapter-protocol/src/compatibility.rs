@@ -8,6 +8,10 @@ const PROFILE_BYTES: &[&[u8]] = &[
     include_bytes!("../profiles/windows11-26300.9711-x64.json"),
     include_bytes!("../profiles/windows11-26300.9818-x64.json"),
     include_bytes!("../profiles/windows11-26200.8457-x64.json"),
+    #[cfg(feature = "compatibility-lab")]
+    include_bytes!("../profiles/lab/windows11-26200.8037-x64.json"),
+    #[cfg(feature = "compatibility-lab")]
+    include_bytes!("../profiles/lab/windows11-26100.1742-x64.json"),
 ];
 const MAX_PROFILE: usize = 64 * 1024;
 
@@ -223,7 +227,8 @@ fn decode_profiles(sources: &[&[u8]]) -> Result<Vec<Profile>, String> {
 
 /// Validated, embedded evidence only. Registry order is not a compatibility
 /// preference: callers must select an exact module identity, never a default.
-/// The reserved `compatibility-lab` feature currently adds no candidates.
+/// `compatibility-lab` adds static candidates pending isolated VM validation;
+/// default builds include only the independently reviewed production profiles.
 pub fn profiles() -> Result<&'static [Profile], String> {
     static PROFILES: OnceLock<Result<Vec<Profile>, String>> = OnceLock::new();
     PROFILES
@@ -271,15 +276,32 @@ mod tests {
         changed
     }
 
+    fn assert_module_identity_requirements(module: &Module) {
+        assert!(module.matches(&module.sha256, &module.identity));
+        assert!(!module.matches(&"0".repeat(64), &module.identity));
+        let loaded = serde_json::to_value(&module.identity).unwrap();
+        assert!(module.matches_loaded(&loaded));
+        for changed in changed_identities(&module.identity) {
+            assert!(!module.matches(&module.sha256, &changed));
+            assert!(!module.matches_loaded(&serde_json::to_value(changed).unwrap()));
+        }
+        assert!(!module.matches_loaded(&serde_json::json!({})));
+    }
+
     #[test]
     fn embedded_profiles_are_complete_and_selected_by_exact_taskbar_identity() {
         let profiles = profiles().unwrap();
-        assert_eq!(profiles.len(), 3);
-        for id in [
+        let expected_ids = [
             "windows11-26300.9711-x64",
             "windows11-26300.9818-x64",
             "windows11-26200.8457-x64",
-        ] {
+            #[cfg(feature = "compatibility-lab")]
+            "windows11-26200.8037-x64",
+            #[cfg(feature = "compatibility-lab")]
+            "windows11-26100.1742-x64",
+        ];
+        assert_eq!(profiles.len(), expected_ids.len());
+        for id in expected_ids {
             let profile = profiles.iter().find(|profile| profile.id == id).unwrap();
             let encoded = serde_json::to_vec(profile).unwrap();
             assert_eq!(Profile::decode(&encoded).unwrap().host, profile.host);
@@ -288,16 +310,29 @@ mod tests {
                 profile_for_taskbar(&profile.taskbar.identity).unwrap().id,
                 id
             );
+            for changed in changed_identities(&profile.taskbar.identity) {
+                assert!(profile_for_taskbar(&changed).is_err());
+            }
         }
     }
     #[test]
-    fn feature_registry_is_consistent_and_keeps_all_module_identities_separate() {
-        // Both default and compatibility-lab builds use the same three exact
-        // profiles; the reserved feature currently has no additional candidate.
-        let promoted =
-            Profile::decode(include_bytes!("../profiles/windows11-26200.8457-x64.json")).unwrap();
-        assert_eq!(promoted.id, "windows11-26200.8457-x64");
-        assert_eq!(promoted.tray.name, "Taskbar.View.dll");
+    fn lab_candidates_are_feature_gated_and_keep_all_module_identities_separate() {
+        let candidates = [
+            (
+                "windows11-26200.8037-x64",
+                &include_bytes!("../profiles/lab/windows11-26200.8037-x64.json")[..],
+            ),
+            (
+                "windows11-26100.1742-x64",
+                &include_bytes!("../profiles/lab/windows11-26100.1742-x64.json")[..],
+            ),
+        ]
+        .map(|(id, bytes)| {
+            let profile = Profile::decode(bytes).unwrap();
+            assert_eq!(profile.id, id);
+            assert_eq!(profile.tray.name, "Taskbar.View.dll");
+            profile
+        });
         let registry = profiles().unwrap();
         let ids = registry
             .iter()
@@ -308,30 +343,69 @@ mod tests {
             [
                 "windows11-26300.9711-x64",
                 "windows11-26300.9818-x64",
-                "windows11-26200.8457-x64"
+                "windows11-26200.8457-x64",
+                #[cfg(feature = "compatibility-lab")]
+                "windows11-26200.8037-x64",
+                #[cfg(feature = "compatibility-lab")]
+                "windows11-26100.1742-x64",
             ]
         );
-        assert_eq!(
-            profile_for_taskbar(&promoted.taskbar.identity).unwrap().id,
-            promoted.id
-        );
-        for changed in changed_identities(&promoted.taskbar.identity) {
-            assert!(profile_for_taskbar(&changed).is_err());
+        // Include both lab fixtures in the mixing checks even in default tests,
+        // where neither candidate is present in the actual registry.
+        let mut comparisons = registry.to_vec();
+        for candidate in &candidates {
+            if !comparisons.iter().any(|profile| profile.id == candidate.id) {
+                comparisons.push(candidate.clone());
+            }
         }
-        for stable in registry.iter().filter(|profile| profile.id != promoted.id) {
-            for (stable_module, promoted_module) in
-                stable.modules().into_iter().zip(promoted.modules())
+        for candidate in &candidates {
+            if cfg!(feature = "compatibility-lab") {
+                assert_eq!(
+                    profile_for_taskbar(&candidate.taskbar.identity).unwrap().id,
+                    candidate.id
+                );
+            } else {
+                assert!(profile_for_taskbar(&candidate.taskbar.identity).is_err());
+            }
+            for changed in changed_identities(&candidate.taskbar.identity) {
+                assert!(profile_for_taskbar(&changed).is_err());
+            }
+            for module in candidate.modules() {
+                assert_module_identity_requirements(module);
+            }
+            for other in comparisons
+                .iter()
+                .filter(|profile| profile.id != candidate.id)
             {
-                assert!(!stable_module.matches(&promoted_module.sha256, &promoted_module.identity));
-                assert!(!promoted_module.matches(&stable_module.sha256, &stable_module.identity));
-                assert!(
-                    !stable_module
-                        .matches_loaded(&serde_json::to_value(&promoted_module.identity).unwrap())
-                );
-                assert!(
-                    !promoted_module
-                        .matches_loaded(&serde_json::to_value(&stable_module.identity).unwrap())
-                );
+                let mut mixed_host = candidate.clone();
+                mixed_host.host = other.host.clone();
+                assert!(mixed_host.validate().is_err());
+                let mut reverse_host = other.clone();
+                reverse_host.host = candidate.host.clone();
+                assert!(reverse_host.validate().is_err());
+                for (other_module, candidate_module) in
+                    other.modules().into_iter().zip(candidate.modules())
+                {
+                    assert!(
+                        !other_module.matches(&candidate_module.sha256, &candidate_module.identity)
+                    );
+                    assert!(
+                        !candidate_module.matches(&other_module.sha256, &other_module.identity)
+                    );
+                    assert!(
+                        !candidate_module.matches(&other_module.sha256, &candidate_module.identity)
+                    );
+                    assert!(
+                        !candidate_module.matches(&candidate_module.sha256, &other_module.identity)
+                    );
+                    assert!(!other_module.matches_loaded(
+                        &serde_json::to_value(&candidate_module.identity).unwrap()
+                    ));
+                    assert!(
+                        !candidate_module
+                            .matches_loaded(&serde_json::to_value(&other_module.identity).unwrap())
+                    );
+                }
             }
         }
     }
@@ -443,21 +517,20 @@ mod tests {
     fn disk_and_loaded_identities_are_independent_requirements() {
         for profile in profiles().unwrap() {
             for module in profile.modules() {
-                assert!(module.matches(&module.sha256, &module.identity));
-                assert!(!module.matches(&"0".repeat(64), &module.identity));
-                let loaded = serde_json::to_value(&module.identity).unwrap();
-                assert!(module.matches_loaded(&loaded));
-                for changed in changed_identities(&module.identity) {
-                    assert!(!module.matches(&module.sha256, &changed));
-                    assert!(!module.matches_loaded(&serde_json::to_value(changed).unwrap()));
-                }
-                assert!(!module.matches_loaded(&serde_json::json!({})));
+                assert_module_identity_requirements(module);
             }
         }
         let profiles = profiles().unwrap();
-        for (old, new) in profiles[0].modules().into_iter().zip(profiles[1].modules()) {
-            assert!(!old.matches(&new.sha256, &new.identity));
-            assert!(!old.matches_loaded(&serde_json::to_value(&new.identity).unwrap()));
+        for old_profile in profiles {
+            for new_profile in profiles
+                .iter()
+                .filter(|profile| profile.id != old_profile.id)
+            {
+                for (old, new) in old_profile.modules().into_iter().zip(new_profile.modules()) {
+                    assert!(!old.matches(&new.sha256, &new.identity));
+                    assert!(!old.matches_loaded(&serde_json::to_value(&new.identity).unwrap()));
+                }
+            }
         }
     }
 }

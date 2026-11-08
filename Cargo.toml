@@ -15,7 +15,7 @@ resolver = "3"
 
 [features]
 default = []
-# Reserved for disposable-VM candidates; currently identical to the default registry.
+# Adds static candidates pending validation in disposable VMs.
 # Release packages always use the default feature set.
 compatibility-lab = ["litetray-adapter-protocol/compatibility-lab"]
 

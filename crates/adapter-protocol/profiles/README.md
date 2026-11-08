@@ -39,11 +39,21 @@ implementation of any new ABI, and explicit validation results. Do not widen
 an OS build range or reuse offsets merely because version labels look similar.
 The profile contains metadata and minimal code prefixes, not system DLLs/PDBs.
 
-The default registry contains all three reviewed profiles. The reserved
-`compatibility-lab` Cargo feature currently adds no candidates. Both the initial
-frozen lab package and a subsequent default release build passed the six-command
-25H2 VM harness, with separate binary hashes and validation records. Adding the
-final acceptance documents changes the distribution manifest; its three binaries
-must remain identical to the tested default build. Offline candidate artifacts
-are not automatically registered or activated, and neither runtime settings nor
-external JSON can override the compiled module identities.
+The default registry contains the three reviewed profiles above. The explicit
+`compatibility-lab` Cargo feature additionally includes
+`lab/windows11-26200.8037-x64.json` and `lab/windows11-26100.1742-x64.json`, for a
+five-profile lab registry. These exact module sets come from a Windows 11 Pro
+25H2 8037 image and the official Enterprise LTSC 2024 Evaluation 1742 image.
+The LTSC candidate passed isolated single-monitor lab acceptance for exact
+modules/layout, clock updates/restoration and tray preparation/Stop. Four other
+scenarios remain unvalidated. Its first inspection response failed and a later
+run of the same package passed; the initial cause remains unresolved. The 8037
+candidate still awaits live acceptance, and default builds exclude both.
+Their provenance, changed fields, analyzer rejection tests and runtime
+evidence are recorded in
+[the next-version evidence](../../../docs/compatibility-next-versions.md).
+
+The 8457 validation record remains bound to its own tested lab and default
+release binaries; it does not validate the new candidates. Offline candidate
+artifacts are not automatically registered or activated, and neither runtime
+settings nor external JSON can override the compiled module identities.

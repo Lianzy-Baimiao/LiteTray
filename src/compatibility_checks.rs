@@ -285,7 +285,9 @@ fn support_catalog_keeps_recorded_scope_separate_from_built_in_support() {
                 }
             } else if matches!(
                 profile.id.as_str(),
-                "windows11-26300.9818-x64" | "windows11-26200.8457-x64"
+                "windows11-26300.9818-x64"
+                    | "windows11-26200.8457-x64"
+                    | "windows11-26100.1742-x64"
             ) && matches!(
                 evidence.scenario,
                 ValidationScenario::ModuleLayout

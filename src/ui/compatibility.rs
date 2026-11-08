@@ -698,8 +698,21 @@ mod tests {
                 "Modules match · runtime checks still required"
             );
         }
-        for id in ["windows11-26300.9818-x64", "windows11-26200.8457-x64"] {
-            value.report.profile_id = Some(id.into());
+        let tested_ids: Vec<_> = value
+            .supported_profiles
+            .iter()
+            .filter(|profile| {
+                matches!(
+                    profile.profile_id.as_str(),
+                    "windows11-26300.9818-x64"
+                        | "windows11-26200.8457-x64"
+                        | "windows11-26100.1742-x64"
+                )
+            })
+            .map(|profile| profile.profile_id.clone())
+            .collect();
+        for id in tested_ids {
+            value.report.profile_id = Some(id);
             value.report.all_profile_images_matched = false;
             assert!(selected_profile(&value).is_none());
             assert!(evidence_text(Some(&value)).contains("cannot apply"));
@@ -708,6 +721,7 @@ mod tests {
             assert!(evidence.contains("Not validated"));
             assert!(evidence.contains("Tray mirroring"));
             assert!(evidence.contains("Recorded test (limited scope)"));
+            assert_eq!(evidence.matches("Recorded test (limited scope)").count(), 3);
             assert_eq!(evidence.matches("Not validated").count(), 4);
         }
         i18n::set_language(Language::ZhCn);

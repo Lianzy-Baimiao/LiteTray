@@ -9,8 +9,9 @@ from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 
 from evidence import EvidenceError, Image, acquire_pdb, pdb_identity, within
 from inspect_modules import choices
-from layouts import (GUARD_DISPATCH, UNKNOWN_DESTRUCTOR, UNKNOWN_RELEASE,
-                     aligned_offset, find_sequence, owned_cleanup)
+from layouts import (GUARD_DISPATCH, GUARD_DISPATCH_FUNCTION, TRANSFORM_TO_VISUAL,
+                     UNKNOWN_DESTRUCTOR, UNKNOWN_RELEASE,
+                     aligned_offset, find_sequence, implementation_source_field, owned_cleanup)
 
 
 def pdb_fixture(info_age=3, dbi_age=1):
@@ -52,12 +53,147 @@ def cleanup_fixture(delegated=False):
     return image, list(decoder.disasm(screen, 0x1000)), release, decoder
 
 
+def transform_cleanup_fixture(stack_displacement=0xB0, double_owned=False, extra_release=None):
+    image, _, _, decoder = cleanup_fixture(delegated=True)
+    call = lambda address, target: b"\xe8" + struct.pack("<i", target - address - 5)
+    screen = bytes.fromhex("488365a000 4c8d45a0 488d55b0 488bce")
+    screen += call(0x1000 + len(screen), 0x5000)
+    screen += bytes.fromhex("90 48837da000 7409 488d4da0")
+    screen += call(0x1000 + len(screen), 0x2000)
+    if extra_release is not None:
+        screen += extra_release
+        screen += call(0x1000 + len(screen), 0x2000)
+    screen += bytes.fromhex("f3410f7f06")
+    screen += bytes.fromhex("488bce") if double_owned else bytes.fromhex("488d4d") + bytes([stack_displacement])
+    screen += call(0x1000 + len(screen), 0x3000)
+    screen += bytes.fromhex("90 488bce")
+    screen += call(0x1000 + len(screen), 0x3000)
+    screen += bytes.fromhex("498bc6 c3")
+    original_exact = image.exact
+    image.exact = lambda name: 0x5000 if name == TRANSFORM_TO_VISUAL else original_exact(name)
+    original_function = image.function
+    transform = bytes.fromhex("498bf0 488bda 488b4c2430 48890b 488bc3 c3")
+    image.function = lambda rva: list(decoder.disasm(transform, rva)) if rva == 0x5000 else original_function(rva)
+    return image, list(decoder.disasm(screen, 0x1000)), decoder
+
+
+def source_field_fixture(inline=False):
+    decoder = Cs(CS_ARCH_X86, CS_MODE_64)
+    decoder.detail = True
+    # Use the observed field initialization and invocation sequences; no system
+    # image is needed to test wrong-object and ambiguous-field rejections.
+    if not inline:
+        code = bytes.fromhex("488d7920 488d5008 488bcf e800100000")
+    else:
+        code = bytes.fromhex("488d7120 498d53e8 488bce e800100000 84c0 7520 "
+                             "488364242000 488b0e 488b01 488d542420 488b4030 e800100000 "
+                             "90909090909090 cc")
+    instructions = list(decoder.disasm(code, 0x1000))
+    thunk_rva = [ins.operands[0].imm for ins in instructions if ins.mnemonic == "call"][-1]
+    def thunk_bytes(rva, count):
+        if rva != thunk_rva:
+            raise EvidenceError("Unknown synthetic thunk")
+        return b"\xe9" + struct.pack("<i", 0x5000 - rva - 5)
+    image = SimpleNamespace(role="shell", bytes=thunk_bytes, exact=lambda name: 0x5000,
+                            section=lambda *args: None)
+    return instructions, decoder, image
+
+
 class Rejections(unittest.TestCase):
     def test_both_owned_wrapper_cleanup_call_graphs_are_verified(self):
         for delegated, recipe in ((False, "inline_null_check_release_v1"),
                                   (True, "delegated_null_check_release_v1")):
             image, code, _, _ = cleanup_fixture(delegated)
             self.assertEqual(owned_cleanup(image, code, [])["recipe"], recipe)
+
+    def test_distinct_transform_temporary_and_owned_wrapper_are_both_verified(self):
+        image, code, _ = transform_cleanup_fixture()
+        result = owned_cleanup(image, code, [])
+        self.assertEqual(result["recipe"], "delegated_with_transform_temporary_v1")
+        self.assertEqual(result["cleanup_call_rva"], code[-3].address)
+
+    def test_extra_cleanup_cannot_destroy_owned_wrapper_twice_or_another_local(self):
+        for options in ({"double_owned": True}, {"stack_displacement": 0xB8}):
+            image, code, _ = transform_cleanup_fixture(**options)
+            with self.assertRaises(EvidenceError):
+                owned_cleanup(image, code, [])
+
+    def test_transform_wrapper_must_have_the_reviewed_initialization(self):
+        image, code, decoder = transform_cleanup_fixture()
+        raw = b"".join(ins.bytes for ins in code)
+        for wrong in (raw.replace(bytes.fromhex("488365a000"), bytes.fromhex("488365a001"), 1),
+                      raw.replace(bytes.fromhex("488d55b0"), bytes.fromhex("488d55b8"), 1),
+                      raw.replace(bytes.fromhex("488bce"), bytes.fromhex("488bcf"), 1)):
+            with self.assertRaises(EvidenceError):
+                owned_cleanup(image, list(decoder.disasm(wrong, 0x1000)), [])
+        initializer = next(ins for ins in code if ins.mnemonic == "call")
+        wrong = raw.replace(initializer.bytes, b"\xe8" + struct.pack("<i", 0x2000 - initializer.address - 5), 1)
+        with self.assertRaises(EvidenceError):
+            owned_cleanup(image, list(decoder.disasm(wrong, 0x1000)), [])
+
+    def test_transform_cleanup_rejects_extra_owned_or_temporary_direct_release(self):
+        for argument in (bytes.fromhex("488bce"), bytes.fromhex("488d4da0")):
+            image, code, _ = transform_cleanup_fixture(extra_release=argument)
+            with self.assertRaisesRegex(EvidenceError, "exactly one direct call"):
+                owned_cleanup(image, code, [])
+
+    def test_transform_direct_release_must_preserve_the_owned_input(self):
+        image, code, decoder = transform_cleanup_fixture()
+        raw = b"".join(ins.bytes for ins in code)
+        # Keep one direct call, but pass RSI instead of the reviewed local.
+        wrong = raw.replace(bytes.fromhex("488d4da0"), bytes.fromhex("488bce90"), 1)
+        with self.assertRaises(EvidenceError):
+            owned_cleanup(image, list(decoder.disasm(wrong, 0x1000)), [])
+
+    def test_transform_direct_release_requires_the_exact_local_null_guard(self):
+        image, code, decoder = transform_cleanup_fixture()
+        raw = b"".join(ins.bytes for ins in code)
+        for original, replacement in (("48837da000", "48837da800"),
+                                      ("488d4da0", "488d4da8"),
+                                      ("7409", "7400"), ("7409", "740e")):
+            wrong = raw.replace(bytes.fromhex(original), bytes.fromhex(replacement), 1)
+            with self.assertRaises(EvidenceError):
+                owned_cleanup(image, list(decoder.disasm(wrong, 0x1000)), [])
+
+    def test_transform_input_temporary_requires_one_exact_direct_release(self):
+        image, code, decoder = transform_cleanup_fixture()
+        raw = b"".join(ins.bytes for ins in code)
+        release = next(ins for ins in code if ins.mnemonic == "call" and
+                       ins.operands[0].imm == image.exact(UNKNOWN_RELEASE))
+        wrong = raw.replace(release.bytes, b"\x90" * release.size, 1)
+        with self.assertRaisesRegex(EvidenceError, "exactly one direct call"):
+            owned_cleanup(image, list(decoder.disasm(wrong, 0x1000)), [])
+
+    def test_both_source_field_register_allocations_are_verified(self):
+        for inline, recipe in ((False, "rdi_content_helper_v1"), (True, "rsi_inline_content_v1")):
+            code, _, image = source_field_fixture(inline)
+            self.assertEqual(implementation_source_field(image, code, []), (0x20, recipe))
+
+    def test_source_field_cannot_flow_through_a_different_object(self):
+        code, decoder, image = source_field_fixture(True)
+        raw = b"".join(ins.bytes for ins in code)
+        for original, replacement in (("488bce", "488bcf"), ("488b0e", "488b0f"),
+                                      ("488b4030", "488b4038"), ("7520", "7500")):
+            wrong = raw.replace(bytes.fromhex(original), bytes.fromhex(replacement), 1)
+            with self.assertRaises(EvidenceError):
+                implementation_source_field(image, list(decoder.disasm(wrong, 0x1000)), [])
+
+    def test_inline_content_must_reach_the_exact_cfg_dispatch(self):
+        code, decoder, image = source_field_fixture(True)
+        raw = b"".join(ins.bytes for ins in code)
+        content_call = [ins for ins in code if ins.mnemonic == "call"][-1]
+        wrong = raw[:content_call.address - 0x1000] + bytes.fromhex("ffd3 909090") + raw[content_call.address - 0x1000 + 5:]
+        with self.assertRaises(EvidenceError):
+            implementation_source_field(image, list(decoder.disasm(wrong, 0x1000)), [])
+        image.exact = lambda name: 0x5008
+        with self.assertRaises(EvidenceError):
+            implementation_source_field(image, code, [])
+
+    def test_multiple_source_field_candidates_are_ambiguous(self):
+        code, decoder, image = source_field_fixture(False)
+        raw = b"".join(ins.bytes for ins in code) + bytes.fromhex("488d7128")
+        with self.assertRaises(EvidenceError):
+            implementation_source_field(image, list(decoder.disasm(raw, 0x1000)), [])
 
     def test_wrong_release_vtable_slot_is_rejected(self):
         image, code, release, _ = cleanup_fixture()

@@ -29,6 +29,8 @@ TRAY_SYMBOLS = (
 UNKNOWN_DESTRUCTOR = "??1IUnknown@Foundation@Windows@winrt@@QEAA@XZ"
 UNKNOWN_RELEASE = "?unconditional_release_ref@IUnknown@Foundation@Windows@winrt@@AEAAXXZ"
 GUARD_DISPATCH = "__guard_dispatch_icall_fptr"
+GUARD_DISPATCH_FUNCTION = "_guard_dispatch_icall"
+TRANSFORM_TO_VISUAL = "?TransformToVisual@?$consume_Windows_UI_Xaml_IUIElement@UFrameworkElement@Xaml@UI@Windows@winrt@@@impl@winrt@@QEBA@AEBUUIElement@Xaml@UI@Windows@3@@Z"
 
 
 def instruction_record(ins):
@@ -77,7 +79,7 @@ def aligned_offset(offset):
 
 
 def owned_cleanup(image, code, logs):
-    """Two reviewed call graphs, including the same consumed wrapper in both."""
+    """Reviewed call graphs that consume the same incoming wrapper exactly once."""
     release_rva = image.exact(UNKNOWN_RELEASE)
     # This tail-call leaf has no .pdata entry. Only these exact six decoded
     # instructions are accepted; this is not a generic missing-boundary fallback.
@@ -102,6 +104,8 @@ def owned_cleanup(image, code, logs):
     logs.append({"module_role": image.role, "symbol": UNKNOWN_RELEASE, "rva": release_rva,
                  "boundary_recipe": "exact_six_instruction_cfg_release_leaf_v1",
                  "instructions": [instruction_record(ins) for ins in release]})
+    written = find_sequence(code, (("movdqu", "xmmword ptr [r14], xmm0"),))
+    returned = find_sequence(code, (("mov", "rax, r14"),))
 
     checks = [i for i, ins in enumerate(code) if (ins.mnemonic, ins.op_str) == ("cmp", "qword ptr [rsi], 0")]
     if checks:
@@ -124,14 +128,104 @@ def owned_cleanup(image, code, logs):
                 destructor[2].operands[0].imm == destructor[4].address and
                 immediate_call(destructor, release_rva) == 3,
                 "Unknown delegated FrameworkElement cleanup flow")
-        cleanup = immediate_call(code, destructor_rva)
-        require(cleanup > 0 and (code[cleanup - 1].mnemonic, code[cleanup - 1].op_str) == ("mov", "rcx, rsi"),
-                "Owned FrameworkElement does not flow directly to its destructor")
-        recipe = "delegated_null_check_release_v1"
-    written = find_sequence(code, (("movdqu", "xmmword ptr [r14], xmm0"),))
-    returned = find_sequence(code, (("mov", "rax, r14"),))
+        calls = [i for i, ins in enumerate(code) if ins.mnemonic == "call" and
+                 len(ins.operands) == 1 and ins.operands[0].type == X86_OP_IMM and
+                 ins.operands[0].imm == destructor_rva]
+        owned = [i for i in calls if i > 0 and
+                 (code[i - 1].mnemonic, code[i - 1].op_str) == ("mov", "rcx, rsi")]
+        require(len(owned) == 1, "Owned FrameworkElement must flow to exactly one destructor call")
+        cleanup = owned[0]
+        if len(calls) == 1:
+            recipe = "delegated_null_check_release_v1"
+        else:
+            # 26100.1 also destroys a local transform wrapper. Its distinct
+            # stack address, initialization and adjacent cleanup are checked.
+            # Its one direct release must clean the null-guarded input local;
+            # extra calls cannot be silently treated as harmless temporaries.
+            require(cleanup >= 4 and len(calls) == 2 and calls == [cleanup - 3, cleanup] and
+                    (code[cleanup - 4].mnemonic, code[cleanup - 4].op_str) == ("lea", "rcx, [rbp - 0x50]") and
+                    (code[cleanup - 2].mnemonic, code[cleanup - 2].op_str) == ("nop", ""),
+                    "Unknown additional destructor call or stack temporary cleanup")
+            initialized = find_sequence(code, (("lea", "rdx, [rbp - 0x50]"), ("mov", "rcx, rsi")))
+            transform_rva, transform = function_evidence(image, TRANSFORM_TO_VISUAL, logs)
+            require(initialized >= 2 and initialized + 2 < cleanup - 4 and
+                    (code[initialized - 2].mnemonic, code[initialized - 2].op_str) ==
+                    ("and", "qword ptr [rbp - 0x60], 0") and
+                    (code[initialized - 1].mnemonic, code[initialized - 1].op_str) == ("lea", "r8, [rbp - 0x60]") and
+                    immediate_call(code, transform_rva) == initialized + 2,
+                    "Stack temporary has no exact TransformToVisual initialization call")
+            find_sequence(transform, (("mov", "rsi, r8"), ("mov", "rbx, rdx")))
+            find_sequence(transform, (("mov", "rcx, qword ptr [rsp + 0x30]"),
+                                      ("mov", "qword ptr [rbx], rcx"), ("mov", "rax, rbx")))
+            temporary_cleanup = immediate_call(code, release_rva)
+            require(temporary_cleanup == initialized + 7 and temporary_cleanup < written and
+                    [(code[i].mnemonic, code[i].op_str) for i in
+                     (temporary_cleanup - 4, temporary_cleanup - 3, temporary_cleanup - 1)] ==
+                    [("nop", ""), ("cmp", "qword ptr [rbp - 0x60], 0"),
+                     ("lea", "rcx, [rbp - 0x60]")],
+                    "Unknown direct release of TransformToVisual input temporary")
+            branch = code[temporary_cleanup - 2]
+            require(branch.mnemonic == "je" and len(branch.operands) == 1 and
+                    branch.operands[0].type == X86_OP_IMM and
+                    branch.operands[0].imm == code[temporary_cleanup + 1].address,
+                    "Transform input null branch must skip only its direct release")
+            recipe = "delegated_with_transform_temporary_v1"
     require(written < cleanup < returned, "Owned FrameworkElement cleanup is not between result write and return")
     return {"recipe": recipe, "release_rva": release_rva, "cleanup_call_rva": code[cleanup].address}
+
+
+def implementation_source_field(image, implementation, logs):
+    """Two observed register allocations, with direct field use in each."""
+    fields = [(i, ins, register) for i, ins in enumerate(implementation)
+              for register in ("rdi", "rsi")
+              if ins.mnemonic == "lea" and ins.op_str.startswith(f"{register}, [rcx")]
+    require(len(fields) == 1, "Unknown/ambiguous implementation source field")
+    index, field, register = fields[0]
+    offset = member_adjustment(field, register, "rcx")
+    require(index + 3 < len(implementation) and
+            implementation[index + 1].mnemonic == "lea" and implementation[index + 1].op_str.startswith("rdx,") and
+            (implementation[index + 2].mnemonic, implementation[index + 2].op_str) == ("mov", f"rcx, {register}") and
+            implementation[index + 3].mnemonic == "call" and
+            len(implementation[index + 3].operands) == 1 and
+            implementation[index + 3].operands[0].type == X86_OP_IMM,
+            "Unknown use of source field")
+    if register == "rsi":
+        # The 26100.1 implementation inlines the source's Content getter. It
+        # dereferences this same field and calls ABI slot 6; do not infer the
+        # field merely from a different nonvolatile register in an arbitrary LEA.
+        expected = (("test", "al, al"), ("jne", None),
+                    ("and", "qword ptr [rsp + 0x20], 0"),
+                    ("mov", "rcx, qword ptr [rsi]"), ("mov", "rax, qword ptr [rcx]"),
+                    ("lea", "rdx, [rsp + 0x20]"), ("mov", "rax, qword ptr [rax + 0x30]"),
+                    ("call", None))
+        sequence = implementation[index + 4:index + 4 + len(expected)]
+        require(len(sequence) == len(expected) and all(
+            ins.mnemonic == mnemonic and (operand is None or ins.op_str == operand)
+            for ins, (mnemonic, operand) in zip(sequence, expected)),
+            "Unknown inline Content getter for the RSI source field")
+        branch = sequence[1]
+        require(len(branch.operands) == 1 and branch.operands[0].type == X86_OP_IMM and
+                branch.operands[0].imm > sequence[-1].address and
+                branch.operands[0].imm in {ins.address for ins in implementation},
+                "Inline Content null check does not branch to a bounded failure path")
+        call = sequence[-1]
+        require(len(call.operands) == 1 and call.operands[0].type == X86_OP_IMM,
+                "Inline Content getter does not call a direct CFG thunk")
+        thunk_rva = call.operands[0].imm
+        decoder = Cs(CS_ARCH_X86, CS_MODE_64)
+        decoder.detail = True
+        thunk = list(decoder.disasm(image.bytes(thunk_rva, 5), thunk_rva))
+        dispatch = image.exact(GUARD_DISPATCH_FUNCTION)
+        image.section(dispatch, 1, True)
+        require(len(thunk) == 1 and thunk[0].mnemonic == "jmp" and thunk[0].size == 5 and
+                len(thunk[0].operands) == 1 and thunk[0].operands[0].type == X86_OP_IMM and
+                thunk[0].operands[0].imm == dispatch,
+                "Inline Content call does not reach the exact CFG dispatch function")
+        logs.append({"module_role": image.role, "symbol": GUARD_DISPATCH_FUNCTION + " (direct thunk)",
+                     "rva": thunk_rva, "boundary_recipe": "exact_five_byte_cfg_dispatch_thunk_v1",
+                     "instructions": [instruction_record(thunk[0])]})
+        return offset, "rsi_inline_content_v1"
+    return offset, "rdi_content_helper_v1"
 
 
 def host_layout(image: Image, logs):
@@ -192,16 +286,8 @@ def source_layout(taskbar: Image, shell: Image, logs):
     impl_call = immediate_call(getter, impl_rva)
     require(impl_call == index + 5 and getter[index + 4].mnemonic == "lea" and
             getter[index + 4].op_str.startswith("rdx, [rsp"), "Adjusted object does not flow directly to implementation")
-    fields = [(i, ins) for i, ins in enumerate(implementation)
-              if ins.mnemonic == "lea" and ins.op_str.startswith("rdi, [rcx")]
-    require(len(fields) == 1, "Unknown/ambiguous implementation source field")
-    impl_index, impl_field = fields[0]
-    offset = member_adjustment(impl_field, "rdi", "rcx")
+    offset, field_recipe = implementation_source_field(shell, implementation, logs)
     child_field = aligned_offset(delta + offset)
-    require(impl_index + 3 < len(implementation) and
-            implementation[impl_index + 1].mnemonic == "lea" and implementation[impl_index + 1].op_str.startswith("rdx,") and
-            (implementation[impl_index + 2].mnemonic, implementation[impl_index + 2].op_str) == ("mov", "rcx, rdi") and
-            implementation[impl_index + 3].mnemonic == "call", "Unknown use of source field")
     table_evidence = {}
     for label, table, count in (("child", child, 21), ("factory", factory, 7)):
         table_evidence[label] = {"rva": table, "slots": [shell.pointer(table + 8 * slot) for slot in range(count)]}
@@ -210,7 +296,8 @@ def source_layout(taskbar: Image, shell: Image, logs):
         "child_source_offset": child_field, "child_vtable_rva": child, "factory_vtable_rva": factory,
         "evidence": {"has_focus_rva": focus_rva, "child_getter_rva": getter_rva,
                      "implementation_getter_rva": impl_rva, "abi_this_adjustment": delta,
-                     "implementation_source_field": offset, "vtables": table_evidence},
+                     "implementation_source_field": offset, "implementation_field_recipe": field_recipe,
+                     "vtables": table_evidence},
     }
 
 

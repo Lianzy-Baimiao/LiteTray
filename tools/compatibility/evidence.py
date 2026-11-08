@@ -22,12 +22,12 @@ MAX_IMAGE = 128 * 1024 * 1024
 MAX_PDB = 512 * 1024 * 1024
 MASKS = {
     "taskbar": ("*TaskbarHost*", "*TaskBand*", "*Decref*", "*XamlExplorerHostChildWindow*"),
-    "shell": ("*XamlExplorerHost*", "*IDesktopWindowXamlSource*"),
+    "shell": ("*XamlExplorerHost*", "*IDesktopWindowXamlSource*", "_guard_dispatch_icall"),
     "tray": ("*GetInvocationPointRelativeToScreen*", "*GetIconBoundsRelativeToScreen*",
              "*GetScreenRectFromXamlElement*", "*SystemTrayFrame*", "*NotificationAreaIconsDataModel*",
              "??1IUnknown@Foundation@Windows@winrt@@QEAA@XZ",
              "?unconditional_release_ref@IUnknown@Foundation@Windows@winrt@@AEAAXXZ",
-             "__guard_dispatch_icall_fptr"),
+             "__guard_dispatch_icall_fptr", "*TransformToVisual*"),
 }
 
 
