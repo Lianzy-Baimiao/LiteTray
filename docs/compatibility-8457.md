@@ -1,8 +1,8 @@
 # Windows 11 25H2 26200.8457 x64 虚拟机兼容证据
 
-2026-11-09，独立 Windows 11 Pro 25H2 客体中的首轮检查已完成：三模块磁盘匹配、164 项隔离 XAML 检查和 6 项私有 Shell 宿主检查通过；真实任务栏检查在接管前因窗口发现失败而停止。后续只读对照确认，这套客体的通用窗口枚举遗漏了可见的原生主任务栏，精确类名查询可以找到它。**首轮结果不构成时钟接管、恢复或托盘准备通过，也不授权将候选提升为生产支持。**
+2026-11-09，独立 Windows 11 Pro 25H2 `26200.8457` x64 客体先通过冻结 lab 包检查，随后完成默认生产构建复测：三模块精确匹配、164 项隔离 XAML 检查、6 项私有 Shell 宿主检查，以及真实主屏的三次时钟文字更新、宽度变化、停止恢复和托盘入口准备/停止均取得成功结果。Explorer PID/TID 和主任务栏 HWND 保持不变。[8457 精确资料](../crates/adapter-protocol/profiles/windows11-26200.8457-x64.json) 已纳入默认内置目录，**验收范围限于上述单屏场景，实际点击、滚轮、菜单、悬停、托盘复制及多显示器/DPI 尚未验收。**
 
-第二轮包含宿主和适配器两侧的窗口发现修复，已成功发现主任务栏并建立正确路由，但初始只读检查没有收到适配器响应，仍未请求时钟写入。后续记录到 bootstrap 为 High 完整性、Explorer 为 Medium 完整性；这项环境差异尚待相同二进制在 Medium 完整性进程下复测，不能直接认定为无响应的原因。
+第三轮使用与第二轮相同的冻结 lab 二进制；第四轮使用不启用 `compatibility-lab` 的独立默认构建，两轮的运行 helper 均已核验为与 Explorer 相同的 Medium 完整性。两种包的哈希及原始结果分别记录。前两轮因任务栏窗口发现失败、未收到适配器响应而未请求写入，下面保留失败与诊断结果作为修复对照。
 
 离线符号、字段与 ABI 证据见 [三组模块的共性与差异](windows11-commonality.md)。本文记录真实客体的运行结果，并保留失败现场，供修复后复测对照。
 
@@ -20,7 +20,7 @@
 | shell：`System32/twinui.pcshell.dll` | `bc5e4daaace00d2eaff630f0f27078c29a0a56ae77b5cf51d3cfd5a766581f59` |
 | tray：`SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy/Taskbar.View.dll` | `a920c97ace9f336855ebfea221101eb03739398c8b75ac6dcf28d82ed645aed5` |
 
-磁盘报告的 `loaded_modules_checked` 和 `runtime_topology_checked` 仍为 `false`。私有宿主测试只验证应用自建宿主，不把这些字段升级为真实 Explorer 验证。
+磁盘报告的 `loaded_modules_checked` 和 `runtime_topology_checked` 仍为 `false`。私有宿主测试只验证应用自建宿主；第三轮真实 Explorer 的检查结果单独记录，不改写这些磁盘报告字段。
 
 ## 首轮冻结实验包与检查结果
 
@@ -94,7 +94,57 @@
 | bootstrap PowerShell，PID 4936 | 2 | High | 12288 | 1 / 0 |
 | Explorer，PID 4104 | 2 | Medium | 8192 | 0 / 0 |
 
-这些是诊断时两个仍存活进程的直接令牌观察；当时第二轮测试子进程已结束，不能把该记录冒充子进程令牌采样。它支持下一步从已核验的 Medium 完整性 helper 运行同一冻结程序，以验证进程权限环境是否影响双向响应。相同 session 和桌面不能证明完整性级别相同；仅观察到这项差异，也不能独立证明 UIPI 就是故障根因。令牌诊断还列出了 Explorer 中三份目标模块的实际路径与对应磁盘哈希，不能替代适配器内部的 loaded-image、source 或拓扑检查。
+这些是诊断时两个仍存活进程的直接令牌观察；当时第二轮测试子进程已结束，不能把该记录冒充子进程令牌采样。该结果促使第三轮从已核验的 Medium 完整性 helper 运行同一冻结程序。相同 session 和桌面不能证明完整性级别相同；仅观察到这项差异，也不能独立证明 UIPI 就是故障根因。令牌诊断还列出了 Explorer 中三份目标模块的实际路径与对应磁盘哈希，不能替代适配器内部的 loaded-image、source 或拓扑检查。
+
+## 第三轮普通用户环境中的实际通过
+
+第三轮 run ID 为 `sandbox-20261109-012629-e342827c`，于本地时间 01:28:45 至 01:29:35 完成。运行 helper 是已核验的 64 位 PowerShell，PID 7044、session 2、Medium 完整性 RID 8192、`elevated=0`。其完整性级别与 Explorer 相同；69 个包文件重新通过 SHA-256 核验，清单与第二轮完全相同，仍为 `80d656bbfd1d0bee407feb1e8f071cbe49384f728b079e69ed07507128a18393`，三份程序哈希沿用上表。
+
+| 第三轮检查 | 退出码 | 记录耗时 | 实际结果 |
+| --- | --- | --- | --- |
+| 磁盘兼容性 | 0 | 1,676 ms | 三模块匹配 `windows11-26200.8457-x64` |
+| 诊断报告 | 0 | 712 ms | 发现同一主任务栏并建立主屏路由 |
+| 应用图标 | 0 | 255 ms | 通过 |
+| 隔离 XAML 时钟 | 0 | 26,896 ms | 164 项通过 |
+| 自有私有 Shell 宿主 | 0 | 3,207 ms | 6 项通过 |
+| 真实主屏任务栏 | 0 | 12,807 ms | 文字与宽度更新、停止恢复、托盘准备/停止通过 |
+
+本轮没有超时。live 摘要为 `checks_passed`、`primary_clock_passed`，且 `prerequisite_checks_passed=true`。初始、活动与最终检查取得实际响应；真实 Explorer 中的 source、XamlRoot、窗口及线程归属均通过现有运行时校验。
+
+三帧时间文字 `LT LIVE 01/02/03` 与日期文字 `Sandbox check A/B/C` 均按请求读回。时钟容器宽度由原生 55 变为 240、320，第三帧维持 320；Stop 收到确认后，原时间、原日期、容器宽度 55、文字尺寸及可见性均与接管前一致。全过程使用 Explorer PID 4104、TID 944、任务栏 HWND 131252，未以重启 Explorer 代替恢复。这只证明报告中观察到的文字、尺寸和可见性恢复，不扩大为所有字体、颜色或绑定场景已经回归。
+
+托盘 Prepare/Stop 在真实任务栏上通过，验证 `hidden_icons`、`notification_icons`、`system_icons`、`privacy_indicators`、`control_center` 五类必需区域及坐标入口。`activated=false`，单屏报告明确 `replication=not_applicable_single_monitor`；没有创建副屏复制目标，也没有执行实际鼠标或键盘输入。日历点击、滚轮音量、托盘菜单、第三方悬停、多显示器和混合 DPI 仍为 `not_run`。
+
+相同冻结二进制在已核验 Medium helper 下取得响应并通过，说明第二轮的进程权限环境是实际排查因素。未捕获具体 UIPI 拒绝码，不能把该对照表述为已经证明某条 Windows 底层拦截路径。
+
+这项记录仅为资料目录中的 `module_layout`、`clock_update_restore`、`tray_prepare_stop` 三个场景提供限定范围的实测证据。其他验收场景继续保留 `not_run`。资料精确绑定三个模块身份与 SHA-256，不覆盖其他 25H2 累计更新或全部 Windows 11。
+
+## 第四轮默认生产构建复测
+
+8457 资料进入默认注册表后，使用未启用 `compatibility-lab` 的 release 构建重新冻结 71 个包文件。清单 SHA-256 为 `f8ab40d3f64f23f1d2006a2cc977b6bd7080106ce8dc5c5b8945b923ec69094e`，客体逐文件核验通过。程序身份与第三轮不同：
+
+| 默认构建冻结文件 | SHA-256 |
+| --- | --- |
+| `LiteTray.exe` | `06240bb3bf5933990bf304c8efb49f5913d7a3eda607a0344a267d604dcb9729` |
+| `litetray_taskbar_adapter.dll` | `bddbd2a7c238ed941174fa540cfe0425a1086de2f5edd727912807cc14492ec3` |
+| `litetray_popup_hook.dll` | `b042fc40dec401f10c8376aec439a691de18570e98e65c7637b0e81e285f92ac` |
+
+run ID 为 `sandbox-20261109-013933-36962106`，本地时间 01:43:16 至 01:44:12。已核验 helper PID 2620、session 2、Medium RID 8192、`elevated=0`，令牌读取无错误。隔离基线与真实任务栏检查各有本轮独立实例，均报告 `checks_passed`：
+
+| 默认构建检查 | 退出码 | 记录耗时 | 实际结果 |
+| --- | --- | --- | --- |
+| 磁盘兼容性 | 0 | 2,019 ms | 三模块匹配默认内置 `windows11-26200.8457-x64` |
+| 诊断报告 | 0 | 648 ms | 主屏发现与路由通过 |
+| 应用图标 | 0 | 288 ms | 通过 |
+| 隔离 XAML 时钟 | 0 | 25,175 ms | 164 项通过 |
+| 自有私有 Shell 宿主 | 0 | 4,104 ms | 6 项通过 |
+| 真实主屏任务栏 | 0 | 18,717 ms | 三帧文字/宽度更新、停止恢复、托盘准备/停止通过 |
+
+六项均未超时。`LT LIVE 01/02/03` 与 `Sandbox check A/B/C` 的文字逐帧读回匹配，容器宽度为 240、320、320；Stop 后原时间、日期、尺寸、可见性及宽度 55 恢复。`clock.passed`、两项 Stop 确认、`explorer_identity_preserved` 和 `cleanup_acknowledged` 均为 `true`；Explorer 仍为 PID 4104、TID 944，主任务栏仍为 HWND 131252。托盘复制未激活，`input_injected=false`，仍只登记前三个场景通过，其余四项场景保持 `not_run`。
+
+默认源码验证为 workspace **251 项通过、9 项忽略**，Clippy 通过；另有兼容性页后台检测/导出检查通过。日志保存在 `promoted-default-tests.log`、`promoted-default-clippy.log`、`promoted-default-compatibility-e2e.log`。这些源码检查与本轮虚拟机结果分开记录，不能互相替代。
+
+该冻结包先于本节验收文档生成。最终分发包补入这些文档后，整体清单哈希会变化；发布核验须保证 EXE、适配器 DLL 和 popup DLL 仍与上表完全一致，并把新的分发清单与本次测试清单分开记录。只有文档变化不能被写成重新运行了另一套二进制；程序内容发生变化则需另行复测。
 
 ## 原始材料与复测边界
 
@@ -110,8 +160,14 @@
 | 第二轮隔离结果 | `guest-results/sandbox-20261109-010801-912eccaa/sandbox-20261109-010801-912eccaa-guest-b1ae2a7e/` |
 | 第二轮私有宿主和真实任务栏结果 | `guest-results/sandbox-20261109-010801-912eccaa/sandbox-20261109-010801-912eccaa-live-c7af0e2b/` |
 | 完整性与模块路径诊断 | `guest-results/sandbox-20261109-011221-75a28183/integrity-diagnostics-sandbox-20261109-011221-75a28183/integrity.json` |
+| 第三轮 Medium helper 核验与结果根 | `guest-results/sandbox-20261109-012629-e342827c/medium-launch-cadc49e53c7c47d4a28ba4be189a4aff/` |
+| 第三轮隔离结果，相对该结果根 | `runner-results/sandbox-20261109-012629-e342827c-guest-82560de3/` |
+| 第三轮私有宿主和真实任务栏结果，相对该结果根 | `runner-results/sandbox-20261109-012629-e342827c-live-fe09ed4e/` |
+| 第四轮默认构建 Medium helper 核验与结果根 | `guest-results/sandbox-20261109-013933-36962106/medium-launch-9de8a06fe67742a2b59b1fb3896c1c49/` |
+| 第四轮隔离结果，相对该结果根 | `runner-results/sandbox-20261109-013933-36962106-guest-775aa93b/` |
+| 第四轮私有宿主和真实任务栏结果，相对该结果根 | `runner-results/sandbox-20261109-013933-36962106-live-05893e00/` |
 
-`vm-lab-5140-first-run-review.json`、`vm-taskbar-discovery-diagnosis.json`、`vm-thread-taskbar-discovery-diagnosis.json` 和 `vm-discovery-fix-run-review.json` 保存提炼后的观察。`vm-validation-evidence-sha256.json`、`vm-thread-discovery-evidence-sha256.json` 和 `vm-discovery-fix-run-evidence-sha256.json` 清单保存原始文件完整性信息。关键摘要如下：
+`vm-lab-5140-first-run-review.json`、`vm-taskbar-discovery-diagnosis.json`、`vm-thread-taskbar-discovery-diagnosis.json` 和 `vm-discovery-fix-run-review.json` 保存前两轮提炼后的观察。`vm-medium-live-readback-review.json` 与 `vm-medium-live-run-review.json` 保存第三轮逐帧读回、恢复、Explorer 连续性及随后 loaded-image 身份探测的复核。`vm-final-default-run-review.json` 保存第四轮默认构建的完整复核。`vm-validation-evidence-sha256.json`、`vm-thread-discovery-evidence-sha256.json`、`vm-discovery-fix-run-evidence-sha256.json`、`vm-medium-live-evidence-sha256.json`、`vm-final-default-evidence-sha256.json` 清单保存这些原始文件完整性信息。关键摘要如下：
 
 | 文件 | SHA-256 |
 | --- | --- |
@@ -126,7 +182,19 @@
 | 第二轮 live `summary.json` | `b234d52e5d88a68da01883a87ba6217e0fb467def23f89087440057d66ebb12c` |
 | 第二轮 `taskbar-live.json` | `717d65081a822abd337f41e97d1eeaa7a0da196d375f15efd8b9b38927555e58` |
 | 完整性诊断 `integrity.json` | `315d3025dfa2767d3ddc98220dbac77ac3df9711e59191638e0937949dd82201` |
+| 第三轮 `verified-worker.json` | `4065c08f09780edb9a6ae23ee49d40a261c4957bf09bf8d4ac10833792b5e561` |
+| 第三轮隔离 `summary.json` | `0ffd73ffa9aa04aceea7360616a7246d139cc50bc04d7a3e5776a13f9897824d` |
+| 第三轮 live `summary.json` | `dc170f66a8620977969e85771f6e4d0fba97a3e7398df9f518710a1377c63629` |
+| 第三轮 `taskbar-live.json` | `bc0c2e143c0e41cd572dbdbb40db65375183a6c4f3e9b6bb108704090236c6f0` |
+| 第三轮独立 `vm-medium-live-readback-review.json` | `17a5ceb6aa33254068c98d88e66d3496aa3b5a9ce1cd45de82d507b5bca69b3a` |
+| 第三轮汇总 `vm-medium-live-run-review.json` | `0b278f70584e6f432ee7cf23522f7085fb0d181ca0159722952b593f10fccb3f` |
+| 第四轮 `verified-worker.json` | `c529adf6366314ddcc450c92d460e46ddec5a613cdabc6ebf8d086a696fdf4f1` |
+| 第四轮隔离 `summary.json` | `70af593d69a89ee7d43f01004787c664b892c616f88bb63888130b4b458354d9` |
+| 第四轮 live `summary.json` | `012bbbeea87be155eea0b0906ada88718e27c45c1f5873e07f0e20df73072bc2` |
+| 第四轮 `taskbar-live.json` | `b4dcb6b7f58e209ee932c75ac0084d9a20ba2037cb57df1c70bf058b6c86c3b4` |
+| 第四轮默认构建复核 `vm-final-default-run-review.json` | `24d3971ac6f8e278c4a41c26764b62ce7d729cfb23cd275a8fec7e11994baa81` |
+| 第四轮 `runner-context-sandbox-20261109-013933-36962106.json` | `2250ab3032af4221870c6bd9effbb2310a950d970dadb1f9fbc4aa98eb4271eb` |
 
 串口收集器核对归档长度、SHA-256、ZIP CRC 和解包路径后才发布结果；传输完整不等于验收通过。后续回传包可能包含此前累积的结果，复测必须按新的 run ID 和 `guest/live` 实例读取，不能把旧轮次的通过项混入新结果。
 
-下一步应从已核验 Medium 完整性的普通用户测试进程，使用第二轮同一冻结二进制和新 run ID，完整重跑隔离前置条件、私有宿主、真实主屏修改与停止恢复、托盘准备与停止。应记录测试进程的实际令牌、二进制哈希及每项结果；该重跑尚未发生，不能预记为通过。只有新报告确认相应功能通过，才可新增对应的限定范围验收记录；前两轮失败及其诊断证据继续保留。
+后续复测应使用已登录的可丢弃客体，在与 Explorer 相同且已核验的 Medium 完整性用户环境运行 harness，核对 session、桌面、实际令牌及冻结包身份；不能假设继承 FirstLogonCommands 的 helper 具有普通用户权限。每次新构建需要记录自己的包与二进制哈希，并在新 run ID 下执行相应检查。前两轮失败、第三轮 lab 成功和第四轮默认构建成功及原始材料继续保留，新增输入、多屏和 DPI 场景时另记结果。

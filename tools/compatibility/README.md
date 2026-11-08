@@ -28,7 +28,7 @@ python tools/compatibility/inspect_modules.py `
   --offline
 ```
 
-Repeat `--module ROLE=relative/path.dll` for `taskbar`, `shell`, and `tray` if their file locations differ. The reported module keeps its actual filename: `Taskbar.View.dll` is never relabeled `SystemTray.dll`. The default production registry contains only the latter, so alternate tray modules remain an explicit production blocker even if their method ABI passes offline analysis. Recognizing a reviewed module variant in the parser does not add it to that registry.
+Repeat `--module ROLE=relative/path.dll` for `taskbar`, `shell`, and `tray` if their file locations differ. The reported module keeps its actual filename: `Taskbar.View.dll` is never relabeled `SystemTray.dll`. Production support requires an exact built-in profile matching the complete module set and independent live evidence for the claimed scenarios. A filename alone cannot establish or rule out that match. This tool does not check the production registry; recognizing a reviewed module variant in the parser does not add it to that registry.
 
 By default, exact PDBs are downloaded into `OUTPUT/symbols/`. `--symbol-cache` reuses a cache; `--offline` forbids new downloads. Existing wrong-identity PDBs are rejected and preserved. Downloads become cache entries only after GUID and DBI-age checks. DbgHelp enumeration is serial, uses a separate noninvading session token, and verifies the image/PDB identity with `SYMOPT_EXACT_SYMBOLS` and `SymGetModuleInfo64`.
 
@@ -47,7 +47,7 @@ The screen-rectangle function is checked for both reviewed owned-value cleanup p
 
 The input root is a collection boundary, not proof that files came from one installed OS. `coherent_installation_verified` remains `false`, including when every static recipe passes. Distinct modules may legitimately have different component version numbers. A known production profile and isolated loaded-image checks must validate the complete set; never pick one module's offsets from another candidate. The tool records actual filename casing; compare Windows paths case-insensitively, without treating different basenames as equivalent.
 
-The manually reviewed 26200.8457 lab fixture is documented in [the three-set comparison](../../docs/windows11-commonality.md). It is separate from the output schema and only usable by an explicitly enabled lab build. The topology enum in that fixture is a hypothesis for guest validation, not a live acceptance result.
+The independently reviewed 26200.8457 exact profile is included in the default registry; see [the three-set comparison](../../docs/windows11-commonality.md) and [its VM validation record](../../docs/compatibility-8457.md). Recorded acceptance covers the module/layout chain, primary clock update and stop/restore, and tray preparation and stop. Pointer interactions, tray/model mirroring, multiple monitors, and mixed DPI remain separate validation scopes. This static candidate output does not inherit those live results or become a production profile.
 
 Run the rejection tests without system access or downloads:
 

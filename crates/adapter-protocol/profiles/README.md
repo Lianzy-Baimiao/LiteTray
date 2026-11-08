@@ -12,6 +12,15 @@ Provenance: [source binding](../../../docs/taskbar-source-binding.md),
 layout and validation evidence is recorded in
 [the 9818 compatibility record](../../../docs/compatibility-9818.md).
 
+`windows11-26200.8457-x64.json` adds the exact Windows 11 Pro 25H2 module set,
+whose tray code resides in Core/Taskbar.View.dll. Matching symbols and instructions
+establish the shared source fields and tray ABI; an independently installed VM
+passed real primary-clock text/width updates, restoration and tray preparation/stop.
+The [three-set comparison](../../../docs/windows11-commonality.md) and
+[25H2 runtime evidence](../../../docs/compatibility-8457.md) record the exact scope,
+failed attempts and tested binary hashes. Input, tray replication, multiple-monitor
+and mixed-DPI acceptance remain pending.
+
 The JSON files are compiled into both host and adapter with `include_bytes!`.
 `compatibility::profiles()` validates the registry once. Selection uses the
 complete taskbar image identity and additionally requires its disk SHA-256;
@@ -30,11 +39,11 @@ implementation of any new ABI, and explicit validation results. Do not widen
 an OS build range or reuse offsets merely because version labels look similar.
 The profile contains metadata and minimal code prefixes, not system DLLs/PDBs.
 
-The candidate in `lab/windows11-26200.8457-x64.json` is excluded from normal
-builds. Disposable VM builds may opt in with the `compatibility-lab` Cargo
-feature on both the host and taskbar adapter. Its `Taskbar.View.dll` identity,
-field and ABI evidence is recorded in
-[the three-set comparison](../../../docs/windows11-commonality.md).
-Its pending runtime validation must not be described as production support.
-The feature cannot be enabled by a runtime setting, environment variable or
-external JSON. Default packages must be built without this feature.
+The default registry contains all three reviewed profiles. The reserved
+`compatibility-lab` Cargo feature currently adds no candidates. Both the initial
+frozen lab package and a subsequent default release build passed the six-command
+25H2 VM harness, with separate binary hashes and validation records. Adding the
+final acceptance documents changes the distribution manifest; its three binaries
+must remain identical to the tested default build. Offline candidate artifacts
+are not automatically registered or activated, and neither runtime settings nor
+external JSON can override the compiled module identities.

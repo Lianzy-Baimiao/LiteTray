@@ -273,6 +273,35 @@ fn support_catalog_keeps_recorded_scope_separate_from_built_in_support() {
                 && (evidence.status == ValidationStatus::NotRun
                     || (evidence.recorded_on.is_some() && evidence.reference.is_some()))
         }));
+        for evidence in &entry.evidence {
+            let expected = if profile.id == "windows11-26300.9711-x64" {
+                if matches!(
+                    evidence.scenario,
+                    ValidationScenario::PointerInteractions | ValidationScenario::MixedDpi
+                ) {
+                    ValidationStatus::NotRun
+                } else {
+                    ValidationStatus::Historical
+                }
+            } else if matches!(
+                profile.id.as_str(),
+                "windows11-26300.9818-x64" | "windows11-26200.8457-x64"
+            ) && matches!(
+                evidence.scenario,
+                ValidationScenario::ModuleLayout
+                    | ValidationScenario::ClockUpdateRestore
+                    | ValidationScenario::TrayPrepareStop
+            ) {
+                ValidationStatus::Tested
+            } else {
+                ValidationStatus::NotRun
+            };
+            assert_eq!(
+                evidence.status, expected,
+                "{} {:?}",
+                profile.id, evidence.scenario
+            );
+        }
     }
     let historical = catalog
         .iter()

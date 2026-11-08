@@ -27,7 +27,7 @@ A useful clock, tray and calendar on every monitor. A native Windows desktop app
 
 Download `LiteTray-<version>-Setup-x64.exe` from Releases. Installation is per user and needs no administrator privileges. Settings, schedules and weather cache live in `%LOCALAPPDATA%\LiteTray`; upgrades and uninstall preserve user data.
 
-**Compatibility:** 5.14.0 includes profiles for the **x64 system modules from Windows 11 26300.9711 and 26300.9818**, selected by exact module identity. Unmatched modules block the features that depend on them. Sandbox checks on 9818 passed real primary-clock takeover, restoration and tray-interface preparation; secondary-display replication and pointer/menu interactions still need separate acceptance. See the [9818 validation record, Chinese](docs/compatibility-9818.md). LiteTray is still in development and the installer is not digitally signed.
+**Compatibility:** 5.14.0 includes profiles for the **x64 system modules from Windows 11 26300.9711, 26300.9818 and 25H2 26200.8457**, selected by exact module identity. Unmatched modules block the features that depend on them. The 9818 Sandbox and an independently installed 25H2 VM passed real primary-clock text/width updates, restoration and tray preparation/stop checks. Actual input, menus, tray replication, multiple monitors and mixed DPI still need acceptance. Tested binaries and exact coverage are recorded in the [9818 validation record](docs/compatibility-9818.md) and [25H2 validation record](docs/compatibility-8457.md), both in Chinese. LiteTray is still in development and the installer is not digitally signed.
 
 ## Features
 

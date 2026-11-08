@@ -129,6 +129,7 @@ const SCENARIOS: [(ValidationScenario, &str); 7] = [
 enum RecordedProfile {
     Previous9711,
     Sandbox9818,
+    VirtualMachine8457,
 }
 
 fn recorded_profile(profile: &Profile) -> Option<RecordedProfile> {
@@ -152,6 +153,14 @@ fn recorded_profile(profile: &Profile) -> Option<RecordedProfile> {
                 "9772d19ec44f22ab2fcb976941d6ba6d1e66aabfb9d66367723bb9154ce7769f",
             ],
         ) => Some(RecordedProfile::Sandbox9818),
+        (
+            "windows11-26200.8457-x64",
+            [
+                "41326fffd57a2c6e08d1884a698bd9e9dfe90de0614de98733edaebacb5f5403",
+                "bc5e4daaace00d2eaff630f0f27078c29a0a56ae77b5cf51d3cfd5a766581f59",
+                "a920c97ace9f336855ebfea221101eb03739398c8b75ac6dcf28d82ed645aed5",
+            ],
+        ) => Some(RecordedProfile::VirtualMachine8457),
         _ => None,
     }
 }
@@ -240,6 +249,42 @@ fn evidence(profile: &Profile) -> Vec<ValidationEvidence> {
                         evidence.recorded_on = Some("2026-11-08");
                     }
                 }
+                Some(RecordedProfile::VirtualMachine8457) => {
+                    evidence.reference = Some("docs/compatibility-8457.md");
+                    evidence.detail = match scenario {
+                        ValidationScenario::ModuleLayout => {
+                            "25H2 三模块/PDB、字段、虚表及 ABI 已核验；独立客体磁盘匹配、XAML 164 项和私有宿主 6 项通过。"
+                        }
+                        ValidationScenario::ClockUpdateRestore => {
+                            evidence.scope = "独立 Windows 11 Pro 25H2 26200.8457 单屏虚拟机，普通权限测试进程";
+                            "三次真实文字更新及宽度 240→320 通过；停止后原文字、宽度 55 和可见性恢复，Explorer 身份不变。未独立验收字体、颜色或绑定。"
+                        }
+                        ValidationScenario::TrayPrepareStop => {
+                            "Taskbar.View.dll 的三个坐标入口与 5 类必需托盘区域准备、停止通过；未激活复制。"
+                        }
+                        ValidationScenario::TrayMirroring => {
+                            "本轮虚拟机只有主屏，未激活副屏托盘模型复制；准备通过不代表复制及交互验收。"
+                        }
+                        ValidationScenario::PointerInteractions => {
+                            "本轮验收未注入鼠标或键盘；日历点击、滚轮、中键、真实悬停和菜单定位待验收。"
+                        }
+                        ValidationScenario::MultiMonitor => {
+                            "本轮独立虚拟机只有一块显示器，主副屏完整矩阵未执行。"
+                        }
+                        ValidationScenario::MixedDpi => {
+                            "本轮未执行混合 DPI、显示器热插拔和休眠恢复矩阵。"
+                        }
+                    };
+                    if matches!(
+                        scenario,
+                        ValidationScenario::ModuleLayout
+                            | ValidationScenario::ClockUpdateRestore
+                            | ValidationScenario::TrayPrepareStop
+                    ) {
+                        evidence.status = ValidationStatus::Tested;
+                        evidence.recorded_on = Some("2026-11-09");
+                    }
+                }
                 None => {}
             }
             evidence
@@ -279,26 +324,41 @@ mod tests {
 
     #[test]
     fn new_profiles_and_replaced_images_do_not_inherit_recorded_acceptance() {
-        let mut profile = profiles().unwrap()[0].clone();
-        profile.id = "new-profile-with-existing-layout".into();
-        assert!(
-            evidence(&profile)
-                .iter()
-                .all(|item| item.status == ValidationStatus::NotRun)
-        );
-        for module_index in 0..3 {
-            let mut profile = profiles().unwrap()[0].clone();
-            let module = match module_index {
-                0 => &mut profile.taskbar,
-                1 => &mut profile.shell,
-                _ => &mut profile.tray,
-            };
-            module.sha256 = "0".repeat(64);
+        for original in profiles().unwrap() {
+            let mut profile = original.clone();
+            profile.id = "new-profile-with-existing-layout".into();
             assert!(
                 evidence(&profile)
                     .iter()
                     .all(|item| item.status == ValidationStatus::NotRun)
             );
+            for module_index in 0..3 {
+                let mut profile = original.clone();
+                let module = match module_index {
+                    0 => &mut profile.taskbar,
+                    1 => &mut profile.shell,
+                    _ => &mut profile.tray,
+                };
+                module.sha256 = "0".repeat(64);
+                assert!(
+                    evidence(&profile)
+                        .iter()
+                        .all(|item| item.status == ValidationStatus::NotRun)
+                );
+            }
+            for other in profiles()
+                .unwrap()
+                .iter()
+                .filter(|other| other.id != original.id)
+            {
+                let mut profile = original.clone();
+                profile.id.clone_from(&other.id);
+                assert!(
+                    evidence(&profile)
+                        .iter()
+                        .all(|item| item.status == ValidationStatus::NotRun)
+                );
+            }
         }
     }
 }

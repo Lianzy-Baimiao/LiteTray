@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "id": "windows11-26200.8457-x64",
-  "system_label": "LAB Windows 11 Pro 25H2 26200.8457 x64 - VM validation pending",
+  "system_label": "Windows 11 Pro 25H2 26200.8457 x64",
   "taskbar": {
     "name": "taskbar.dll",
     "relative_path": "System32/taskbar.dll",

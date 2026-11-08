@@ -8,7 +8,7 @@ publish = false
 
 [features]
 default = []
-# Experimental exact-module profiles for isolated VM validation, not releases.
+# Reserved for isolated VM candidates; currently adds no profiles to the default registry.
 compatibility-lab = []
 
 [dependencies]

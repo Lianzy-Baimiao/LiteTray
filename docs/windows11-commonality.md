@@ -1,12 +1,12 @@
 # Windows 11 三组模块的共性与差异
 
-2026-11-08 完成的离线结果表明：9711 已审阅资料、9818 当前映像和 25H2 安装映像中的三组 x64 模块共享现有宿主/source 字段关系及三项托盘坐标调用约定，但模块身份、入口地址、虚表地址和托盘代码载体均不能跨版本复用。**25H2 26200.8457 目前仅为 lab 候选，真实客体的拓扑、对象归属和功能验收尚未完成，不能声明正式兼容。**
+2026-11-08 完成的离线结果表明：9711 已审阅资料、9818 当前映像和 25H2 安装映像中的三组 x64 模块共享现有宿主/source 字段关系及三项托盘坐标调用约定，但模块身份、入口地址、虚表地址和托盘代码载体均不能跨版本复用。2026-11-09，独立 25H2 `26200.8457` 客体进一步通过真实主屏 source/拓扑检查、时钟文字与宽度更新、停止恢复，以及托盘准备/停止。**8457 精确资料因此纳入默认目录，已测范围仍限单屏；实际输入、复制、菜单、多屏和混合 DPI 尚未验收。** 运行证据及失败对照见 [25H2 虚拟机记录](compatibility-8457.md)。
 
 | 对象 | 本次证据来源 | 托盘代码所在模块 | 可得结论 |
 | --- | --- | --- | --- |
 | 26300.9711 | 既有已审阅 JSON 资料；本次未重新取得原映像 | Core/SystemTray.dll | 用于历史对照，不能把对照称为本次重新运行 |
 | 26300.9818 | 当前磁盘文件、精确缓存 PDB、通用工具重新反汇编；与既有资料逐项对照 | Core/SystemTray.dll | 全部静态结果与原资料相符；既有单屏 Sandbox 的实际范围见 [9818 证据](compatibility-9818.md) |
-| 25H2 26200.8457 | 安装映像索引 3 提取的文件、微软精确 PDB、通用工具反汇编 | Core/Taskbar.View.dll | 静态候选通过，尚待独立 25H2 客体验收 |
+| 25H2 26200.8457 | 安装映像索引 3 提取的文件、微软精确 PDB、通用工具反汇编及独立安装客体 | Core/Taskbar.View.dll | 静态规则通过；真实单屏时钟更新/恢复及托盘准备/停止通过 |
 
 表中 Core 是 `SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy`。资料以完整模块身份匹配，OS 标签只供显示；例如本次 25H2 的 taskbar/shell 文件资源版本是 `10.0.26100.8457`。各组件可以有自己的版本号，不能要求所有文件资源版本相同来替代映像核对。
 
@@ -46,7 +46,7 @@
 
 25H2 的 `TaskbarHost::HasFocus` 位于 `0x12748C`，将 RCX 调整 `+0x38` 后调用子接口消费方法。非 WASDK 的 `IXamlExplorerHostChildWindow` 虚表槽 8 指向 `get_XamlContent`（`0xC5E90`）；该 ABI 方法将 this 调整 `-0x10`，再调用 `0xC5EE8` 的实现。实现以对象 `+0x20` 为 source 字段，因此从 child 接口的相对偏移是 `-0x10+0x20=+0x10`。工厂槽 6 指向同一完整签名的 `CreateInstance(unsigned __int64, void*, void**)`（`0x16D420`）。每个地址都来自本次精确符号，未按统一差值迁移。
 
-这些数值支持复用 `xaml_explorer_host_child_v1` 作为 lab 待验方案，不能推导将来其他映像也有同一布局。运行时仍需准确查询 source 接口，核对 child/factory 虚表和内存区权限，并验证线程、HWND、XamlRoot 与生命周期归属。
+这些数值首先支持复用 `xaml_explorer_host_child_v1` 作为 lab 待验方案，随后由独立 25H2 客体的私有宿主和真实主屏检查取得运行证据。它们不能推导将来其他映像也有同一布局。每次接管仍需准确查询 source 接口，核对 child/factory 虚表和内存区权限，并验证线程、HWND、XamlRoot 与生命周期归属。
 
 ## 托盘 ABI 的共性与清理差异
 
@@ -56,13 +56,13 @@
 | icon_bounds | `0xBCA04` | `0xB84E0` | `0x11D98` | RCX=this；RDX=Rect 隐藏结果；R8=const Rect* |
 | screen_rect | `0xBCC10` | `0xB86EC` | `0xF28FC` | RCX=RECT 隐藏结果；RDX=按值 FrameworkElement 临时包装对象；R8=HWND |
 
-25H2 前两项保存 `R8/RDX/RCX → RSI/RBX/RDI`，通过 RBX 写结果并返回 RBX。第三项保存 `R8/RDX/RCX → R15/RSI/R14`，通过 R14 写回 16 字节 RECT 并返回 R14。三个完整修饰名、函数边界及实际指令共同支持 `system_tray_coordinates_x64_v1` 的 lab 候选；不能仅凭同名符号推断 ABI。
+25H2 前两项保存 `R8/RDX/RCX → RSI/RBX/RDI`，通过 RBX 写结果并返回 RBX。第三项保存 `R8/RDX/RCX → R15/RSI/R14`，通过 R14 写回 16 字节 RECT 并返回 R14。三个完整修饰名、函数边界及实际指令共同支持复用 `system_tray_coordinates_x64_v1`；真实客体随后通过入口准备/停止。该范围未包括副屏菜单坐标行为，不能仅凭同名符号推断 ABI，也不能把 Prepare 当作交互验收。
 
 首轮工具将 25H2 拒绝为 `Missing owned FrameworkElement cleanup check`，原始拒绝结果保留。检查后确认差异是编译形状：9818 在 screen_rect 内检查 `[rsi]` 后直接调用 `IUnknown::unconditional_release_ref`；25H2 在 `0xF2A73` 将 RSI 传入 `0xEFE0` 的精确 `IUnknown` 析构函数，由它完成空值检查，再调用 `0x1E770` 的 release 叶函数。叶函数保存原指针、清零包装字段、取虚表 `+0x10` 的 Release，经精确 `__guard_dispatch_icall_fptr` 尾调用。工具现用两条独立的窄规则检查这两种形状，也检查清理发生在结果写入之后、返回结果指针之前。
 
 该叶函数没有 `.pdata` 条目，因此仅为它提供六条指令的固定形状例外，同时验证精确符号和 CFG 指针。其余函数仍要求 `.pdata` 边界；没有允许任意无边界函数、猜测偏移或跳过清理检查。调用方仍须保留自己需要的接口引用，并允许原函数消费按值临时对象，避免双重释放。
 
-25H2 二进制包含 `SystemTray.SystemTrayFrame`、`SystemTrayFrameGrid`、`TimeInnerTextBlock`、`DateInnerTextBlock`、`NotificationAreaIcons`、`SecondaryClockStack` 等名称，且存在相关类型符号。**这些只是拓扑线索；lab 文件中的 `system_tray_frame_v1` 是待真实客体验证的假设。** 它们不能证明控件实际存在、父子层级、模板、可见性、线程或根窗口归属。
+25H2 二进制包含 `SystemTray.SystemTrayFrame`、`SystemTrayFrameGrid`、`TimeInnerTextBlock`、`DateInnerTextBlock`、`NotificationAreaIcons`、`SecondaryClockStack` 等名称，且存在相关类型符号。离线阶段这些只构成 `system_tray_frame_v1` 的拓扑线索，不能证明控件实际存在、父子层级、模板、可见性、线程或根窗口归属。第三轮真实客体检查确认了主屏需要的控件关系、source/XamlRoot 及归属，并在这些控件上完成更新与恢复；它没有创建第二个 XamlRoot 或验证副屏树。
 
 ## 候选工具、拒绝边界与复现
 
@@ -86,12 +86,14 @@ python tools/compatibility/inspect_modules.py `
 
 本次 Python 测试 14 项通过，包括两种正确清理调用图，以及错误参数寄存器、错误对象清理、错误虚表槽、未清零包装对象、错误 CFG 指针、错误条件跳转、PDB 截断/身份错配、歧义符号/模块、路径越界和节权限拒绝。测试不读系统文件、不联网、不打开 Explorer。另以真实 9818 和 25H2 映像执行完整工具，二者均返回静态成功。
 
-## 显式 lab fixture 与下一步验收
+## 从 lab 候选到限定范围的内置资料
 
-已人工审阅并转写 [`profiles/lab/windows11-26200.8457-x64.json`](../crates/adapter-protocol/profiles/lab/windows11-26200.8457-x64.json)，标识为 `windows11-26200.8457-x64`，说明文字明确 VM 验收未完成。该转写是单次 lab 工作，未加入通用工具的自动流程；普通构建不得包含或选择它。只有显式 `compatibility-lab` 构建可以嵌入该候选，且不能以环境变量或任意外部 JSON 覆盖模块身份。
+8457 首先人工审阅并转写为显式 lab 候选，用冻结实验包完成独立客体检查。真实主屏验收通过后，该精确资料移入默认注册表，现为 [`profiles/windows11-26200.8457-x64.json`](../crates/adapter-protocol/profiles/windows11-26200.8457-x64.json)。默认构建包括 9711、9818、8457 三组资料；保留的 `compatibility-lab` feature 当前不增加额外候选。这次提升以人工复核和客体证据为依据，通用取证工具仍只输出 `production_ready=false` 的候选，不自动注册，也不能以环境变量或任意外部 JSON 覆盖模块身份。
 
-该模块变体必须保持真实 `Taskbar.View.dll` 文件名和 Core 路径。默认资料只支持已审阅的 SystemTray.dll 组合，lab 变体应精确限定名称、路径、source recipe、topology 和 ABI 组合。适配器仍须检查磁盘 SHA-256、已加载的实际路径和完整 PE/CodeView 身份、不可写可执行入口区域与 16 字节入口前缀；不得加载替代系统 DLL 来绕过这些条件。
+该模块变体保持真实 `Taskbar.View.dll` 文件名和 Core 路径，名称、路径、source recipe、topology 和 ABI 组合均精确限定。9711/9818 仍使用各自已审阅的 `SystemTray.dll` 组合。适配器继续检查磁盘 SHA-256、已加载的实际路径和完整 PE/CodeView 身份、不可写可执行入口区域与 16 字节入口前缀；不得加载替代系统 DLL 来绕过这些条件。
 
-正式提升前需要在独立 25H2 客体记录完整三模块集合及实际 loaded-image 复核，再验证自有私有宿主、真实任务栏 source/topology/线程窗口归属、时钟文字与布局修改、停止恢复和 Explorer 连续性。托盘准备、托盘复制、时钟输入、日历/通知、第三方悬停、菜单和多显示器/DPI 应分别记录结果。仅准备三个坐标入口或发现五个系统区域不等于激活复制；单屏无输入 smoke 也不等于菜单及多屏验收。
+第三轮使用与第二轮相同的 69 文件冻结 lab 包，从已核验的普通用户 Medium 完整性 helper 运行，三模块匹配、164 项隔离 XAML 和 6 项私有宿主检查通过。真实主屏时钟连续读回三帧文字和 55→240→320→55 的容器宽度变化，停止后恢复原文字、尺寸和可见性；Explorer PID 4104、TID 944、任务栏 HWND 131252 保持不变。五类托盘必需区域和入口 Prepare/Stop 通过，复制未激活。此前两轮的发现与响应失败均保留，不能只摘取成功结果。
 
-这份离线文档不包含 25H2 真实运行通过的结论。完成客体验证后应另附客体版本、模块身份、所测 lab 二进制哈希、报告路径及每项功能的实际覆盖范围，再决定哪些内容有证据提升。
+第四轮以不启用 lab feature 的默认 release 构建重复全部六项检查，均 exit 0、无超时；三帧更新、宽度恢复、托盘准备/停止及 Explorer 连续性再次通过。71 文件冻结包与三份正式程序哈希单独记录；最终分发仅补入验收文档时，整体清单可变化，三份二进制须与已测程序相同。
+
+对应资料仅登记 `module_layout`、`clock_update_restore`、`tray_prepare_stop` 三个实测场景。托盘复制、时钟输入、日历/通知、第三方悬停、菜单和多显示器/DPI 需分别补验；仅准备三个坐标入口或发现五个系统区域不等于激活复制。lab 与默认构建各自的二进制、清单和原始报告哈希见 [运行记录](compatibility-8457.md)。

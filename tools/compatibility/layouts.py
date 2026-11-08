@@ -233,7 +233,7 @@ def tray_layout(image: Image, logs):
                         "prologue": list(image.bytes(rva, 16)), "decorated_symbol": decorated})
     return {"abi_candidate": "system_tray_coordinates_x64_v1", "module_name": image.path.name,
             "entries": entries, "owned_value_cleanup": cleanup,
-            "production_module_role_supported": image.path.name.casefold() == "systemtray.dll"}
+            "production_profile_match_checked": False}
 
 
 def topology_clues(image: Image):

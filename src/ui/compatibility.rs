@@ -460,7 +460,7 @@ impl App {
                 total,
                 172,
             );
-            self.caption("记录针对注明的测试环境。9818 只验证单屏主时钟和托盘准备；点击、悬浮、音量与多屏仍未验收。", 224, 890, total, 64);
+            self.caption("实测范围以所选资料的记录为准。单屏时钟和托盘准备通过，不代表点击、悬浮、音量、托盘复制与多屏已验收。", 224, 890, total, 64);
             self.divider(224, 968, total);
             self.section("已收录的模块资料", 224, 988, total);
             self.control(
@@ -689,8 +689,6 @@ mod tests {
     fn disk_match_never_claims_runtime_acceptance_and_partial_match_has_no_evidence() {
         i18n::set_language(Language::En);
         let mut value = snapshot();
-        value.report.profile_id = Some("windows11-26300.9818-x64".into());
-        value.report.all_profile_images_matched = false;
         for feature in &mut value.report.features {
             feature.status = FeatureStatus::DiskMatchedLiveCheckRequired;
         }
@@ -700,13 +698,18 @@ mod tests {
                 "Modules match · runtime checks still required"
             );
         }
-        assert!(selected_profile(&value).is_none());
-        assert!(evidence_text(Some(&value)).contains("cannot apply"));
-        value.report.all_profile_images_matched = true;
-        let evidence = evidence_text(Some(&value));
-        assert!(evidence.contains("Not validated"));
-        assert!(evidence.contains("Tray mirroring"));
-        assert!(evidence.contains("Recorded test (limited scope)"));
+        for id in ["windows11-26300.9818-x64", "windows11-26200.8457-x64"] {
+            value.report.profile_id = Some(id.into());
+            value.report.all_profile_images_matched = false;
+            assert!(selected_profile(&value).is_none());
+            assert!(evidence_text(Some(&value)).contains("cannot apply"));
+            value.report.all_profile_images_matched = true;
+            let evidence = evidence_text(Some(&value));
+            assert!(evidence.contains("Not validated"));
+            assert!(evidence.contains("Tray mirroring"));
+            assert!(evidence.contains("Recorded test (limited scope)"));
+            assert_eq!(evidence.matches("Not validated").count(), 4);
+        }
         i18n::set_language(Language::ZhCn);
     }
     #[test]

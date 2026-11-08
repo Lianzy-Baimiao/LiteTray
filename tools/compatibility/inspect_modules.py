@@ -118,9 +118,11 @@ def run(args):
         except EvidenceError as error:
             blockers.append({"stage": "final_identity", "role": image.role, "error": str(error)})
     topology = topology_clues(images["tray"]) if "tray" in images else None
-    production_blockers = ["Candidate evidence has no automatic promotion path", "VM live validation is required"]
-    if "tray" in images and images["tray"].path.name.casefold() != "systemtray.dll":
-        production_blockers.append("The default production registry has no entry for this alternate module; an explicit lab variant and isolated live validation are required")
+    production_blockers = [
+        "Candidate evidence has no automatic promotion path",
+        "Production requires an exact built-in profile for the complete module set; filenames alone do not determine support",
+        "Independent VM live evidence is required for each claimed validation scenario",
+    ]
     result = {
         "schema": "litetray.compatibility.candidate.v1", "status": "blocked" if blockers else "static_candidate",
         "production_ready": False, "registry_modified": False,

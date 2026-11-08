@@ -19,7 +19,7 @@ jobs:
       # Native UI tests launch isolated desktop processes. Serial execution
       # avoids desktop/font-service contention skewing the latency budget.
       - run: cargo test --workspace --all-targets --locked -- --test-threads=1
-      - name: Check the opt-in candidate registry separately
+      - name: Check compatibility feature registry consistency
         run: cargo test -p litetray-adapter-protocol --locked --features compatibility-lab -- --test-threads=1
       - name: Check background compatibility detection and snapshot export
         run: cargo test --bin LiteTray compatibility_check_worker_and_export_preserve_the_real_disk_snapshot -- --ignored --test-threads=1

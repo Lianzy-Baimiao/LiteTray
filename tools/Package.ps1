@@ -80,6 +80,7 @@ $documents += @('docs/sandbox-host-check-2026-11-08.md')
 $documents += @('crates/adapter-protocol/profiles/README.md','crates/adapter-protocol/profiles/windows11-26300.9711-x64.json')
 $documents += @('crates/adapter-protocol/profiles/windows11-26300.9818-x64.json','docs/compatibility-9818.md')
 $documents += @('docs/compatibility-8457.md')
+$documents += @('crates/adapter-protocol/profiles/windows11-26200.8457-x64.json')
 $documents += @('docs/windows11-commonality.md','docs/images/compatibility-5.14.0-zh-light.png','docs/images/compatibility-5.14.0-en-light.png')
 foreach($name in $documents){
     $destination=Join-Path $output $name
