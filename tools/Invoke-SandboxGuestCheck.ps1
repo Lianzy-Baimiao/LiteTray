@@ -118,6 +118,9 @@ try {
         $record = [ordered]@{name=$check.name;exit_code=$null;timed_out=$false;passed=$false;duration_ms=0;stdout=[IO.Path]::GetFileName($stdout);stderr=[IO.Path]::GetFileName($stderr);error=$null}
         try {
             $process = Start-Process -FilePath $binary -WorkingDirectory $app -ArgumentList $check.arguments -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            # Windows PowerShell 5.1 needs the handle retained before waiting;
+            # otherwise ExitCode can remain null after the process exits.
+            $null = $process.Handle
             if (-not $process.WaitForExit(60000)) {
                 $record.timed_out=$true
                 $process.Kill()
@@ -126,7 +129,8 @@ try {
                 $process.WaitForExit()
             }
             $record.exit_code=$process.ExitCode
-            if (-not $record.timed_out -and $process.ExitCode -eq 0) {
+            if ($null -eq $record.exit_code) { throw 'The process exited without an available exit code.' }
+            if (-not $record.timed_out -and $record.exit_code -eq 0) {
                 $value = Get-Content -LiteralPath (Join-Path $output $check.json) -Raw -Encoding UTF8 | ConvertFrom-Json
                 if ($check.name -eq 'compatibility') {
                     if ($value.scope -ne 'disk_only' -or $value.explorer_accessed -ne $false -or $value.network_accessed -ne $false) {
