@@ -43,7 +43,30 @@ Total Repaired Corruption: 0
 Reboot required: no, RepairNeeded: yes
 ```
 
-清单和元数据损坏计数均为 0。载荷记录涉及组件存储中的 UserExperience、CloudExperienceHost、WinAppSDK 等基线组件；这是当前扫描检出的 416 条损坏记录，不等于 416 个正在运行的系统文件损坏。现有证据仍未建立这些记录与沙盒退出之间的直接因果关系。此次仅检测，没有执行 RestoreHealth 或 SFC 修复。
+清单和元数据损坏计数均为 0。载荷记录涉及组件存储中的 UserExperience、CloudExperienceHost、WinAppSDK 等基线组件；这是当前扫描检出的 416 条损坏记录，不等于 416 个正在运行的系统文件损坏。现有证据仍未建立这些记录与沙盒退出之间的直接因果关系。这次扫描仅检测，随后经授权执行了下述修复。
+
+## 组件修复与沙盒复测
+
+19:21:13 执行 `DISM /Online /Cleanup-Image /RestoreHealth /NoRestart /English`，通过 Windows Update 获取匹配修复源，19:39:15 成功结束，退出码 0。CBS 记录：
+
+```text
+Operation: Detect and Repair
+Operation result: 0x0
+Total Detected Corruption: 555
+Total Repaired Corruption: 555
+CSI Payload Corruption: 416
+CSI Payload Repaired: 416
+CSI FileFlags Repaired: 139
+All WCP store corruptions were fixed
+```
+
+随后运行 `sfc /scannow`，19:43:54 结束，退出码 0，明确报告“Windows 资源保护找到了损坏文件并成功修复了它们”。本次 CBS 的修复对象为 AutoSuperRes 注册数据 `updater_AutoSuperRes.json`，事务报告全部修复成功。
+
+紧接的 `DISM /Online /Cleanup-Image /CheckHealth /NoRestart /English` 退出码 0，结果变为 `No component store corruption detected`。DISM 正式结束日志报告无需重启；CBS RebootPending、PackagesPending、Windows Update RebootRequired 和 `pending.xml` 均不存在。未执行重启。原始日志和检查结果保存在被 Git 忽略的 `local/windows-component-repair-20261108-192112/`。
+
+19:44:55 重复打开相同最简 Sandbox 配置，仍出现原生 `0x80370106` 错误，未进入客体桌面。管理员日志确认 19:44:57.294 来宾 OS 成功启动，19:46:05.160 因来宾重置关闭，间隔 67.866 秒。没有运行完整 LiteTray 客体检查，没有提交系统反馈，错误窗口已关闭。
+
+因此，本轮系统组件修复成功，但没有消除沙盒初始化故障，不能把“组件健康”当作“沙盒恢复”的证据。系统仍为 `26300.9711`。修复后的 LiteTray 磁盘兼容报告继续全部匹配；Explorer 和 LiteTray 均未重启。
 
 ## 已核实的微软修复与处理边界
 
@@ -53,8 +76,8 @@ Reboot required: no, RepairNeeded: yes
 
 官方 KB 还列出部分 USB Audio Class 1.0 设备可能出现 Code 10 或无声音的已知问题，源于 2026-09-08 更新，尚未解决；不能据此推断本机设备受影响，也不能声称该 Preview 没有已知问题。
 
-建议先执行组件存储修复并检查受保护系统文件，完成后复测最简 Sandbox；如果仍复现相同错误，再决定安装此可选修复或采用后续包含修复的安全累积更新。已有的 25H2 ISO 不能直接作为 26H2 宿主的修复源。系统组件修复会写入 Windows 文件，重启需安排在桌面工作保存之后。
+组件修复后的最简复测仍失败，下一步候选为安装此可选修复，或采用后续已确认包含修复的安全累积更新。已有的 25H2 ISO 未用于 26H2 宿主修复。累计更新可能要求重启，需安排在桌面工作保存之后。
 
-最简 Sandbox 成功后再运行项目客体检查。系统修复或更新可能改变 Shell 模块身份，LiteTray 也必须重新生成兼容报告；未知模块继续拒绝接管，不能绕过校验。组件修复、系统更新和重启尚未执行。
+最简 Sandbox 成功后再运行项目客体检查。系统修复或更新可能改变 Shell 模块身份，LiteTray 也必须重新生成兼容报告；未知模块继续拒绝接管，不能绕过校验。组件修复已完成；系统补丁安装和重启尚未执行。
 
 跨版本测试基础已准备好，见 [Sandbox / VM 使用说明](sandbox-compatibility.md)。真正的第二个 Windows 分支仍计划使用已有 25H2 Pro 26200.8457 镜像建立独立 VM；尚未创建或验收。
