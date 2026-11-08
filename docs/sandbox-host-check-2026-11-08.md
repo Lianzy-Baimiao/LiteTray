@@ -72,7 +72,13 @@ All WCP store corruptions were fixed
 
 微软 [KB5127936（2026-10-28）](https://support.microsoft.com/help/5127936) 明确写明修复 Windows Sandbox 意外关闭并显示 `0x80370106` 的问题。对当前 26H2 分支，对应 build 为 `26300.9818`；本机仍为 `26300.9711`，已安装 KB5127648。官方说明未描述本机约 68 秒后重置的细节，仍须安装后复测才能确认是否是同一缺陷。
 
-该补丁属于正式发布渠道的**可选非安全 Preview 累积更新**。19:09 通过 Windows Update COM 接口在线查询未安装、未隐藏的软件更新，查询成功，但只返回 .NET 更新，没有返回 KB5127936；不能把目录存在等同于本机 Windows Update 已提供它。[Microsoft Update Catalog](https://www.catalog.update.microsoft.com/Search.aspx?q=KB5127936) 已核实存在 Windows 11 26H2 x64 条目。当前没有下载或安装系统补丁。
+该补丁属于正式发布渠道的**可选非安全 Preview 累积更新**。本机 Windows Update 主页已显示 KB5127936 的单独“下载并安装”入口；“可选更新”子页面没有显示它。21:04 使用明确指定 `DeploymentAction='OptionalInstallation'` 的在线 COM 查询成功返回该更新，UpdateID 为 `c3777685-2dc4-4554-93ba-bd9964d07bca`，修订号 1，差分内容可用且优先使用，`IsDownloaded=false`。
+
+此前只返回 .NET 的查询隐含 `DeploymentAction='Installation'`，漏掉了该更新的 `OptionalInstallation` 类型，不能据此判断本机未获得推送。该项 `BrowseOnly=false`，再添加 `BrowseOnly=1` 也会排除它。查询默认条件的依据见 [WUA Search 文档](https://learn.microsoft.com/en-us/windows/win32/api/wuapi/nf-wuapi-iupdatesearcher-search)。
+
+[Microsoft Update Catalog](https://www.catalog.update.microsoft.com/Search.aspx?q=KB5127936) 的 x64 目标离线包为 4,898,703,157 字节，KB5043080 检查点包为 533,761,740 字节，两包共 5.43 GB（5.06 GiB）。这只是两个完整离线文件的合计，不能作为本机 Windows Update 的实际下载量。DISM 确认本机 KB5043080 已暂存，尚不能据此断言必须重新下载其完整文件。
+
+后续优先使用已确认提供的 Windows Update 单项更新入口，由系统按设备状态处理差分和检查点；微软说明它[只下载设备缺少的内容](https://learn.microsoft.com/en-us/windows/deployment/update/catalog-checkpoint-cumulative-updates)。当前元数据不足以提前确定实际传输字节，`MaxDownloadSize` 也[不等于实际下载量](https://learn.microsoft.com/en-us/windows/win32/api/wuapi/nf-wuapi-iupdate-get_maxdownloadsize)。没有启动补丁下载或安装。
 
 官方 KB 还列出部分 USB Audio Class 1.0 设备可能出现 Code 10 或无声音的已知问题，源于 2026-09-08 更新，尚未解决；不能据此推断本机设备受影响，也不能声称该 Preview 没有已知问题。
 
