@@ -347,9 +347,13 @@ impl Connection {
             }
         } else {
             Change::StartTray
-        })?;
-        if self.status()? != SessionStatus::Active {
-            return Err("任务栏未确认时钟接管成功".into());
+        })
+        .map_err(|error| format!("发送任务栏启动命令失败：{error}"))?;
+        let status = self
+            .status()
+            .map_err(|error| format!("确认任务栏启动状态失败：{error}"))?;
+        if status != SessionStatus::Active {
+            return Err(format!("任务栏未确认接管成功，当前状态为 {status:?}"));
         }
         self.context.active.set(true);
         *self.last.borrow_mut() = Some(frame);
@@ -462,9 +466,15 @@ impl Connection {
             self.restored.set(true);
             return Ok(());
         }
-        self.command(Change::Stop)?;
-        if self.status()? != SessionStatus::Closed {
-            return Err("任务栏尚未确认恢复完成，连接继续保留".into());
+        self.command(Change::Stop)
+            .map_err(|error| format!("发送任务栏停止命令失败：{error}"))?;
+        let status = self
+            .status()
+            .map_err(|error| format!("确认任务栏恢复状态失败：{error}"))?;
+        if status != SessionStatus::Closed {
+            return Err(format!(
+                "任务栏尚未确认恢复完成，当前状态为 {status:?}，连接继续保留"
+            ));
         }
         self.restored.set(true);
         Ok(())
@@ -528,6 +538,9 @@ unsafe fn send(
             lpData: bytes.as_ptr() as *mut _,
         };
         let mut result = 0;
+        // SendMessageTimeoutW can return zero without setting last error. Do
+        // not attribute an unrelated earlier Win32 error to this request.
+        SetLastError(ERROR_SUCCESS);
         if SendMessageTimeoutW(
             target,
             WM_COPYDATA,
@@ -538,10 +551,17 @@ unsafe fn send(
             &mut result,
         ) == 0
         {
-            Err(format!(
-                "任务栏通信超时或访问受限：{}",
-                std::io::Error::last_os_error()
-            ))
+            let error = GetLastError();
+            if error == ERROR_SUCCESS {
+                Err(format!(
+                    "任务栏通信未完成（等待上限 {timeout} 毫秒，系统未提供错误码）"
+                ))
+            } else {
+                Err(format!(
+                    "任务栏通信失败（等待上限 {timeout} 毫秒）：{}",
+                    std::io::Error::from_raw_os_error(error as i32)
+                ))
+            }
         } else {
             Ok(result)
         }
@@ -631,6 +651,7 @@ mod restoration_checks {
         status: Cell<LRESULT>,
         queries: Cell<usize>,
         commands: Cell<usize>,
+        reject_commands: Cell<bool>,
     }
     unsafe extern "system" fn endpoint(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
         unsafe {
@@ -644,7 +665,7 @@ mod restoration_checks {
                 }
                 if copy.dwData == COMMAND_TAG {
                     state.commands.set(state.commands.get() + 1);
-                    return 1;
+                    return (!state.reject_commands.get()) as LRESULT;
                 }
             }
             DefWindowProcW(hwnd, msg, w, l)
@@ -808,6 +829,48 @@ mod restoration_checks {
             2,
             "Drop preserves the confirmation"
         );
+    }
+    #[test]
+    fn activation_diagnostic_distinguishes_command_and_status_failures() {
+        let fixture = Fixture::new();
+        let frame = crate::clock::frame(&Config::default().clock, "", chrono::Local::now());
+        fixture.state.reject_commands.set(true);
+        let error = fixture.connection().start(frame.clone()).unwrap_err();
+        assert!(error.starts_with("发送任务栏启动命令失败："), "{error}");
+        assert_eq!(fixture.state.queries.get(), 0);
+        assert!(!fixture.connection().context.active.get());
+        fixture.state.reject_commands.set(false);
+        fixture.state.status.set(42);
+        let error = fixture.connection().start(frame.clone()).unwrap_err();
+        assert!(error.starts_with("确认任务栏启动状态失败："), "{error}");
+        assert_eq!(fixture.state.queries.get(), 1);
+        assert!(!fixture.connection().context.active.get());
+        fixture
+            .state
+            .status
+            .set(SessionStatus::Restoring as LRESULT);
+        let error = fixture.connection().start(frame).unwrap_err();
+        assert!(error.contains("Restoring"), "{error}");
+        assert!(!fixture.connection().context.active.get());
+        assert!(!fixture.connection().restored.get());
+    }
+    #[test]
+    fn cleanup_diagnostic_preserves_unconfirmed_restore_obligation() {
+        let fixture = Fixture::new();
+        fixture.state.reject_commands.set(true);
+        let error = fixture.connection().stop().unwrap_err();
+        assert!(error.starts_with("发送任务栏停止命令失败："), "{error}");
+        assert_eq!(fixture.state.queries.get(), 0);
+        assert!(!fixture.connection().restored.get());
+        fixture.state.reject_commands.set(false);
+        fixture.state.status.set(42);
+        let error = fixture.connection().stop().unwrap_err();
+        assert!(error.starts_with("确认任务栏恢复状态失败："), "{error}");
+        assert_eq!(fixture.state.queries.get(), 1);
+        assert!(!fixture.connection().restored.get());
+        fixture.state.status.set(SessionStatus::Closed as LRESULT);
+        fixture.connection().stop().unwrap();
+        assert!(fixture.connection().restored.get());
     }
     #[test]
     fn retained_process_exit_confirms_restoration_without_an_endpoint() {
