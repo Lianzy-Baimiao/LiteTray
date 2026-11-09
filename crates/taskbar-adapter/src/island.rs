@@ -2,7 +2,7 @@
 //! Coordinates or a window class name are not evidence of this relationship.
 use crate::{
     property::same_object,
-    window_guard::WindowGuard,
+    window_guard::{Lifetime, WindowGuard},
     xaml::{self, Object, check},
     xaml_abi::*,
 };
@@ -32,6 +32,11 @@ pub(crate) struct Binding {
     parent_guard: WindowGuard,
     window_guard: WindowGuard,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RestoreTarget {
+    Current,
+    Retired,
+}
 fn local_pair(parent: HWND, window: HWND) -> Result<(), String> {
     unsafe {
         for handle in [parent, window] {
@@ -49,15 +54,22 @@ fn local_pair(parent: HWND, window: HWND) -> Result<(), String> {
     }
     Ok(())
 }
-fn content(source: &Object) -> Result<Object, String> {
+fn optional_content(source: &Object) -> Result<Option<Object>, String> {
     unsafe {
         let mut value = null_mut();
         check(
             (source.table::<IDesktopWindowXamlSource_Vtbl>().Content)(source.raw(), &mut value),
             "Get island content",
         )?;
-        Object::owned(value)
+        if value.is_null() {
+            Ok(None)
+        } else {
+            Object::owned(value).map(Some)
+        }
     }
+}
+fn content(source: &Object) -> Result<Object, String> {
+    optional_content(source)?.ok_or_else(|| "XAML source 内容为空".into())
 }
 fn window(native: &Object) -> Result<HWND, String> {
     unsafe {
@@ -116,6 +128,43 @@ impl Binding {
         // COM reads can pump messages. Recheck the native relation before
         // returning a successful proof to the writer/input publisher.
         self.validate_windows()
+    }
+    /// Stop may restore retained originals after a monitor/work-area/DPI
+    /// change. It must never attach models to a replacement source or root.
+    /// Unknown COM failures and live-window marker conflicts still block stop.
+    pub(crate) fn restore_target(&self) -> Result<RestoreTarget, String> {
+        if self.restore_windows()? == RestoreTarget::Retired {
+            return Ok(RestoreTarget::Retired);
+        }
+        let Some(current) = optional_content(&self.source)? else {
+            return Ok(RestoreTarget::Retired);
+        };
+        if !same_object(&current, &self.content)?
+            || !same_object(&xaml::root(&current)?, &self.root)?
+            || !same_object(&xaml::root_content(&current)?, &self.root_content)?
+        {
+            return Ok(RestoreTarget::Retired);
+        }
+        // These COM getters may reenter window destruction. Prove the old
+        // native identity again immediately before allowing restoration.
+        self.restore_windows()
+    }
+    fn restore_windows(&self) -> Result<RestoreTarget, String> {
+        if self.parent_guard.lifetime()? == Lifetime::Retired
+            || self.window_guard.lifetime()? == Lifetime::Retired
+            || window(&self.native)? != self.window
+        {
+            return Ok(RestoreTarget::Retired);
+        }
+        // The native getter may pump same-thread messages. Recheck the
+        // captured markers after it returns before permitting any reattach.
+        if self.parent_guard.lifetime()? == Lifetime::Retired
+            || self.window_guard.lifetime()? == Lifetime::Retired
+        {
+            return Ok(RestoreTarget::Retired);
+        }
+        local_pair(self.parent, self.window)?;
+        Ok(RestoreTarget::Current)
     }
     fn validate_windows(&self) -> Result<(), String> {
         self.parent_guard.validate()?;

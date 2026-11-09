@@ -2,7 +2,7 @@
 //! dispatching real input and reattach shared system menus before that input.
 use crate::{
     hooks::{self, Entry},
-    island::Binding,
+    island::{Binding, RestoreTarget},
     property::{Property, same_object},
     tray::{Field, read},
     tray_menu::Menus,
@@ -31,6 +31,10 @@ use windows_sys::Win32::{
         WindowsAndMessaging::*,
     },
 };
+
+#[path = "tray_recovery_checks.rs"]
+mod recovery_checks;
+pub(crate) use recovery_checks::run as check_recovery;
 
 #[derive(Clone, Copy)]
 struct PopupAnchor {
@@ -124,10 +128,24 @@ impl Runtime {
         MENUS.with(|menus| menus.borrow_mut().restore())?;
         // Attaching the primary last restores the shell's per-item owner.
         if let Some(primary) = self.hosts.iter().find(|h| !h.secondary) {
-            primary.binding.validate()?;
+            // Active coordinates must match the capture, but stopping after a
+            // display change only needs the original window/source identity.
+            // A retired primary has no current surface to reattach; never use
+            // its HWND to discover or mutate the replacement taskbar.
+            let mut target = primary.binding.restore_target()?;
             for surface in &primary.surfaces {
+                if target == RestoreTarget::Retired {
+                    break;
+                }
                 if let Some(items) = &surface.items {
+                    if !same_object(&xaml::root_content(items)?, &primary.root)? {
+                        return Err("恢复托盘项目不再属于原始 XAML 根".into());
+                    }
+                    if primary.binding.restore_target()? == RestoreTarget::Retired {
+                        break;
+                    }
                     reattach(items)?;
+                    target = primary.binding.restore_target()?;
                 }
             }
         }

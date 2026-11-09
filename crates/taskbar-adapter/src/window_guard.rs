@@ -22,6 +22,11 @@ pub(crate) struct WindowGuard {
     token: Box<u8>,
     monitor: Monitor,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Lifetime {
+    Current,
+    Retired,
+}
 fn local_window(window: HWND) -> bool {
     unsafe {
         let mut pid = 0;
@@ -84,11 +89,22 @@ impl WindowGuard {
         guard.validate()?;
         Ok(guard)
     }
-    pub(crate) fn validate(&self) -> Result<(), String> {
-        if !local_window(self.window)
-            || unsafe { GetPropW(self.window, self.property.as_ptr()) }
-                != (&*self.token as *const u8).cast_mut().cast()
+    /// Restoration needs the captured window's identity, not its old monitor
+    /// geometry. A missing/reassigned window is retired. A live local window
+    /// with an altered marker remains ambiguous and must fail closed.
+    pub(crate) fn lifetime(&self) -> Result<Lifetime, String> {
+        if !local_window(self.window) {
+            return Ok(Lifetime::Retired);
+        }
+        if unsafe { GetPropW(self.window, self.property.as_ptr()) }
+            != (&*self.token as *const u8).cast_mut().cast()
         {
+            return Err("目标窗口生命周期标记已变化，无法确认原窗口".into());
+        }
+        Ok(Lifetime::Current)
+    }
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.lifetime()? != Lifetime::Current {
             return Err("目标窗口已销毁、重用或生命周期标记已变化".into());
         }
         if monitor(self.window)? != self.monitor {

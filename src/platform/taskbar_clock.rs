@@ -82,6 +82,9 @@ impl taskbar_service::Session for Connection {
     fn stop(&self) -> Result<(), String> {
         self.stop()
     }
+    fn restoration_confirmed(&self) -> bool {
+        self.restoration_confirmed()
+    }
     fn take_activation(&self) -> Option<Activation> {
         self.take_activation()
     }
@@ -155,6 +158,7 @@ pub struct Connection {
     last: RefCell<Option<Frame>>,
     busy: Cell<bool>,
     failure: RefCell<Option<String>>,
+    restored: Cell<bool>,
     notice: Option<String>,
     environment: Option<super::taskbar_environment::Environment>,
 }
@@ -224,6 +228,7 @@ impl Connection {
                 last: RefCell::new(None),
                 busy: Cell::new(false),
                 failure: RefCell::new(None),
+                restored: Cell::new(false),
                 notice: preflight.notice,
                 environment: preflight.environment,
             };
@@ -450,14 +455,39 @@ impl Connection {
         let _call = self.enter()?;
         self.context.active.set(false);
         self.context.pending.borrow_mut().take();
+        if self.restored.get() {
+            return Ok(());
+        }
         if unsafe { WaitForSingleObject(self.process, 0) } == WAIT_OBJECT_0 {
+            self.restored.set(true);
             return Ok(());
         }
         self.command(Change::Stop)?;
         if self.status()? != SessionStatus::Closed {
             return Err("任务栏尚未确认恢复完成，连接继续保留".into());
         }
+        self.restored.set(true);
         Ok(())
+    }
+    fn restoration_confirmed(&self) -> bool {
+        let Ok(_call) = self.enter() else {
+            return false;
+        };
+        if self.restored.get() {
+            return true;
+        }
+        // A missing endpoint or a failed/Busy query cannot discharge the
+        // retained restore obligation. Only the original process exiting or
+        // its authenticated session reporting Closed proves completion.
+        if unsafe { WaitForSingleObject(self.process, 0) } == WAIT_OBJECT_0
+            || self.status() == Ok(SessionStatus::Closed)
+        {
+            self.context.active.set(false);
+            self.context.pending.borrow_mut().take();
+            self.restored.set(true);
+            return true;
+        }
+        false
     }
     pub fn take_activation(&self) -> Option<Activation> {
         let event = self.context.pending.borrow_mut().take()?;
@@ -592,6 +622,227 @@ unsafe extern "system" fn receive(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
 }
 
 #[cfg(test)]
+mod restoration_checks {
+    use super::*;
+    use std::{io::Write, os::windows::process::CommandExt, process::Stdio};
+
+    #[derive(Default)]
+    struct EndpointState {
+        status: Cell<LRESULT>,
+        queries: Cell<usize>,
+        commands: Cell<usize>,
+    }
+    unsafe extern "system" fn endpoint(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+        unsafe {
+            let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const EndpointState;
+            if msg == WM_COPYDATA && !state.is_null() {
+                let state = &*state;
+                let copy = &*(l as *const COPYDATASTRUCT);
+                if copy.dwData == STATUS_TAG {
+                    state.queries.set(state.queries.get() + 1);
+                    return state.status.get();
+                }
+                if copy.dwData == COMMAND_TAG {
+                    state.commands.set(state.commands.get() + 1);
+                    return 1;
+                }
+            }
+            DefWindowProcW(hwnd, msg, w, l)
+        }
+    }
+    struct Fixture {
+        connection: Option<Connection>,
+        hwnd: HWND,
+        state: Box<EndpointState>,
+    }
+    impl Fixture {
+        fn new() -> Self {
+            unsafe {
+                let tid = GetCurrentThreadId();
+                let pid = GetCurrentProcessId();
+                let class = wide(&format!("LiteTray.ClockWatchdog.v1.{tid}.RestorationTest"));
+                RegisterClassW(&WNDCLASSW {
+                    lpfnWndProc: Some(endpoint),
+                    hInstance: GetModuleHandleW(null()),
+                    lpszClassName: class.as_ptr(),
+                    ..std::mem::zeroed()
+                });
+                let hwnd = CreateWindowExW(
+                    0,
+                    class.as_ptr(),
+                    null(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    HWND_MESSAGE,
+                    null_mut(),
+                    GetModuleHandleW(null()),
+                    null(),
+                );
+                assert!(!hwnd.is_null());
+                let state = Box::<EndpointState>::default();
+                SetWindowLongPtrW(
+                    hwnd,
+                    GWLP_USERDATA,
+                    &*state as *const EndpointState as isize,
+                );
+                let process = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+                assert!(!process.is_null());
+                Self {
+                    connection: Some(Connection {
+                        receiver: null_mut(),
+                        endpoint: Cell::new(hwnd),
+                        process,
+                        context: Rc::new(Context {
+                            request: Prepare {
+                                version: VERSION,
+                                owner: Owner {
+                                    nonce: 1,
+                                    process_id: pid,
+                                    receiver: hwnd as u64,
+                                },
+                                layout: HostLayout {
+                                    schema: 1,
+                                    module: litetray_adapter_protocol::ModuleIdentity {
+                                        machine: 0x8664,
+                                        timestamp: 0,
+                                        image_size: 4096,
+                                        pdb_guid: [1; 16],
+                                        pdb_age: 1,
+                                    },
+                                    symbols: vec![],
+                                    element_offset: 0,
+                                },
+                                routes: vec![],
+                                custom_calendar: false,
+                                volume_scroll: false,
+                                volume_mute: false,
+                                source: None,
+                                clocks: true,
+                                mirror_icons: false,
+                            },
+                            reply: RefCell::new(None),
+                            gate: RefCell::new(None),
+                            pending: RefCell::new(None),
+                            active: Cell::new(false),
+                            main: hwnd,
+                            pid,
+                            tid,
+                        }),
+                        sequence: Cell::new(0),
+                        last: RefCell::new(None),
+                        busy: Cell::new(false),
+                        failure: RefCell::new(None),
+                        restored: Cell::new(false),
+                        notice: None,
+                        environment: None,
+                    }),
+                    hwnd,
+                    state,
+                }
+            }
+        }
+        fn connection(&self) -> &Connection {
+            self.connection.as_ref().unwrap()
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            self.connection.take();
+            unsafe {
+                DestroyWindow(self.hwnd);
+            }
+        }
+    }
+    #[test]
+    fn blocked_transport_requires_closed_and_cached_confirmation_never_writes_stop() {
+        let mut fixture = Fixture::new();
+        for status in [0, 1, 2, 3, -1, 42] {
+            fixture.state.status.set(status);
+            assert!(!fixture.connection().restoration_confirmed());
+        }
+        assert_eq!(fixture.state.queries.get(), 6);
+        assert_eq!(fixture.state.commands.get(), 0);
+        fixture.state.status.set(SessionStatus::Closed as LRESULT);
+        fixture.connection().busy.set(true);
+        assert!(!fixture.connection().restoration_confirmed());
+        assert_eq!(fixture.state.queries.get(), 6, "no reentrant native call");
+        fixture.connection().busy.set(false);
+        fixture.connection().endpoint.set(null_mut());
+        assert!(!fixture.connection().restoration_confirmed());
+        assert!(!fixture.connection().restored.get());
+        fixture.connection().endpoint.set(fixture.hwnd);
+        assert!(fixture.connection().restoration_confirmed());
+        assert_eq!(fixture.state.queries.get(), 7);
+        assert!(fixture.connection().restoration_confirmed());
+        assert_eq!(
+            fixture.state.queries.get(),
+            7,
+            "Closed is terminal and cached"
+        );
+        fixture.connection.take();
+        assert_eq!(
+            fixture.state.commands.get(),
+            0,
+            "Drop must not send Stop again"
+        );
+    }
+    #[test]
+    fn stop_caches_only_an_acknowledged_closed_session() {
+        let mut fixture = Fixture::new();
+        fixture
+            .state
+            .status
+            .set(SessionStatus::Restoring as LRESULT);
+        assert!(fixture.connection().stop().is_err());
+        assert!(!fixture.connection().restored.get());
+        fixture.state.status.set(SessionStatus::Closed as LRESULT);
+        fixture.connection().stop().unwrap();
+        assert!(fixture.connection().restored.get());
+        assert_eq!(fixture.state.commands.get(), 2);
+        fixture.connection.take();
+        assert_eq!(
+            fixture.state.commands.get(),
+            2,
+            "Drop preserves the confirmation"
+        );
+    }
+    #[test]
+    fn retained_process_exit_confirms_restoration_without_an_endpoint() {
+        let mut fixture = Fixture::new();
+        let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+        let mut child = std::process::Command::new(system.join("System32/cmd.exe"))
+            .args(["/d", "/q"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .unwrap();
+        let connection = fixture.connection.as_mut().unwrap();
+        unsafe {
+            CloseHandle(connection.process);
+            connection.process = OpenProcess(PROCESS_SYNCHRONIZE, 0, child.id());
+        }
+        assert!(!connection.process.is_null());
+        connection.endpoint.set(null_mut());
+        assert!(
+            !connection.restoration_confirmed(),
+            "a live process is insufficient"
+        );
+        child.stdin.take().unwrap().write_all(b"exit\r\n").unwrap();
+        // Any terminal exit code proves that the retained process is gone.
+        child.wait().unwrap();
+        assert!(connection.restoration_confirmed());
+        fixture.connection.take();
+        assert_eq!(fixture.state.queries.get(), 0);
+        assert_eq!(fixture.state.commands.get(), 0);
+    }
+}
+
+#[cfg(test)]
 mod activation_checks {
     use super::*;
     unsafe extern "system" fn busy_endpoint(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -687,6 +938,7 @@ mod activation_checks {
                 last: RefCell::new(None),
                 busy: Cell::new(false),
                 failure: RefCell::new(None),
+                restored: Cell::new(false),
                 environment: None,
                 notice: None,
             };

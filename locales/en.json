@@ -569,7 +569,7 @@
   "参考实现：": "Reference implementation:",
   "处理建议：确认系统组件完整，完成 Windows 更新后重新检测。": "Next step: check system component integrity and check again after Windows updates finish.",
   "处理建议：模块读取或结构核验失败；完成系统更新后重新检测，并保留报告中的具体错误。": "Next step: the module could not be read or verified. Check again after system updates finish and retain the specific error in this report.",
-  "处理建议：此模块需要新的实现模板；导出报告可提供身份与失败原因。其他已识别模块的功能仍可使用。": "Next step: this module needs a new implementation template. Export its identity and failure reason in the report. Independently supported features remain available.",
+  "处理建议：此模块需要新的实现模板；导出报告可提供身份与失败原因。各功能是否可用以上方检查结果为准。": "Next step: this module needs a new implementation template. Export its identity and failure reason in the report. See the results above for each feature's availability.",
   "当前实现组合：": "Current implementation:",
   "按模块特征判断可用功能": "Available features by module implementation",
   "磁盘识别后，启用时仍会核验运行中的模块与控件。托盘暂不兼容时，已兼容的时钟可继续运行。": "Activation verifies loaded modules and controls. A compatible clock can continue running when the tray implementation is unavailable.",

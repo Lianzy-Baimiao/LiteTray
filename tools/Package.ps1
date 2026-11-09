@@ -86,6 +86,9 @@ $documents += @('docs/compatibility-next-versions.md','docs/windows11-next-versi
 $documents += @('crates/adapter-protocol/profiles/windows11-22621.1702-x64.json','crates/adapter-protocol/profiles/windows11-22631.2861-x64.json','docs/compatibility-22h2-23h2.md')
 $documents += @('docs/windows11-commonality.md','docs/images/compatibility-5.14.0-zh-light.png','docs/images/compatibility-5.14.0-en-light.png')
 $documents += @('docs/module-recognition.md','crates/adapter-protocol/profiles/execution-fingerprints.json')
+$documents += @('docs/compatibility-traits-5.15.0.md')
+$documents += @('docs/hotplug-recovery-5.15.0.md')
+$documents += @('docs/images/compatibility-5.15.0-zh-light.png','docs/images/compatibility-5.15.0-en-light.png')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null

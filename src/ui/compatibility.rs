@@ -358,7 +358,7 @@ fn details_text(snapshot: &Snapshot) -> String {
             lines.push(tr(match module.status {
                 inventory::ModuleStatus::Missing => "处理建议：确认系统组件完整，完成 Windows 更新后重新检测。",
                 inventory::ModuleStatus::InvalidImage | inventory::ModuleStatus::ReadFailed => "处理建议：模块读取或结构核验失败；完成系统更新后重新检测，并保留报告中的具体错误。",
-                _ => "处理建议：此模块需要新的实现模板；导出报告可提供身份与失败原因。其他已识别模块的功能仍可使用。",
+                _ => "处理建议：此模块需要新的实现模板；导出报告可提供身份与失败原因。各功能是否可用以上方检查结果为准。",
             }).into());
         }
     }

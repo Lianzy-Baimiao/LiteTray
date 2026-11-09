@@ -12,6 +12,8 @@ use std::{
     sync::mpsc::{Receiver, TryRecvError},
 };
 
+const RESTORATION_CHECK_MILLIS: u64 = 5000;
+
 pub trait Session {
     /// A live capability limitation, e.g. clock running while tray is pending.
     fn notice(&self) -> Option<&str> {
@@ -23,6 +25,11 @@ pub trait Session {
     fn environment_matches(&self) -> bool;
     /// Success proves restoration, or that the retained native process exited.
     fn stop(&self) -> Result<(), String>;
+    /// Read-only proof that a previously blocked restoration has completed.
+    /// Unknown, busy and missing endpoints must remain unconfirmed.
+    fn restoration_confirmed(&self) -> bool {
+        false
+    }
     fn take_activation(&self) -> Option<Activation>;
 }
 pub struct ConnectFailure<S> {
@@ -52,6 +59,7 @@ struct Driver<B: Backend> {
     recovery: Recovery,
     connection: Option<B::Session>,
     pending: Option<Pending<B::Prepared>>,
+    restoration_check_after: Option<u64>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -112,6 +120,7 @@ impl<B: Backend> Service<B> {
                 recovery: Recovery::connecting(now),
                 connection: None,
                 pending: None,
+                restoration_check_after: None,
             })),
             invalidated: Cell::new(false),
             devices_changed: Cell::new(false),
@@ -299,6 +308,7 @@ impl<B: Backend> Driver<B> {
     fn restart(&mut self, now: u64, reason: &str) {
         crate::event_log::record("restart", reason);
         self.revision = self.revision.wrapping_add(1);
+        self.restoration_check_after = None;
         self.recovery = if self.connection.is_some() {
             Recovery::restarting(reason)
         } else {
@@ -317,13 +327,40 @@ impl<B: Backend> Driver<B> {
             if let Err(error) = connection.stop() {
                 crate::event_log::record("restore failed", &error);
                 self.recovery.restore_failed(&error);
+                if self.recovery.phase() == Phase::RestoreBlocked {
+                    self.restoration_check_after =
+                        Some(now.saturating_add(RESTORATION_CHECK_MILLIS));
+                }
                 return Err(error);
             }
-            self.connection.take();
-            crate::event_log::record("restored", "native clock and tray state confirmed");
-            self.recovery.restored(now);
+            self.finish_restoration(now);
         }
         Ok(())
+    }
+    fn finish_restoration(&mut self, now: u64) {
+        self.connection.take();
+        self.restoration_check_after = None;
+        crate::event_log::record("restored", "native clock and tray state confirmed");
+        self.recovery.restored(now);
+    }
+    fn observe_blocked_restoration(&mut self, now: u64) {
+        if self.recovery.phase() != Phase::RestoreBlocked
+            || !self
+                .restoration_check_after
+                .is_some_and(|deadline| now >= deadline)
+        {
+            return;
+        }
+        // A watchdog may finish after the bounded Stop attempts. Observe its
+        // terminal state without writing another Stop or resetting the budget.
+        self.restoration_check_after = Some(now.saturating_add(RESTORATION_CHECK_MILLIS));
+        if self
+            .connection
+            .as_ref()
+            .is_some_and(Session::restoration_confirmed)
+        {
+            self.finish_restoration(now);
+        }
     }
     fn tick(&mut self, backend: &B, now: u64, wall_time: DateTime<Local>) {
         if matches!(self.recovery.phase(), Phase::Running { .. })
@@ -342,6 +379,7 @@ impl<B: Backend> Driver<B> {
         if self.recovery.phase() == Phase::Restoring {
             let _ = self.restore(now);
         }
+        self.observe_blocked_restoration(now);
         let completed = self
             .pending
             .as_ref()
@@ -410,16 +448,21 @@ mod tests {
         rc::Rc,
         sync::mpsc::{self, Sender},
     };
+    type Preparation = (u64, Sender<Result<u64, String>>);
     #[derive(Default)]
     struct NativeState {
         prepared: Cell<usize>,
-        senders: RefCell<VecDeque<Sender<Result<(), String>>>>,
+        senders: RefCell<VecDeque<Preparation>>,
+        route_generation: Cell<u64>,
+        connected_routes: RefCell<Vec<u64>>,
         frames: RefCell<Vec<Frame>>,
         connects: Cell<usize>,
         stops: Cell<usize>,
         fail_start: Cell<bool>,
         fail_update: Cell<bool>,
         fail_restore: Cell<bool>,
+        restored: Cell<bool>,
+        restoration_checks: Cell<usize>,
         environment_changed: Cell<bool>,
         environment_checks: Cell<usize>,
         notice: RefCell<Option<String>>,
@@ -427,16 +470,20 @@ mod tests {
     struct Fake(Rc<NativeState>);
     struct Lease(Rc<NativeState>);
     impl Backend for Fake {
-        type Prepared = ();
+        type Prepared = u64;
         type Session = Lease;
-        fn prepare(&self, _: &Config) -> Receiver<Result<(), String>> {
+        fn prepare(&self, _: &Config) -> Receiver<Result<u64, String>> {
             let (tx, rx) = mpsc::channel();
             self.0.prepared.set(self.0.prepared.get() + 1);
-            self.0.senders.borrow_mut().push_back(tx);
+            self.0
+                .senders
+                .borrow_mut()
+                .push_back((self.0.route_generation.get(), tx));
             rx
         }
-        fn connect(&self, _: (), frame: &Frame) -> Result<Lease, ConnectFailure<Lease>> {
+        fn connect(&self, route: u64, frame: &Frame) -> Result<Lease, ConnectFailure<Lease>> {
             self.0.connects.set(self.0.connects.get() + 1);
+            self.0.connected_routes.borrow_mut().push(route);
             self.0.frames.borrow_mut().push(frame.clone());
             let lease = Lease(self.0.clone());
             if self.0.fail_start.get() {
@@ -480,6 +527,12 @@ mod tests {
                 Ok(())
             }
         }
+        fn restoration_confirmed(&self) -> bool {
+            self.0
+                .restoration_checks
+                .set(self.0.restoration_checks.get() + 1);
+            self.0.restored.get()
+        }
         fn take_activation(&self) -> Option<Activation> {
             None
         }
@@ -496,13 +549,8 @@ mod tests {
         (service, native, config)
     }
     fn complete(native: &NativeState, result: Result<(), String>) {
-        native
-            .senders
-            .borrow_mut()
-            .pop_front()
-            .unwrap()
-            .send(result)
-            .unwrap();
+        let (route, tx) = native.senders.borrow_mut().pop_front().unwrap();
+        tx.send(result.map(|()| route)).unwrap();
     }
     fn connect(service: &Service<Fake>, native: &NativeState) {
         service.tick(0, time(0)).unwrap();
@@ -701,6 +749,107 @@ mod tests {
         assert_eq!(native.prepared.get(), 1);
         service.tick(1010, time(1)).unwrap();
         assert_eq!(native.prepared.get(), 2);
+    }
+    #[test]
+    fn blocked_restore_observes_later_native_close_without_repeating_stop() {
+        let (service, native, _) = fixture();
+        connect(&service, &native);
+        native.route_generation.set(1);
+        native.fail_restore.set(true);
+        service.invalidate();
+        for now in 10..=12 {
+            service.tick(now, time(1)).unwrap();
+        }
+        assert_eq!(service.snapshot().status, Status::RestoreBlocked);
+        assert_eq!(native.stops.get(), 3);
+        // The adapter watchdog eventually finishes restoring its retained
+        // objects, without another host Stop or a manual Retry action.
+        native.restored.set(true);
+        service.tick(5012, time(5)).unwrap();
+        assert_eq!(service.snapshot().status, Status::Waiting);
+        assert_eq!(native.stops.get(), 3, "confirmation must not write Stop");
+        assert_eq!(native.prepared.get(), 1);
+        service.tick(6012, time(6)).unwrap();
+        complete(&native, Ok(()));
+        service.tick(6013, time(6)).unwrap();
+        assert_eq!(service.snapshot().status, Status::Running);
+        assert_eq!(*native.connected_routes.borrow(), [0, 1]);
+    }
+    #[test]
+    fn blocked_restore_checks_are_throttled_and_unknown_keeps_the_lease() {
+        let (service, native, _) = fixture();
+        connect(&service, &native);
+        service.tick(5000, time(5)).unwrap();
+        assert_eq!(native.restoration_checks.get(), 0, "no running-path probe");
+        native.fail_restore.set(true);
+        service.invalidate();
+        for now in 5010..=5012 {
+            service.tick(now, time(5)).unwrap();
+        }
+        for now in [5013, 6000, 10011] {
+            service.tick(now, time(6)).unwrap();
+        }
+        assert_eq!(native.restoration_checks.get(), 0);
+        service.tick(10012, time(10)).unwrap();
+        assert_eq!(native.restoration_checks.get(), 1);
+        for now in [10013, 11000, 15011] {
+            service.tick(now, time(11)).unwrap();
+        }
+        assert_eq!(native.restoration_checks.get(), 1);
+        service.tick(15012, time(15)).unwrap();
+        assert_eq!(native.restoration_checks.get(), 2);
+        assert_eq!(native.stops.get(), 3, "no repeated Stop after the budget");
+        assert_eq!(
+            native.prepared.get(),
+            1,
+            "unconfirmed state must be retained"
+        );
+        assert_eq!(service.snapshot().status, Status::RestoreBlocked);
+    }
+    #[test]
+    fn late_restore_confirmation_does_not_reenable_a_disabled_service() {
+        let (service, native, _) = fixture();
+        connect(&service, &native);
+        native.fail_restore.set(true);
+        assert!(service.stop(10).is_err());
+        service.tick(11, time(1)).unwrap();
+        service.tick(12, time(1)).unwrap();
+        assert_eq!(service.snapshot().status, Status::RestoreBlocked);
+        assert!(!service.snapshot().enabled);
+        native.restored.set(true);
+        service.tick(5012, time(5)).unwrap();
+        service.tick(10000, time(10)).unwrap();
+        assert_eq!(service.snapshot().status, Status::Disabled);
+        assert_eq!(native.prepared.get(), 1);
+        assert_eq!(native.stops.get(), 3);
+        assert_eq!(native.restoration_checks.get(), 1);
+    }
+    #[test]
+    fn repeated_hotplug_restores_before_preparing_each_new_route() {
+        let (service, native, _) = fixture();
+        connect(&service, &native);
+        for route in 1..=4 {
+            let now = route * 10_000;
+            native.route_generation.set(route);
+            native.fail_restore.set(true);
+            service.invalidate();
+            service.tick(now, time(route as i64)).unwrap();
+            assert_eq!(service.snapshot().status, Status::Restoring);
+            assert_eq!(native.prepared.get(), route as usize);
+            native.fail_restore.set(false);
+            service.tick(now + 1, time(route as i64)).unwrap();
+            assert_eq!(service.snapshot().status, Status::Waiting);
+            service.tick(now + 1000, time(route as i64)).unwrap();
+            assert_eq!(native.prepared.get(), route as usize);
+            service.tick(now + 1001, time(route as i64)).unwrap();
+            complete(&native, Ok(()));
+            service.tick(now + 1002, time(route as i64)).unwrap();
+            assert_eq!(service.snapshot().status, Status::Running);
+            assert_eq!(native.connects.get(), route as usize + 1);
+        }
+        assert_eq!(*native.connected_routes.borrow(), [0, 1, 2, 3, 4]);
+        assert_eq!(native.stops.get(), 8);
+        assert_eq!(native.restoration_checks.get(), 0);
     }
     #[test]
     fn settings_update_in_place_but_route_changes_restore_first() {
