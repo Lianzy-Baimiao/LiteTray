@@ -41,6 +41,8 @@ pub(super) unsafe fn create(parent: HWND, bounds: RECT) -> HWND {
     }
 }
 pub(super) unsafe fn finish(hwnd: HWND) {
+    #[cfg(test)]
+    let _timing = navigation_timing::scope(navigation_timing::Phase::PageFinish);
     unsafe {
         if hwnd.is_null() {
             return;

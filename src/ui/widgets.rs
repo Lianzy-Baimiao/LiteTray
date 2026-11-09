@@ -85,6 +85,8 @@ pub(super) unsafe fn draw_list(item: &DRAWITEMSTRUCT, dark: bool) {
 pub(super) fn fonts() -> &'static [String] {
     static FONTS: OnceLock<Vec<String>> = OnceLock::new();
     FONTS.get_or_init(|| unsafe {
+        #[cfg(test)]
+        let _timing = navigation_timing::scope(navigation_timing::Phase::FontEnumeration);
         unsafe extern "system" fn collect(
             font: *const LOGFONTW,
             _: *const TEXTMETRICW,

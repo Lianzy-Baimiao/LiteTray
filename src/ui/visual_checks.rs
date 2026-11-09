@@ -1330,15 +1330,21 @@ fn settings_clock_navigation_stays_responsive() {
         app.render();
         ShowWindow(app.hwnd, SW_SHOWNOACTIVATE);
         UpdateWindow(app.hwnd);
+        let recording = navigation_timing::begin();
         let cold_start = Instant::now();
+        let command_timing = navigation_timing::scope(navigation_timing::Phase::Command);
         app.command(NAV + 7);
+        drop(command_timing);
+        let paint_timing = navigation_timing::scope(navigation_timing::Phase::SynchronousPaint);
         RedrawWindow(
             app.hwnd,
             null(),
             null_mut(),
             RDW_UPDATENOW | RDW_ALLCHILDREN,
         );
+        drop(paint_timing);
         let cold = cold_start.elapsed().as_micros();
+        let cold_phases = recording.finish();
         app.command(NAV + 1);
         let mut samples = vec![];
         for index in 0..16 {
@@ -1362,6 +1368,7 @@ fn settings_clock_navigation_stays_responsive() {
         eprintln!(
             "clock/settings navigation: fonts={fonts}, cold={cold}us, median={median}us, p95={p95}us"
         );
+        cold_phases.print();
         assert!(
             cold < 100_000,
             "first clock page switch blocked UI for {cold}us"

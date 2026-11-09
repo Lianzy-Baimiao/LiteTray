@@ -956,6 +956,8 @@ impl App {
         }
     }
     pub(super) unsafe fn style_settings(&mut self, c: &Config, width: i32) {
+        #[cfg(test)]
+        let _timing = navigation_timing::scope(navigation_timing::Phase::StyleControls);
         unsafe {
             use litetray_adapter_protocol::clock::Alignment;
             let align = |a| match a {

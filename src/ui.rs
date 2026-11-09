@@ -7,6 +7,8 @@ mod design;
 mod forecast;
 mod holiday_data;
 mod icons;
+#[cfg(test)]
+mod navigation_timing;
 mod page;
 mod panel;
 mod quick_agenda;
@@ -613,6 +615,8 @@ impl App {
         w: i32,
         h: i32,
     ) -> HWND {
+        #[cfg(test)]
+        let _timing = navigation_timing::scope(navigation_timing::Phase::ControlCreateAndStyle);
         unsafe {
             let text = if class == "EDIT" { text } else { tr(text) };
             let content = x >= 224 && y >= 80 && id != STATUS && id != SAVE && id != 42;
@@ -776,6 +780,8 @@ impl App {
                 w,
                 220,
             );
+            #[cfg(test)]
+            let _timing = navigation_timing::scope(navigation_timing::Phase::ComboPopulation);
             // Native comboboxes redraw and recalculate for every inserted row,
             // even while their parent page is being prepared offscreen.
             SendMessageW(hwnd, WM_SETREDRAW, 0, 0);
@@ -834,6 +840,8 @@ impl App {
     }
 
     unsafe fn render(&mut self) {
+        #[cfg(test)]
+        let _timing = navigation_timing::scope(navigation_timing::Phase::Render);
         unsafe {
             self.publish_palette();
             if let Some(calendar) = dashboard::selection(self.field(dashboard::ID)) {
@@ -1052,6 +1060,8 @@ impl App {
                 page::finish(self.page_host);
             }
             self.update_views();
+            #[cfg(test)]
+            let show_timing = navigation_timing::scope(navigation_timing::Phase::ShowPage);
             ShowWindow(self.page_host, SW_SHOWNA);
             if !old_page.is_null() {
                 if let Some(key) = old_key.filter(|key| key.page != self.page && !rebuild_shell) {
@@ -1066,6 +1076,8 @@ impl App {
                     DestroyWindow(old_page);
                 }
             }
+            #[cfg(test)]
+            drop(show_timing);
             self.settings_key = next_key;
             RedrawWindow(
                 self.hwnd,
@@ -1080,6 +1092,8 @@ impl App {
     }
 
     fn collect_page(&mut self) -> Result<(), String> {
+        #[cfg(test)]
+        let _timing = navigation_timing::scope(navigation_timing::Phase::CollectPage);
         let mut c = self.draft.clone();
         match self.page {
             1 => {
@@ -1345,6 +1359,8 @@ impl App {
         }
     }
     unsafe fn update_views(&mut self) {
+        #[cfg(test)]
+        let _timing = navigation_timing::scope(navigation_timing::Phase::UpdateViews);
         unsafe {
             agenda::tick(self.field(agenda::ID));
             self.update_clock_samples();
