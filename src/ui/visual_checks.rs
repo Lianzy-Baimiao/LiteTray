@@ -1663,7 +1663,7 @@ fn compatibility_check_worker_and_export_preserve_the_real_disk_snapshot() {
                 !app.compatibility.busy,
                 "returning to the page must retain the completed scan"
             );
-            assert!(window_text(app.field(955)).contains("检测完成"));
+            assert!(window_text(app.field(955)).contains("检查完成"));
             app.command(compatibility::EXPORT);
             assert!(app.compatibility.export_busy);
             assert_eq!(IsWindowEnabled(app.field(compatibility::EXPORT)), 0);
