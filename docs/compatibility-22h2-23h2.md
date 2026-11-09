@@ -105,7 +105,7 @@ lab 构建的 workspace 测试为 257 项通过、9 项按现有条件忽略；�
 
 ### 22H2 同一默认包的后续复测
 
-只读诊断 `sandbox-20261109-100530-32e94bec` 确认，同一用户的 `%LOCALAPPDATA%\LiteTray` 目录及两个 adapter 日志文件均不存在；该诊断没有调用产品或创建目录。后续在已核验的 Medium/SID 与冻结包条件下，仅创建该日志目录，让程序已有的事件记录可落盘，并将 live 子进程启动限制在客体秒数 10–20 的窗口。窗口等待有独立 90 秒上限，真实检查仍使用原 120 秒期限，六项命令和全部成功/恢复断言保持不变，没有改系统时间、电源策略或重启 Explorer。
+只读诊断 `sandbox-20261109-100530-32e94bec` 确认，同一用户的 `%LOCALAPPDATA%\LiteTray` 目录及两个 adapter 日志文件均不存在；该诊断没有调用产品或创建目录。后续在已核验的 Medium/SID 与冻结包条件下，仅创建该日志目录，让程序已有的事件记录可落盘，并等待客体秒数 10–20 放行，在启动 live 子进程前再复核秒数 10–25；本轮实际于第 10 秒启动。窗口等待有独立 90 秒上限，真实检查仍使用原 120 秒期限，六项命令和全部成功/恢复断言保持不变，没有改系统时间、电源策略或重启 Explorer。
 
 首版定时诊断介质未执行：预审发现启动后记录观测若抛错会跳过子进程回收，以及秒窗口判断顺序可能越过等待上限；修订后先核期限，观测失败也先完成原等待/清理再记录失败。新 run 为 **`sandbox-20261109-101339-e11231b3`**，未运行旧介质保留。全部 78 项包文件及三个程序仍与 09:47:36 的默认冻结包逐字节一致。
 
@@ -133,3 +133,4 @@ lab 构建的 workspace 测试为 257 项通过、9 项按现有条件忽略；�
 - `vm-22h2/independent-default-review.json`、`vm-22h2/independent-default-failure-analysis.json`：22H2 默认首轮失败。
 - `vm-23h2/independent-default-review.json`、`independent-default-archive-review.json`：23H2 默认通过及两份归档一致性核对。
 - `vm-22h2/independent-default-timed-review.json`、`vm-22h2/independent-default-timed-archive-review.json`：22H2 同一默认包后续通过及新归档核对。
+- `vm-22h2/independent-default-timed-observation-review.json`：实际启动时间、日志目录与事件时间链补充核验，SHA-256 为 `8abce097036e933be9a98fce4040b13c6bdb4bf755913da2301c372d5c9e8df7`。
