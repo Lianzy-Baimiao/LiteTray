@@ -17,18 +17,40 @@ import uuid
 
 import pefile
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
+from capstone.x86_const import X86_OP_IMM
 
 MAX_IMAGE = 128 * 1024 * 1024
 MAX_PDB = 512 * 1024 * 1024
 MASKS = {
-    "taskbar": ("*TaskbarHost*", "*TaskBand*", "*Decref*", "*XamlExplorerHostChildWindow*"),
+    "taskbar": ("*TaskbarHost*", "*TaskBand*", "*Decref*", "*XamlExplorerHostChildWindow*",
+                "?Width@?$consume_Windows_UI_Xaml_IFrameworkElement@UIFrameworkElement@Xaml@UI@Windows@winrt@@@impl@winrt@@QEBA@XZ",
+                "?Height@?$consume_Windows_UI_Xaml_IFrameworkElement@UIFrameworkElement@Xaml@UI@Windows@winrt@@@impl@winrt@@QEBA@XZ"),
     "shell": ("*XamlExplorerHost*", "*IDesktopWindowXamlSource*", "_guard_dispatch_icall"),
     "tray": ("*GetInvocationPointRelativeToScreen*", "*GetIconBoundsRelativeToScreen*",
              "*GetScreenRectFromXamlElement*", "*SystemTrayFrame*", "*NotificationAreaIconsDataModel*",
              "??1IUnknown@Foundation@Windows@winrt@@QEAA@XZ",
              "?unconditional_release_ref@IUnknown@Foundation@Windows@winrt@@AEAAXXZ",
-             "__guard_dispatch_icall_fptr", "*TransformToVisual*"),
+             "__guard_dispatch_icall_fptr", "*TransformToVisual*",
+             "*ScreenRectForElement*",
+             "?HitTestChevron@DragDropManager@implementation@SystemTray@winrt@@AEAA_NUtagPOINT@@@Z",
+             "?HitTestNotifyIcons@DragDropManager@implementation@SystemTray@winrt@@AEAAPEAUNotifyIconView@234@UtagPOINT@@@Z",
+             "?GetRelativeDropPosition@DragDropManager@implementation@SystemTray@winrt@@AEAA?AW4MoveTargetRelativePosition@@AEBUNotifyIconView@234@UtagPOINT@@@Z",
+             "?XamlRoot@?$consume_Windows_UI_Xaml_IUIElement10@UFrameworkElement@Xaml@UI@Windows@winrt@@@impl@winrt@@QEBA@XZ",
+             "?Content@?$consume_Windows_UI_Xaml_IXamlRoot@UIXamlRoot@Xaml@UI@Windows@winrt@@@impl@winrt@@QEBA@XZ",
+             "?ActualWidth@?$consume_Windows_UI_Xaml_IFrameworkElement@UIFrameworkElement@Xaml@UI@Windows@winrt@@@impl@winrt@@QEBA@XZ",
+             "?ActualHeight@?$consume_Windows_UI_Xaml_IFrameworkElement@UIFrameworkElement@Xaml@UI@Windows@winrt@@@impl@winrt@@QEBA@XZ",
+             "?RawPixelsPerViewPixel@?$consume_Windows_Graphics_Display_IDisplayInformation2@UDisplayInformation@Display@Graphics@Windows@winrt@@@impl@winrt@@QEBA@XZ",
+             "??$call_factory_cast@P6A?AUDisplayInformation@Display@Graphics@Windows@winrt@@AEBUIDisplayInformationStatics@2345@@ZU12345@U62345@V<lambda_0a1437f4f9e4e85de4e92d9eedff3a11>@@@impl@winrt@@YA?A_P$$QEAV<lambda_0a1437f4f9e4e85de4e92d9eedff3a11>@@@Z",
+             "?throw_hresult@winrt@@YAXUhresult@1@@Z", "__security_cookie", "__security_check_cookie"),
 }
+MASKS["tray"] += (
+    "?GetForCurrentView@DisplayInformation@Display@Graphics@Windows@winrt@@SA@XZ",
+    "?TransformBounds@?$consume_Windows_UI_Xaml_Media_IGeneralTransform@UIGeneralTransform@Media@Xaml@UI@Windows@winrt@@@impl@winrt@@QEBA@AEBURect@Foundation@Windows@3@@Z",
+    "??$as@UFrameworkElement@Xaml@UI@Windows@winrt@@@?$com_ptr@UChevronIconView@implementation@SystemTray@winrt@@@winrt@@QEBA?A_PXZ",
+    "??$as@UFrameworkElement@Xaml@UI@Windows@winrt@@@?$com_ptr@UNotifyIconView@implementation@SystemTray@winrt@@@winrt@@QEBA?A_PXZ",
+    "?QueryInterface@?$root_implements@UIconView@implementation@SystemTray@winrt@@U134@UINotifyPropertyChanged@Data@Xaml@UI@Windows@4@Ucomposable@4@Ucomposing@4@UIControlOverrides@Controls@7894@UIControlOverrides6@Controls@7894@UIFrameworkElementOverrides@7894@UIFrameworkElementOverrides2@7894@UIUIElementOverrides@7894@UIUIElementOverrides7@7894@UIUIElementOverrides8@7894@UIUIElementOverrides9@7894@@impl@winrt@@QEAAHAEBUguid@3@PEAPEAX@Z",
+    "?query_interface@?$root_implements@UIconView@implementation@SystemTray@winrt@@U134@UINotifyPropertyChanged@Data@Xaml@UI@Windows@4@Ucomposable@4@Ucomposing@4@UIControlOverrides@Controls@7894@UIControlOverrides6@Controls@7894@UIFrameworkElementOverrides@7894@UIFrameworkElementOverrides2@7894@UIUIElementOverrides@7894@UIUIElementOverrides7@7894@UIUIElementOverrides8@7894@UIUIElementOverrides9@7894@@impl@winrt@@AEAAHAEBUguid@3@PEAPEAX@Z",
+)
 
 
 class EvidenceError(Exception):
@@ -124,6 +146,57 @@ class Image:
         matches = {symbol["rva"] for symbol in self.symbols if symbol["decorated_name"] == decorated}
         require(len(matches) == 1, f"Missing/ambiguous symbol ({len(matches)} RVAs): {decorated}")
         return matches.pop()
+
+    def import_slot(self, dll: str, name: str):
+        """Resolve a named PE import, including delay imports, without loading it."""
+        slots = {item.address - self.pe.OPTIONAL_HEADER.ImageBase
+                 for table in ("DIRECTORY_ENTRY_IMPORT", "DIRECTORY_ENTRY_DELAY_IMPORT")
+                 for entry in getattr(self.pe, table, [])
+                 if entry.dll.decode("ascii").casefold() == dll.casefold()
+                 for item in entry.imports if item.name and item.name.decode("ascii") == name}
+        require(len(slots) == 1, f"Missing/ambiguous exact import: {dll}!{name}")
+        slot = slots.pop()
+        require(0x1000 <= slot <= self.identity["image_size"] - 8 and slot % 8 == 0,
+                "Import slot outside image or unaligned")
+        return slot
+
+    def direct_callers(self, target: int):
+        """Only accept E8 hits at decoded starts in unique bounded functions."""
+        hits = []
+        for section in self.pe.sections:
+            if not section.Characteristics & 0x20000000 or section.Characteristics & 0x80000000:
+                continue
+            data = self.bytes(section.VirtualAddress, min(section.Misc_VirtualSize, section.SizeOfRawData))
+            cursor = 0
+            while (offset := data.find(b"\xe8", cursor)) >= 0:
+                cursor = offset + 1
+                if offset + 5 > len(data):
+                    continue
+                rva = section.VirtualAddress + offset
+                if rva + 5 + struct.unpack_from("<i", data, offset + 1)[0] == target:
+                    hits.append(rva)
+                    require(len(hits) <= 1024, "Direct-call candidate limit exceeded")
+        accepted, rejected, decoded = [], [], {}
+        bounds = [entry.struct for entry in getattr(self.pe, "DIRECTORY_ENTRY_EXCEPTION", [])]
+        for site in hits:
+            matches = [bound for bound in bounds if bound.BeginAddress <= site < bound.EndAddress]
+            if len(matches) != 1:
+                rejected.append({"call_rva": site, "reason": "no unique .pdata boundary"})
+                continue
+            start = matches[0].BeginAddress
+            try:
+                if start not in decoded:
+                    require(len(decoded) < 256, "Direct-call function limit exceeded")
+                    decoded[start] = self.function(start)
+                code = decoded[start]
+                indices = [i for i, ins in enumerate(code) if ins.address == site and
+                           ins.mnemonic == "call" and len(ins.operands) == 1 and
+                           ins.operands[0].type == X86_OP_IMM and ins.operands[0].imm == target]
+                require(len(indices) == 1, "not an aligned decoded direct call")
+                accepted.append({"call_rva": site, "function_rva": start, "index": indices[0], "code": code})
+            except EvidenceError as error:
+                rejected.append({"call_rva": site, "reason": str(error)})
+        return accepted, rejected
 
     def function(self, rva: int):
         matches = [entry.struct for entry in getattr(self.pe, "DIRECTORY_ENTRY_EXCEPTION", [])

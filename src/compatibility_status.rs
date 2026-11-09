@@ -132,6 +132,8 @@ enum RecordedProfile {
     VirtualMachine8457,
     VirtualMachine8037,
     VirtualMachineLtsc1742,
+    VirtualMachine22H21702,
+    VirtualMachine23H22861,
 }
 
 fn recorded_profile(profile: &Profile) -> Option<RecordedProfile> {
@@ -179,6 +181,22 @@ fn recorded_profile(profile: &Profile) -> Option<RecordedProfile> {
                 "734e19a7e749f4112acc1e072ab35a11fdd3ffc04d8fcf54f603593758702d5b",
             ],
         ) => Some(RecordedProfile::VirtualMachineLtsc1742),
+        (
+            "windows11-22621.1702-x64",
+            [
+                "d39046dd6d75f693e770cfb14c50aebce7bfbe704d362735c42e0ab499b19472",
+                "14a91ac45b016694988f68f17eef84fab2d46196d11c1ee5bde95763ae008a03",
+                "1e5fe48b6418b4587544c4dbcbb526c8d0a1a9a2fbd81d2917b8c69e6b81d4be",
+            ],
+        ) => Some(RecordedProfile::VirtualMachine22H21702),
+        (
+            "windows11-22631.2861-x64",
+            [
+                "11f795ade465af0658e2168add113e48f439e412dc869fc0d5c5758fd3c339ef",
+                "2def9450cf84247eb31a802de9c72fbec58a2b1a7318ec200cb68ee8816393df",
+                "40b885be70c8ea0212bd2f995607753f86be8464588e2fb695be4d27ee364014",
+            ],
+        ) => Some(RecordedProfile::VirtualMachine23H22861),
         _ => None,
     }
 }
@@ -375,6 +393,54 @@ fn evidence(profile: &Profile) -> Vec<ValidationEvidence> {
                         evidence.recorded_on = Some("2026-11-09");
                     }
                 }
+                Some(
+                    RecordedProfile::VirtualMachine22H21702
+                    | RecordedProfile::VirtualMachine23H22861,
+                ) => {
+                    evidence.reference = Some("docs/compatibility-22h2-23h2.md");
+                    let is_22h2 = matches!(record, Some(RecordedProfile::VirtualMachine22H21702));
+                    evidence.detail = match scenario {
+                        ValidationScenario::ModuleLayout => {
+                            if is_22h2 {
+                                "22H2 1702 三模块/PDB、字段、虚表及 ABI 已核验；冻结测试包在独立客体中磁盘与加载身份匹配，XAML 164 项和私有宿主 6 项通过。"
+                            } else {
+                                "23H2 2861 三模块/PDB、字段、虚表及 ABI 已核验；冻结测试包在独立客体中磁盘与加载身份匹配，XAML 164 项和私有宿主 6 项通过。"
+                            }
+                        }
+                        ValidationScenario::ClockUpdateRestore => {
+                            evidence.scope = if is_22h2 {
+                                "独立 Windows 11 Pro 22H2 22621.1702 单屏虚拟机，冻结测试包、普通权限测试进程"
+                            } else {
+                                "独立 Windows 11 Pro 23H2 22631.2861 单屏虚拟机，冻结测试包、普通权限测试进程"
+                            };
+                            "三次真实文字读回及宽度 240→320→320 DIP 通过；时钟停止和最终清理后的时间、日期、容器原始对象逐字段恢复（含 NUL 和方向标记），原宽度 56 DIP 恢复，Explorer 身份不变。未独立验收屏幕绘制、原生刷新、字体、颜色或绑定。"
+                        }
+                        ValidationScenario::TrayPrepareStop => {
+                            "Taskbar.View.dll 的三个坐标入口与 5 类必需托盘区域准备、停止通过；未激活托盘会话或模型复制。"
+                        }
+                        ValidationScenario::TrayMirroring => {
+                            "本轮虚拟机只有主屏，未激活副屏托盘模型复制；准备通过不代表复制及交互验收。"
+                        }
+                        ValidationScenario::PointerInteractions => {
+                            "本轮验收未注入鼠标或键盘；日历点击、滚轮、中键、真实悬停和菜单定位待验收。"
+                        }
+                        ValidationScenario::MultiMonitor => {
+                            "本轮独立虚拟机只有一块显示器，主副屏完整矩阵未执行。"
+                        }
+                        ValidationScenario::MixedDpi => {
+                            "本轮未执行混合 DPI、显示器热插拔和休眠恢复矩阵。"
+                        }
+                    };
+                    if matches!(
+                        scenario,
+                        ValidationScenario::ModuleLayout
+                            | ValidationScenario::ClockUpdateRestore
+                            | ValidationScenario::TrayPrepareStop
+                    ) {
+                        evidence.status = ValidationStatus::Tested;
+                        evidence.recorded_on = Some("2026-11-09");
+                    }
+                }
                 None => {}
             }
             evidence
@@ -420,7 +486,9 @@ mod tests {
             assert!(
                 evidence(&profile)
                     .iter()
-                    .all(|item| item.status == ValidationStatus::NotRun)
+                    .all(|item| item.status == ValidationStatus::NotRun
+                        && item.recorded_on.is_none()
+                        && item.reference.is_none())
             );
             for module_index in 0..3 {
                 let mut profile = original.clone();
@@ -433,7 +501,9 @@ mod tests {
                 assert!(
                     evidence(&profile)
                         .iter()
-                        .all(|item| item.status == ValidationStatus::NotRun)
+                        .all(|item| item.status == ValidationStatus::NotRun
+                            && item.recorded_on.is_none()
+                            && item.reference.is_none())
                 );
             }
             for other in profiles()
@@ -446,8 +516,32 @@ mod tests {
                 assert!(
                     evidence(&profile)
                         .iter()
-                        .all(|item| item.status == ValidationStatus::NotRun)
+                        .all(|item| item.status == ValidationStatus::NotRun
+                            && item.recorded_on.is_none()
+                            && item.reference.is_none())
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn mixing_recorded_22h2_and_23h2_modules_does_not_inherit_acceptance() {
+        let profiles = profiles().unwrap();
+        let recorded = ["windows11-22621.1702-x64", "windows11-22631.2861-x64"]
+            .map(|id| profiles.iter().find(|profile| profile.id == id).unwrap());
+        for (original, replacement) in [(recorded[0], recorded[1]), (recorded[1], recorded[0])] {
+            for module_index in 0..3 {
+                let mut mixed = original.clone();
+                match module_index {
+                    0 => mixed.taskbar = replacement.taskbar.clone(),
+                    1 => mixed.shell = replacement.shell.clone(),
+                    _ => mixed.tray = replacement.tray.clone(),
+                }
+                assert!(evidence(&mixed).iter().all(|item| {
+                    item.status == ValidationStatus::NotRun
+                        && item.recorded_on.is_none()
+                        && item.reference.is_none()
+                }));
             }
         }
     }

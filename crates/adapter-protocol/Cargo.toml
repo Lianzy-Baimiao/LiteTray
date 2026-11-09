@@ -9,7 +9,7 @@ publish = false
 [features]
 default = []
 # Reserved for candidates awaiting isolated VM validation; currently adds none.
-# All five reviewed profiles are included in the default registry.
+# All seven reviewed profiles are included in the default registry.
 compatibility-lab = []
 
 [dependencies]

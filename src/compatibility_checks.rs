@@ -289,6 +289,8 @@ fn support_catalog_keeps_recorded_scope_separate_from_built_in_support() {
                     | "windows11-26200.8457-x64"
                     | "windows11-26200.8037-x64"
                     | "windows11-26100.1742-x64"
+                    | "windows11-22621.1702-x64"
+                    | "windows11-22631.2861-x64"
             ) && matches!(
                 evidence.scenario,
                 ValidationScenario::ModuleLayout
@@ -346,6 +348,51 @@ fn support_catalog_keeps_recorded_scope_separate_from_built_in_support() {
             item["scenario"] == "pointer_interactions" && item["status"] == "not_run"
         })
     );
+}
+
+#[test]
+fn older_windows11_records_keep_their_exact_single_monitor_lab_scope() {
+    let catalog = support_catalog().unwrap();
+    for (id, system) in [
+        ("windows11-22621.1702-x64", "22H2 22621.1702"),
+        ("windows11-22631.2861-x64", "23H2 22631.2861"),
+    ] {
+        let profile = catalog.iter().find(|entry| entry.profile_id == id).unwrap();
+        let tested: Vec<_> = profile
+            .evidence
+            .iter()
+            .filter(|item| item.status == ValidationStatus::Tested)
+            .map(|item| item.scenario)
+            .collect();
+        assert_eq!(
+            tested,
+            [
+                ValidationScenario::ModuleLayout,
+                ValidationScenario::ClockUpdateRestore,
+                ValidationScenario::TrayPrepareStop,
+            ]
+        );
+        for item in &profile.evidence {
+            assert_eq!(item.reference, Some("docs/compatibility-22h2-23h2.md"));
+            assert_eq!(
+                item.recorded_on,
+                (item.status == ValidationStatus::Tested).then_some("2026-11-09")
+            );
+        }
+        let clock = profile
+            .evidence
+            .iter()
+            .find(|item| item.scenario == ValidationScenario::ClockUpdateRestore)
+            .unwrap();
+        assert!(clock.scope.contains(system));
+        assert!(
+            clock
+                .scope
+                .contains("单屏虚拟机，冻结测试包、普通权限测试进程")
+        );
+        assert!(clock.detail.contains("240→320→320 DIP"));
+        assert!(clock.detail.contains("原宽度 56 DIP"));
+    }
 }
 
 #[test]

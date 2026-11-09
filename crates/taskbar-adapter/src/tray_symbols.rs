@@ -3,7 +3,10 @@
 use litetray_adapter_protocol::compatibility::{Profile, TrayAbi};
 pub(crate) fn resolve(profile: &Profile) -> Result<[usize; 3], String> {
     unsafe {
-        let TrayAbi::SystemTrayCoordinatesX64V1 = profile.tray_abi;
+        match profile.tray_abi {
+            TrayAbi::SystemTrayCoordinatesX64V1
+            | TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1 => {}
+        }
         let module = crate::compatibility::loaded(&profile.tray)?;
         let mut addresses = [0; 3];
         for (index, entry) in profile.tray_entries.iter().enumerate() {

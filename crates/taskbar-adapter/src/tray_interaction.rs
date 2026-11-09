@@ -9,7 +9,7 @@ use crate::{
     xaml::{self, Object, check, factory},
     xaml_abi::*,
 };
-use litetray_adapter_protocol::topology::Role;
+use litetray_adapter_protocol::{compatibility::TrayAbi, topology::Role};
 use std::{
     cell::{Cell, RefCell},
     ffi::c_void,
@@ -580,6 +580,34 @@ unsafe extern "system" fn screen_rect(
         let original: unsafe extern "system" fn(*mut RECT, *const *mut c_void, HWND) -> *mut RECT =
             std::mem::transmute(RECT_ORIGINAL.load(Ordering::Acquire));
         let returned = original(result, element, hwnd);
+        finish_screen_rect(returned, retained)
+    }
+}
+// DragDropManager::ScreenRectForElement uses a hidden second result pointer
+// and borrows the FrameworkElement wrapper. Some native callers leave `this`
+// unspecified, so it must be forwarded without validation or dereferencing.
+unsafe extern "system" fn screen_rect_borrowed(
+    opaque_this: *mut c_void,
+    result: *mut RECT,
+    element: *const *mut c_void,
+    hwnd: HWND,
+) -> *mut RECT {
+    unsafe {
+        let retained = element
+            .as_ref()
+            .and_then(|raw| Object::query_borrowed(*raw, &IID_IFrameworkElement).ok());
+        let original: unsafe extern "system" fn(
+            *mut c_void,
+            *mut RECT,
+            *const *mut c_void,
+            HWND,
+        ) -> *mut RECT = std::mem::transmute(RECT_ORIGINAL.load(Ordering::Acquire));
+        let returned = original(opaque_this, result, element, hwnd);
+        finish_screen_rect(returned, retained)
+    }
+}
+unsafe fn finish_screen_rect(returned: *mut RECT, retained: Option<Object>) -> *mut RECT {
+    unsafe {
         let native = returned
             .as_ref()
             .map(|r| (r.left, r.top, r.right, r.bottom));
@@ -593,6 +621,20 @@ unsafe extern "system" fn screen_rect(
             serde_json::json!({"native":native, "returned":returned.as_ref().map(|r| (r.left, r.top, r.right, r.bottom))}),
         );
         returned
+    }
+}
+fn screen_rect_entry(abi: TrayAbi, target: usize) -> Entry {
+    let (detour, arguments) = match abi {
+        TrayAbi::SystemTrayCoordinatesX64V1 => (screen_rect as *const () as usize, 3),
+        TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1 => {
+            (screen_rect_borrowed as *const () as usize, 4)
+        }
+    };
+    Entry {
+        target,
+        detour,
+        original: &RECT_ORIGINAL,
+        arguments,
     }
 }
 fn shared_target(element: &Object) -> Result<bool, String> {
@@ -752,7 +794,7 @@ pub(crate) fn install(
             Entry { target: dispatch_address, detour: dispatch as *const () as usize, original: &DISPATCH_ORIGINAL, arguments: 1 },
             Entry { target: addresses[0], detour: invocation as *const () as usize, original: &POINT_ORIGINAL, arguments: 3 },
             Entry { target: addresses[1], detour: icon_bounds as *const () as usize, original: &BOUNDS_ORIGINAL, arguments: 3 },
-            Entry { target: addresses[2], detour: screen_rect as *const () as usize, original: &RECT_ORIGINAL, arguments: 3 },
+            screen_rect_entry(profile.tray_abi, addresses[2]),
             Entry { target: GetProcAddress(user32, c"SetWindowPos".as_ptr().cast()).ok_or("SetWindowPos 不可用")? as usize, detour: position as *const () as usize, original: &POSITION_ORIGINAL, arguments: 7 },
         ];
         for (markup, regular, options, old, old_options) in [
@@ -773,6 +815,9 @@ pub(crate) fn install(
     }
     Ok(())
 }
+#[cfg(test)]
+#[path = "tray_interaction_checks.rs"]
+mod checks;
 #[cfg(test)]
 mod tests {
     use super::*;

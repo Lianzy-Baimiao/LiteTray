@@ -477,7 +477,7 @@ impl App {
                 total,
                 134,
             );
-            self.caption("Windows 11 的多个版本可能共用任务栏结构。支持范围按精确模块判断，不按 23H2、24H2 或 25H2 标签放行。", 224, 1180, total, 64);
+            self.caption("Windows 11 的多个版本可能共用任务栏结构。支持范围按精确模块判断，不按 22H2、23H2、24H2 或 25H2 标签放行。", 224, 1180, total, 64);
             let export = self.control(
                 "EDIT",
                 "",
@@ -708,10 +708,13 @@ mod tests {
                         | "windows11-26200.8457-x64"
                         | "windows11-26200.8037-x64"
                         | "windows11-26100.1742-x64"
+                        | "windows11-22621.1702-x64"
+                        | "windows11-22631.2861-x64"
                 )
             })
             .map(|profile| profile.profile_id.clone())
             .collect();
+        assert_eq!(tested_ids.len(), 6);
         for id in tested_ids {
             value.report.profile_id = Some(id);
             value.report.all_profile_images_matched = false;
@@ -724,6 +727,17 @@ mod tests {
             assert!(evidence.contains("Recorded test (limited scope)"));
             assert_eq!(evidence.matches("Recorded test (limited scope)").count(), 3);
             assert_eq!(evidence.matches("Not validated").count(), 4);
+        }
+        for (id, system) in [
+            ("windows11-22621.1702-x64", "22H2 22621.1702"),
+            ("windows11-22631.2861-x64", "23H2 22631.2861"),
+        ] {
+            value.report.profile_id = Some(id.into());
+            let details = details_text(&value);
+            assert!(details.contains(system));
+            assert!(details.contains("frozen test package"));
+            assert!(details.contains("56 DIP"));
+            assert!(details.contains("Tray sessions and model replication were not activated."));
         }
         i18n::set_language(Language::ZhCn);
     }

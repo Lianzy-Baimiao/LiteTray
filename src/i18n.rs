@@ -84,7 +84,7 @@ mod tests {
         assert_eq!(tr("保存设置"), "Save settings");
         assert_eq!(tr("时钟显示"), "Clock content");
         assert_eq!(tr("兼容性"), "Compatibility");
-        assert_eq!(tr("检测兼容性"), "Check compatibility");
+        assert_eq!(tr("检测兼容性"), "Run check");
         assert_eq!(
             tr("模块匹配 · 运行时仍需验证"),
             "Modules match · runtime checks still required"

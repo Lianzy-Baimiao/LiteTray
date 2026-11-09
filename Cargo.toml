@@ -16,7 +16,7 @@ resolver = "3"
 [features]
 default = []
 # Reserved for static candidates pending validation in disposable VMs.
-# The five independently reviewed profiles are in the default registry.
+# The seven independently reviewed profiles are in the default registry.
 # Release packages always use the default feature set.
 compatibility-lab = ["litetray-adapter-protocol/compatibility-lab"]
 

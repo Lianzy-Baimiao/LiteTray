@@ -16,6 +16,8 @@ Prepare 新增可缺省的 `source`、`clocks` 和 `mirror_icons`。来源只能
 
 ### 托盘输入及菜单边界
 
+5.14.2 为实际 22H2 `22621.1702` 和 23H2 `22631.2861` 模块增加独立的四参数 `DragDropManager::ScreenRectForElement` 方案：RCX 是不透明成员参数，RDX 是隐藏 RECT 返回指针，R8 是借用的 FrameworkElement 包装指针，R9 是 HWND。适配器按精确资料的 `tray_abi` 选择函数签名和跳板参数数量，原样转发四个参数及原函数返回指针。它只保留并释放自己的 QueryInterface 引用，不消费调用者的借用包装。原三参数按值接口继续使用原方案。两套签名的引用计数与失败路径由直接调用真实 detour 的隔离测试覆盖；精确符号、调用点和运行验收见 [22H2 / 23H2 记录](../../docs/compatibility-22h2-23h2.md)。下面的单一哈希说明保留最早 9711 调研背景，当前选择与入口检查统一使用内置兼容资料。
+
 SystemTray.dll 仅接受 SHA256 `c5f5260a2a56c4d7b0ee25978aa06c387b5ddffc57c5fe412be429d1289913ce`，PDB `2007F3890B9D4D16AF78BAFE771227281`；同时验证内存身份和每个入口的 16 字节前缀。Microsoft PDB 得到 GetInvocationPointRelativeToScreen RVA772912、GetIconBoundsRelativeToScreen RVA772612、GetScreenRectFromXamlElement RVA773136。离线反汇编另核对隐藏返回指针和参数寄存器；不把 C++ 按值 FrameworkElement 临时对象当借用参数释放两次。
 
 DispatchMessageW 作用域保存真实任务栏根，涵盖鼠标、pointer、键盘、WM_TIMER 延迟悬停及鼠标离开；嵌套消息恢复外层上下文。坐标使用 verified source HWND 的 client origin 和 XamlRoot scale。Shell_NotifyIconGetRect 通过 runtime class + DataContext IUnknown 身份寻找对应屏幕的图标。隐藏图标 popup 的 SetWindowPos 仅对明确点击入口后的已知窗口类调整位置，限制在目标屏工作区。

@@ -10,6 +10,8 @@ const PROFILE_BYTES: &[&[u8]] = &[
     include_bytes!("../profiles/windows11-26200.8457-x64.json"),
     include_bytes!("../profiles/windows11-26200.8037-x64.json"),
     include_bytes!("../profiles/windows11-26100.1742-x64.json"),
+    include_bytes!("../profiles/windows11-22631.2861-x64.json"),
+    include_bytes!("../profiles/windows11-22621.1702-x64.json"),
 ];
 const MAX_PROFILE: usize = 64 * 1024;
 
@@ -71,10 +73,14 @@ pub enum SourceRecipe {
 pub enum Topology {
     SystemTrayFrameV1,
 }
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrayAbi {
+    /// Free function consuming a by-value FrameworkElement wrapper.
     SystemTrayCoordinatesX64V1,
+    /// DragDropManager member retaining the caller's borrowed wrapper.
+    /// Its opaque first register precedes the hidden RECT result pointer.
+    SystemTrayDragDropBorrowedCoordinatesX64V1,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,7 +232,7 @@ fn decode_profiles(sources: &[&[u8]]) -> Result<Vec<Profile>, String> {
 /// Validated, embedded evidence only. Registry order is not a compatibility
 /// preference: callers must select an exact module identity, never a default.
 /// `compatibility-lab` is reserved for candidates pending isolated validation;
-/// it currently adds none. Default builds include five reviewed profiles.
+/// it currently adds none. Default builds include seven reviewed profiles.
 pub fn profiles() -> Result<&'static [Profile], String> {
     static PROFILES: OnceLock<Result<Vec<Profile>, String>> = OnceLock::new();
     PROFILES
@@ -295,6 +301,8 @@ mod tests {
             "windows11-26200.8457-x64",
             "windows11-26200.8037-x64",
             "windows11-26100.1742-x64",
+            "windows11-22631.2861-x64",
+            "windows11-22621.1702-x64",
         ];
         assert_eq!(profiles.len(), expected_ids.len());
         for id in expected_ids {
@@ -322,6 +330,14 @@ mod tests {
                 "windows11-26100.1742-x64",
                 &include_bytes!("../profiles/windows11-26100.1742-x64.json")[..],
             ),
+            (
+                "windows11-22631.2861-x64",
+                &include_bytes!("../profiles/windows11-22631.2861-x64.json")[..],
+            ),
+            (
+                "windows11-22621.1702-x64",
+                &include_bytes!("../profiles/windows11-22621.1702-x64.json")[..],
+            ),
         ]
         .map(|(id, bytes)| {
             let profile = Profile::decode(bytes).unwrap();
@@ -342,6 +358,8 @@ mod tests {
                 "windows11-26200.8457-x64",
                 "windows11-26200.8037-x64",
                 "windows11-26100.1742-x64",
+                "windows11-22631.2861-x64",
+                "windows11-22621.1702-x64",
             ]
         );
         for candidate in &candidates {
@@ -491,6 +509,40 @@ mod tests {
         }
         assert!(Profile::decode(b"{}").is_err());
         assert!(Profile::decode(&vec![b' '; MAX_PROFILE + 1]).is_err());
+    }
+    #[test]
+    fn tray_abi_contract_preserves_borrowed_member_identity() {
+        let mut profile = profiles().unwrap()[0].clone();
+        for (abi, name) in [
+            (
+                TrayAbi::SystemTrayCoordinatesX64V1,
+                "system_tray_coordinates_x64_v1",
+            ),
+            (
+                TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1,
+                "system_tray_drag_drop_borrowed_coordinates_x64_v1",
+            ),
+        ] {
+            profile.tray_abi = abi;
+            let mut encoded = serde_json::to_value(&profile).unwrap();
+            assert_eq!(encoded["tray_abi"], name);
+            assert_eq!(
+                Profile::decode(&serde_json::to_vec(&encoded).unwrap())
+                    .unwrap()
+                    .tray_abi,
+                abi
+            );
+            // The new calling convention still requires all three reviewed
+            // roles; it cannot turn missing screen-rectangle evidence into a
+            // valid profile or infer an ABI from the function's address.
+            encoded["tray_entries"].as_array_mut().unwrap().pop();
+            assert!(Profile::decode(&serde_json::to_vec(&encoded).unwrap()).is_err());
+        }
+        for unknown in ["system_tray_drag_drop_borrowed_coordinates_x64_v2", "auto"] {
+            let mut encoded = serde_json::to_value(&profile).unwrap();
+            encoded["tray_abi"] = serde_json::json!(unknown);
+            assert!(Profile::decode(&serde_json::to_vec(&encoded).unwrap()).is_err());
+        }
     }
     #[test]
     fn disk_and_loaded_identities_are_independent_requirements() {

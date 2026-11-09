@@ -1,0 +1,324 @@
+{
+  "schema": 1,
+  "id": "windows11-22621.1702-x64",
+  "system_label": "Windows 11 Pro 22H2 22621.1702 x64",
+  "taskbar": {
+    "name": "taskbar.dll",
+    "relative_path": "System32/taskbar.dll",
+    "sha256": "d39046dd6d75f693e770cfb14c50aebce7bfbe704d362735c42e0ab499b19472",
+    "identity": {
+      "machine": 34404,
+      "timestamp": 1140661884,
+      "image_size": 3575808,
+      "pdb_guid": [
+        192,
+        47,
+        242,
+        225,
+        14,
+        166,
+        45,
+        191,
+        27,
+        228,
+        129,
+        84,
+        228,
+        114,
+        39,
+        102
+      ],
+      "pdb_age": 1
+    }
+  },
+  "shell": {
+    "name": "twinui.pcshell.dll",
+    "relative_path": "System32/twinui.pcshell.dll",
+    "sha256": "14a91ac45b016694988f68f17eef84fab2d46196d11c1ee5bde95763ae008a03",
+    "identity": {
+      "machine": 34404,
+      "timestamp": 3800597954,
+      "image_size": 9658368,
+      "pdb_guid": [
+        24,
+        188,
+        57,
+        133,
+        250,
+        143,
+        17,
+        141,
+        150,
+        68,
+        80,
+        138,
+        214,
+        45,
+        215,
+        70
+      ],
+      "pdb_age": 1
+    }
+  },
+  "tray": {
+    "name": "Taskbar.View.dll",
+    "relative_path": "SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy/Taskbar.View.dll",
+    "sha256": "1e5fe48b6418b4587544c4dbcbb526c8d0a1a9a2fbd81d2917b8c69e6b81d4be",
+    "identity": {
+      "machine": 34404,
+      "timestamp": 1680900876,
+      "image_size": 5754880,
+      "pdb_guid": [
+        109,
+        208,
+        238,
+        77,
+        112,
+        10,
+        5,
+        66,
+        175,
+        155,
+        27,
+        133,
+        119,
+        158,
+        94,
+        104
+      ],
+      "pdb_age": 1
+    }
+  },
+  "host": {
+    "schema": 1,
+    "module": {
+      "machine": 34404,
+      "timestamp": 1140661884,
+      "image_size": 3575808,
+      "pdb_guid": [
+        192,
+        47,
+        242,
+        225,
+        14,
+        166,
+        45,
+        191,
+        27,
+        228,
+        129,
+        84,
+        228,
+        114,
+        39,
+        102
+      ],
+      "pdb_age": 1
+    },
+    "symbols": [
+      {
+        "role": "primary_site",
+        "rva": 2172016,
+        "section_start": 2031616,
+        "section_size": 582544,
+        "executable": false,
+        "prologue": []
+      },
+      {
+        "role": "secondary_site",
+        "rva": 2186512,
+        "section_start": 2031616,
+        "section_size": 582544,
+        "executable": false,
+        "prologue": []
+      },
+      {
+        "role": "primary_host",
+        "rva": 1009104,
+        "section_start": 4096,
+        "section_size": 2024820,
+        "executable": true,
+        "prologue": [
+          64,
+          83,
+          72,
+          131,
+          236,
+          32,
+          72,
+          139,
+          137,
+          0,
+          2,
+          0,
+          0,
+          72,
+          139,
+          218
+        ]
+      },
+      {
+        "role": "secondary_host",
+        "rva": 1395120,
+        "section_start": 4096,
+        "section_size": 2024820,
+        "executable": true,
+        "prologue": [
+          64,
+          83,
+          72,
+          131,
+          236,
+          32,
+          72,
+          139,
+          73,
+          56,
+          72,
+          139,
+          218,
+          72,
+          139,
+          1
+        ]
+      },
+      {
+        "role": "frame_height",
+        "rva": 103424,
+        "section_start": 4096,
+        "section_size": 2024820,
+        "executable": true,
+        "prologue": [
+          72,
+          131,
+          236,
+          40,
+          72,
+          131,
+          193,
+          64,
+          72,
+          131,
+          57,
+          0,
+          116,
+          11,
+          232,
+          43
+        ]
+      },
+      {
+        "role": "release_host",
+        "rva": 490440,
+        "section_start": 4096,
+        "section_size": 2024820,
+        "executable": true,
+        "prologue": [
+          64,
+          83,
+          72,
+          131,
+          236,
+          32,
+          72,
+          139,
+          217,
+          131,
+          200,
+          255,
+          240,
+          15,
+          193,
+          65
+        ]
+      }
+    ],
+    "element_offset": 64
+  },
+  "source": {
+    "recipe": "xaml_explorer_host_child_v1",
+    "host_child_offset": 24,
+    "child_source_offset": 16,
+    "child_vtable_rva": 7465576,
+    "factory_vtable_rva": 7464136
+  },
+  "topology": "system_tray_frame_v1",
+  "tray_abi": "system_tray_drag_drop_borrowed_coordinates_x64_v1",
+  "tray_entries": [
+    {
+      "role": "invocation_point",
+      "rva": 2935024,
+      "section_start": 4096,
+      "section_size": 4684988,
+      "executable": true,
+      "prologue": [
+        64,
+        83,
+        86,
+        87,
+        72,
+        131,
+        236,
+        80,
+        15,
+        41,
+        116,
+        36,
+        64,
+        72,
+        139,
+        5
+      ]
+    },
+    {
+      "role": "icon_bounds",
+      "rva": 2934720,
+      "section_start": 4096,
+      "section_size": 4684988,
+      "executable": true,
+      "prologue": [
+        72,
+        137,
+        92,
+        36,
+        32,
+        85,
+        86,
+        87,
+        72,
+        139,
+        236,
+        72,
+        131,
+        236,
+        80,
+        15
+      ]
+    },
+    {
+      "role": "screen_rect",
+      "rva": 2908324,
+      "section_start": 4096,
+      "section_size": 4684988,
+      "executable": true,
+      "prologue": [
+        64,
+        85,
+        83,
+        86,
+        87,
+        65,
+        86,
+        72,
+        139,
+        236,
+        72,
+        131,
+        236,
+        112,
+        15,
+        41
+      ]
+    }
+  ]
+}

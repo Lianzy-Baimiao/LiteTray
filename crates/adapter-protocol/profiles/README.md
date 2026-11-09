@@ -1,5 +1,17 @@
 # Built-in taskbar compatibility evidence
 
+The 5.14.2 default and explicit `compatibility-lab` registries contain seven
+profiles. `windows11-22621.1702-x64.json` (22H2 Pro) and
+`windows11-22631.2861-x64.json` (23H2 Pro) were promoted after independently
+installed guests passed six scoped checks and independent evidence review.
+Both use the separately implemented four-argument borrowed-element
+`system_tray_drag_drop_borrowed_coordinates_x64_v1` ABI; the other five retain
+the three-argument owned-element ABI. Exact modules/layout, primary-clock
+updates/restoration and tray preparation/stop have recorded acceptance.
+Input, replication, multiple monitors and mixed DPI remain unvalidated.
+See [22H2 / 23H2 evidence](../../../docs/compatibility-22h2-23h2.md) for package
+identities, raw restoration checks and the separate default reruns.
+
 `windows11-26300.9711-x64.json` consolidates the three previously pinned system
 images, source offsets, concrete vtables, and tray coordinate entry points.
 The six host entries were resolved from the matching Microsoft PDB cache and
@@ -39,13 +51,13 @@ implementation of any new ABI, and explicit validation results. Do not widen
 an OS build range or reuse offsets merely because version labels look similar.
 The profile contains metadata and minimal code prefixes, not system DLLs/PDBs.
 
-The 5.14.1 default registry contains five profiles, adding
+The historical 5.14.1 default registry contains five profiles, adding
 `windows11-26200.8037-x64.json` and `windows11-26100.1742-x64.json` after both
 passed isolated single-monitor lab acceptance for exact modules/layout, clock
 updates/restoration and tray preparation/Stop. These exact module sets come
 from a Windows 11 Pro 25H2 8037 image and the official Enterprise LTSC 2024
-Evaluation 1742 image. Default and explicit `compatibility-lab` builds now
-contain the same five profiles; the feature remains reserved for future
+Evaluation 1742 image. Default and explicit `compatibility-lab` builds at that
+revision contain the same five profiles; the feature remains reserved for future
 candidates. The earlier default-three/lab-five artifacts remain historical
 records. The same 5.14.1 default binaries passed the complete six-check scoped
 reruns in both awakened guests, including execution-state restoration and

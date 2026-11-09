@@ -116,6 +116,7 @@ try {
         $stderr = Join-Path $output ($check.name+'.stderr.txt')
         $clock = [Diagnostics.Stopwatch]::StartNew()
         $record = [ordered]@{name=$check.name;exit_code=$null;timed_out=$false;passed=$false;duration_ms=0;stdout=[IO.Path]::GetFileName($stdout);stderr=[IO.Path]::GetFileName($stderr);error=$null}
+        $unreaped = $false
         try {
             $process = Start-Process -FilePath $binary -WorkingDirectory $app -ArgumentList $check.arguments -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
             # Windows PowerShell 5.1 needs the handle retained before waiting;
@@ -123,8 +124,12 @@ try {
             $null = $process.Handle
             if (-not $process.WaitForExit(60000)) {
                 $record.timed_out=$true
+                $unreaped = $true
                 $process.Kill()
-                $process.WaitForExit()
+                if (-not $process.WaitForExit(10000)) {
+                    throw 'The timed-out isolated check did not exit within the cleanup deadline.'
+                }
+                $unreaped = $false
             } else {
                 $process.WaitForExit()
             }
@@ -153,6 +158,9 @@ try {
         $record.duration_ms=$clock.ElapsedMilliseconds
         $summary.tests+=,[pscustomobject]$record
         Write-Json 'summary.json' $summary
+        if ($unreaped) {
+            throw 'An isolated check could not be reaped; remaining checks were not started.'
+        }
     }
     $summary.status=if (@($summary.tests | Where-Object { -not $_.passed }).Count -eq 0) { 'checks_passed' } else { 'checks_failed' }
     # A successful disk export may report unsupported modules. That is an
