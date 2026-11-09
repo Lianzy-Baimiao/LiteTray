@@ -89,6 +89,7 @@ $documents += @('docs/module-recognition.md','crates/adapter-protocol/profiles/e
 $documents += @('docs/compatibility-traits-5.15.0.md')
 $documents += @('docs/hotplug-recovery-5.15.0.md')
 $documents += @('docs/images/compatibility-5.15.0-zh-light.png','docs/images/compatibility-5.15.0-en-light.png')
+$documents += @('docs/images/compatibility-5.15.1-zh-light.png','docs/images/compatibility-5.15.1-en-light.png')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null

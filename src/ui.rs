@@ -59,6 +59,7 @@ use windows_sys::Win32::{
 const CLASS: &str = "LiteTray.Settings.1";
 const UI_REVISION: &str = concat!("开发版 ", env!("CARGO_PKG_VERSION"));
 const SS_LEFT: i32 = 0;
+const SS_RIGHT: i32 = 2;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
 const WM_RESULT: u32 = WM_APP + 2;
@@ -972,7 +973,7 @@ impl App {
                 "记录待办、日程和重要日期。点击保存后保存在本机。",
                 "专注计时、定时提醒与最近提醒记录。",
                 "组合天气属性，决定任务栏里 %weather% 的显示内容。",
-                "查看本机模块匹配、已收录资料与实测范围。",
+                "看看这台电脑能使用哪些任务栏功能。",
             ];
             set_text(self.field(902), descriptions[self.page]);
             let c = self.draft.clone();
@@ -1925,7 +1926,22 @@ impl App {
                 compatibility::DETAILS if self.page == compatibility::PAGE => {
                     self.compatibility.details_open = !self.compatibility.details_open;
                     self.sync_compatibility_controls();
-                    page::finish(self.page_host);
+                }
+                compatibility::CLOCK_SETTINGS if self.page == compatibility::PAGE => {
+                    self.command(NAV + 1);
+                }
+                compatibility::TRAY_SETTINGS if self.page == compatibility::PAGE => {
+                    self.command(NAV + 2);
+                }
+                compatibility::OPEN_REPORT if self.page == compatibility::PAGE => {
+                    if let Some(directory) = self
+                        .compatibility
+                        .export_path
+                        .as_deref()
+                        .and_then(std::path::Path::parent)
+                    {
+                        open_target(&directory.to_string_lossy());
+                    }
                 }
                 settings::OPEN_WEATHER_FORMAT => {
                     self.command(NAV + 10);
@@ -2926,7 +2942,14 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                 let nav = (NAV as u32..NAV as u32 + PAGES.len() as u32).contains(&item.CtlID);
                 let selected = item.CtlID == p.active as u32
                     || !GetPropW(item.hwndItem, wide("LiteTray.Selected").as_ptr()).is_null();
-                let primary = item.CtlID == SAVE as u32 || item.CtlID == 42;
+                let primary = item.CtlID == SAVE as u32
+                    || item.CtlID == 42
+                    || (matches!(
+                        item.CtlID as u16,
+                        compatibility::CHECK
+                            | compatibility::CLOCK_SETTINGS
+                            | compatibility::EXPORT
+                    ) && !GetPropW(item.hwndItem, wide("LiteTray.Primary").as_ptr()).is_null());
                 let pressed = item.itemState & ODS_SELECTED != 0;
                 let keyboard_focus = item.itemState & (ODS_FOCUS | ODS_NOFOCUSRECT) == ODS_FOCUS;
                 let hover = !GetPropW(item.hwndItem, wide("LiteTray.Hover").as_ptr()).is_null();

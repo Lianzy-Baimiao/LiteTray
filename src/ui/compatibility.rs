@@ -19,13 +19,16 @@ pub(super) const PAGE: usize = 11;
 pub(super) const CHECK: u16 = 950;
 pub(super) const EXPORT: u16 = 951;
 pub(super) const DETAILS: u16 = 952;
+pub(super) const CLOCK_SETTINGS: u16 = 957;
+pub(super) const TRAY_SETTINGS: u16 = 958;
+pub(super) const OPEN_REPORT: u16 = 959;
 const OS: u16 = 953;
-const PROFILE: u16 = 954;
+const SUMMARY: u16 = 954;
 const MESSAGE: u16 = 955;
 const EXPORT_MESSAGE: u16 = 956;
 const FEATURE_STATUS: u16 = 960;
-const EVIDENCE: u16 = 970;
-const CATALOG: u16 = 971;
+const FEATURE_NOTE: u16 = 964;
+const NEXT_STEP: u16 = 970;
 const DETAIL_TEXT: u16 = 972;
 const FEATURES: [Feature; 4] = [
     Feature::ClockAppearance,
@@ -120,6 +123,19 @@ impl OperatingSystem {
         .collect::<Vec<_>>()
         .join(" · ")
     }
+    fn short_label(&self) -> String {
+        let system = if self.build >= 22000 {
+            "Windows 11"
+        } else if self.build >= 10240 {
+            "Windows 10"
+        } else {
+            "Windows"
+        };
+        match self.display_version.as_deref() {
+            Some(version) => format!("{system} {version}"),
+            None => system.into(),
+        }
+    }
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -169,13 +185,21 @@ impl State {
     }
     fn check_message(&self) -> String {
         let current = if self.busy {
-            tr("正在检测本机模块…").into()
-        } else if let Some(error) = &self.error {
-            format!("{} {}", tr("检测失败："), tr(error))
+            tr(if self.snapshot.is_some() {
+                "正在重新检查 · 下方为上次结果"
+            } else {
+                "正在检查，请稍候…"
+            })
+        } else if self.error.is_some() {
+            tr(if self.snapshot.is_some() {
+                "本次检查失败 · 下方为上次结果"
+            } else {
+                "检查失败，请重试"
+            })
         } else if self.snapshot.is_some() {
-            tr("检测完成 · 以下为磁盘匹配结果").into()
+            tr("检查完成")
         } else {
-            tr("尚未检测").into()
+            tr("尚未检查")
         };
         let last = self
             .snapshot
@@ -183,65 +207,180 @@ impl State {
             .map(|snapshot| {
                 format!(
                     "{} {}",
-                    tr("上次完成："),
+                    tr("上次检查："),
                     snapshot
                         .checked_at
                         .with_timezone(&Local)
-                        .format("%Y-%m-%d %H:%M:%S")
+                        .format("%m-%d %H:%M")
                 )
             })
-            .or_else(|| {
-                self.last_attempt.map(|at| {
-                    format!(
-                        "{} {}",
-                        tr("本次开始："),
-                        at.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S")
-                    )
-                })
-            })
             .unwrap_or_default();
-        format!("{current}\r\n{last}")
+        if last.is_empty() {
+            current.into()
+        } else {
+            format!("{current} · {last}")
+        }
     }
     fn export_message(&self) -> String {
         if self.export_busy {
-            tr("正在保存独立报告…").into()
-        } else if let Some(error) = &self.export_error {
-            format!("{} {}", tr("报告保存失败："), tr(error))
-        } else if let Some(path) = &self.export_path {
-            format!("{} {}", tr("报告已保存："), path.display())
+            tr("正在保存诊断报告…").into()
+        } else if self.export_error.is_some() {
+            tr("报告保存失败，请重试。具体原因见诊断详情。").into()
+        } else if self.export_path.is_some() {
+            tr("报告已保存，可打开文件夹查看。").into()
         } else {
-            tr("报告保存在本机配置目录的 reports 文件夹，每次生成新文件。").into()
+            String::new()
         }
     }
     pub(super) fn footer(&self) -> String {
         if self.export_busy || self.export_error.is_some() || self.export_path.is_some() {
             self.export_message()
         } else {
-            tr("兼容性检测只读取本机文件，不接管 Explorer。").into()
+            tr("此检查不会更改你的设置。").into()
         }
+    }
+    fn summary(&self) -> (&'static str, &'static str) {
+        if self.busy {
+            return (
+                tr("正在检查任务栏兼容性…"),
+                tr("稍等片刻，完成后会列出各项功能的检查结果。"),
+            );
+        }
+        if self.error.is_some() {
+            return (
+                tr("未能完成检查"),
+                tr("请重新检查。日历、日程和提醒仍可使用。"),
+            );
+        }
+        let Some(snapshot) = self.snapshot.as_deref() else {
+            return (
+                tr("检查这台电脑的任务栏"),
+                tr("检查后，你可以选择要启用的时钟和托盘功能。"),
+            );
+        };
+        let ready = |feature| {
+            feature_result(Some(&snapshot.report), feature)
+                .is_some_and(|item| item.status == FeatureStatus::DiskMatchedLiveCheckRequired)
+        };
+        if FEATURES.into_iter().all(ready) {
+            (
+                tr("可尝试启用任务栏功能"),
+                tr("先到时钟设置中启用。下方列出了仍需留意的使用限制。"),
+            )
+        } else if ready(Feature::ClockAppearance) {
+            (
+                tr("可以先试用任务栏时钟"),
+                tr("部分功能暂不可用，不影响你单独设置时钟。"),
+            )
+        } else if FEATURES.into_iter().any(|feature| {
+            feature_result(Some(&snapshot.report), feature).is_none_or(|item| {
+                matches!(
+                    item.status,
+                    FeatureStatus::MissingModules | FeatureStatus::InspectionFailed
+                )
+            })
+        }) {
+            (
+                tr("还不能确认任务栏兼容性"),
+                tr("有些系统文件没能完成检查。请重试，或保存报告帮助排查。"),
+            )
+        } else {
+            (
+                tr("任务栏功能暂时用不了"),
+                tr("可以保存诊断报告帮助排查。日历、日程和提醒仍可使用。"),
+            )
+        }
+    }
+    fn diagnostic_details(&self) -> String {
+        let mut sections = Vec::new();
+        if let Some(error) = &self.error {
+            sections.push(format!("{} {}", tr("检测失败："), error));
+        }
+        if let Some(error) = &self.export_error {
+            sections.push(format!("{} {}", tr("报告保存失败："), error));
+        }
+        if let Some(path) = &self.export_path {
+            sections.push(format!("{} {}", tr("报告已保存："), path.display()));
+        }
+        if let Some(snapshot) = self.snapshot.as_deref() {
+            sections.push(details_text(snapshot));
+        }
+        sections.join("\r\n\r\n")
     }
 }
 
 fn feature_name(feature: Feature) -> &'static str {
     tr(match feature {
-        Feature::ClockAppearance => "时钟外观",
+        Feature::ClockAppearance => "任务栏时钟",
         Feature::ClockInput => "时钟点击与音量",
-        Feature::TrayMirroring => "副屏托盘复制",
-        Feature::SystemAreas => "系统区域与菜单",
+        Feature::TrayMirroring => "副屏托盘图标",
+        Feature::SystemAreas => "系统图标与菜单",
     })
 }
+fn feature_result(report: Option<&Report>, feature: Feature) -> Option<&inventory::FeatureReport> {
+    report?.features.iter().find(|item| item.feature == feature)
+}
 fn feature_status(report: Option<&Report>, feature: Feature) -> &'static str {
-    let Some(report) = report else {
-        return tr("等待本机检测");
-    };
-    let Some(item) = report.features.iter().find(|item| item.feature == feature) else {
-        return tr("检查结果缺失，不能确认支持");
+    let Some(item) = feature_result(report, feature) else {
+        return tr(if report.is_some() {
+            "未能确认"
+        } else {
+            "等待检查"
+        });
     };
     tr(match item.status {
-        FeatureStatus::DiskMatchedLiveCheckRequired => "模块匹配 · 运行时仍需验证",
-        FeatureStatus::UnsupportedModules => "模块结构待适配 · 此功能暂不可用",
-        FeatureStatus::MissingModules => "缺少所需模块",
-        FeatureStatus::InspectionFailed => "模块检查失败",
+        FeatureStatus::DiskMatchedLiveCheckRequired => {
+            if item
+                .baseline_limitations
+                .contains(&"notification_click_crash_report_unresolved")
+            {
+                "有已知问题"
+            } else if item.baseline_limitations.is_empty() {
+                "可尝试启用"
+            } else {
+                "仍需实测"
+            }
+        }
+        FeatureStatus::UnsupportedModules => "暂不支持",
+        FeatureStatus::MissingModules => "缺少系统组件",
+        FeatureStatus::InspectionFailed => "未能确认",
+    })
+}
+fn limitation_text(key: &str) -> &'static str {
+    tr(match key {
+        "notification_click_crash_report_unresolved" => "有通知时点击可能崩溃，尚未确认修复。",
+        "third_party_hover_popups_require_separate_validation" => "第三方图标的悬停窗口仍需测试。",
+        "system_icon_and_cross_monitor_menu_validation_incomplete" => {
+            "系统图标和跨屏菜单仍需测试。"
+        }
+        _ => "部分操作仍需验证，详见诊断详情。",
+    })
+}
+fn feature_note(report: Option<&Report>, feature: Feature) -> &'static str {
+    if let Some(item) = feature_result(report, feature) {
+        match item.status {
+            FeatureStatus::UnsupportedModules => return tr("当前任务栏版本还没有适配。"),
+            FeatureStatus::MissingModules => {
+                return tr("未找到所需的 Windows 文件，请稍后重新检查。");
+            }
+            FeatureStatus::InspectionFailed => return tr("没能读出检查结果，请重新检查。"),
+            FeatureStatus::DiskMatchedLiveCheckRequired => {
+                if let Some(key) = item
+                    .baseline_limitations
+                    .iter()
+                    .find(|key| **key == "notification_click_crash_report_unresolved")
+                    .or_else(|| item.baseline_limitations.first())
+                {
+                    return limitation_text(key);
+                }
+            }
+        }
+    }
+    tr(match feature {
+        Feature::ClockAppearance => "自定义时间、日期、天气和字体；启用时会再检查实际连接。",
+        Feature::ClockInput => "点击打开日历，滚轮调节音量。",
+        Feature::TrayMirroring => "在外接屏显示主屏的托盘图标。",
+        Feature::SystemAreas => "副屏上的系统图标和右键菜单。",
     })
 }
 fn scenario_name(scenario: ValidationScenario) -> &'static str {
@@ -321,11 +460,30 @@ fn catalog_text(snapshot: Option<&Snapshot>) -> String {
         .join("\r\n\r\n")
 }
 fn details_text(snapshot: &Snapshot) -> String {
-    let mut lines = vec![format!(
-        "{} {}",
-        tr("检测时间："),
-        snapshot.checked_at.to_rfc3339()
-    )];
+    let recognized = snapshot
+        .report
+        .modules
+        .iter()
+        .filter(|module| module.status == inventory::ModuleStatus::Matched)
+        .count();
+    let equivalent = snapshot
+        .report
+        .modules
+        .iter()
+        .filter(|module| {
+            module.recognition.as_ref().is_some_and(|item| {
+                item.basis
+                    == litetray_adapter_protocol::compatibility::MatchBasis::ExecutionEquivalent
+            })
+        })
+        .count();
+    let mut lines = vec![
+        snapshot.os.label(),
+        format!("{} {}", tr("检测时间："), snapshot.checked_at.to_rfc3339()),
+        format!("{} {recognized}/{} · {} {equivalent}", tr("已识别模块："), snapshot.report.modules.len(), tr("实现等价：")),
+        tr("磁盘识别后，启用时仍会核验运行中的模块与控件。托盘暂不兼容时，已兼容的时钟可继续运行。").into(),
+        format!("\r\n{}\r\n{}", tr("已登记的实测范围"), evidence_text(Some(snapshot))),
+    ];
     if let Some(reason) = &snapshot.report.profile_selection_reason {
         lines.push(format!("{} {reason}", tr("资料选择：")));
     }
@@ -396,7 +554,19 @@ fn details_text(snapshot: &Snapshot) -> String {
         for reason in &feature.reasons {
             lines.push(format!("{}: {reason}", feature_name(feature.feature)));
         }
+        for key in &feature.baseline_limitations {
+            lines.push(format!(
+                "{}: {} [{key}]",
+                feature_name(feature.feature),
+                limitation_text(key)
+            ));
+        }
     }
+    lines.push(format!(
+        "\r\n{}\r\n{}",
+        tr("已收录的模块资料"),
+        catalog_text(Some(snapshot))
+    ));
     lines.join("\r\n")
 }
 
@@ -436,103 +606,57 @@ impl App {
     pub(super) unsafe fn compatibility_settings(&mut self, width: i32) {
         unsafe {
             let total = width - 260;
-            let half = (total - 24) / 2;
-            self.section("本机兼容性", 224, 88, total - 330);
-            self.button("检测兼容性", CHECK, 224 + total - 312, 82, 152);
-            self.button("导出报告", EXPORT, 224 + total - 148, 82, 148);
-            self.control("STATIC", "", OS, SS_LEFT as u32, 224, 132, total, 28);
-            self.control("STATIC", "", PROFILE, SS_LEFT as u32, 224, 168, total, 44);
-            self.control(
-                "EDIT",
-                "",
-                MESSAGE,
-                WS_TABSTOP
-                    | WS_VSCROLL
-                    | ES_MULTILINE as u32
-                    | ES_READONLY as u32
-                    | ES_AUTOVSCROLL as u32,
-                224,
-                220,
-                total,
-                54,
-            );
-            self.caption(
-                "只读取本机系统文件；不接管 Explorer，不下载符号，也不更改设置。",
-                224,
-                290,
-                total,
-                44,
-            );
-            self.divider(224, 346, total);
-            self.section("按模块特征判断可用功能", 224, 366, total);
+            let os = self.control("STATIC", "", OS, SS_LEFT as u32, 224, 92, total - 172, 24);
+            SetPropW(os, wide("LiteTray.Muted").as_ptr(), 1usize as HANDLE);
+            self.button("重新检查", CHECK, 224 + total - 144, 84, 144);
+            let summary = self.control("STATIC", "", SUMMARY, SS_LEFT as u32, 224, 132, total, 30);
+            widgets::heading(summary, self.dpi);
+            self.control("STATIC", "", NEXT_STEP, SS_LEFT as u32, 224, 174, total, 36);
+            let action = self.button("前往时钟设置", CLOCK_SETTINGS, 224, 220, 196);
+            SetPropW(action, wide("LiteTray.Primary").as_ptr(), 1usize as HANDLE);
+            self.button("多屏托盘设置", TRAY_SETTINGS, 432, 220, 196);
+            let message = self.control("STATIC", "", MESSAGE, SS_LEFT as u32, 224, 266, total, 22);
+            SetPropW(message, wide("LiteTray.Muted").as_ptr(), 1usize as HANDLE);
+            self.divider(224, 302, total);
             for (index, feature) in FEATURES.into_iter().enumerate() {
-                let x = 224 + (index as i32 % 2) * (half + 24);
-                let y = 410 + (index as i32 / 2) * 80;
-                self.label(feature_name(feature), x, y, half, 26);
+                let y = 318 + index as i32 * 58;
+                self.label(feature_name(feature), 224, y, total - 220, 24);
                 self.control(
                     "STATIC",
                     "",
                     FEATURE_STATUS + index as u16,
-                    SS_LEFT as u32,
-                    x,
-                    y + 32,
-                    half,
-                    48,
+                    SS_RIGHT as u32,
+                    224 + total - 204,
+                    y,
+                    204,
+                    24,
                 );
+                let note = self.control(
+                    "STATIC",
+                    "",
+                    FEATURE_NOTE + index as u16,
+                    SS_LEFT as u32,
+                    224,
+                    y + 26,
+                    total,
+                    30,
+                );
+                SetPropW(note, wide("LiteTray.Muted").as_ptr(), 1usize as HANDLE);
             }
-            self.caption(
-                "磁盘识别后，启用时仍会核验运行中的模块与控件。托盘暂不兼容时，已兼容的时钟可继续运行。",
-                224,
-                584,
-                total,
-                44,
-            );
-            self.divider(224, 640, total);
-            self.section("已登记的实测范围", 224, 660, total);
+            self.divider(224, 550, total);
+            self.button("查看诊断详情", DETAILS, 224, 566, 184);
+            self.button("保存诊断报告", EXPORT, 224 + total - 368, 566, 184);
+            self.button("打开报告文件夹", OPEN_REPORT, 224 + total - 172, 566, 172);
             self.control(
-                "EDIT",
-                "",
-                EVIDENCE,
-                WS_TABSTOP
-                    | WS_VSCROLL
-                    | ES_MULTILINE as u32
-                    | ES_READONLY as u32
-                    | ES_AUTOVSCROLL as u32,
-                224,
-                702,
-                total,
-                172,
-            );
-            self.caption("实测范围以所选资料的记录为准。单屏时钟和托盘准备通过，不代表点击、悬浮、音量、托盘复制与多屏已验收。", 224, 890, total, 64);
-            self.divider(224, 968, total);
-            self.section("已收录的模块资料", 224, 988, total);
-            self.control(
-                "EDIT",
-                "",
-                CATALOG,
-                WS_TABSTOP
-                    | WS_VSCROLL
-                    | ES_MULTILINE as u32
-                    | ES_READONLY as u32
-                    | ES_AUTOVSCROLL as u32,
-                224,
-                1030,
-                total,
-                134,
-            );
-            self.caption("逐个识别宿主、XAML 容器和托盘实现。仅版本等元数据改变可复用已核验模板；代码、数据或布局改变则单独适配。系统版本号仅作说明。", 224, 1180, total, 64);
-            let export = self.control(
-                "EDIT",
+                "STATIC",
                 "",
                 EXPORT_MESSAGE,
-                WS_TABSTOP | ES_MULTILINE as u32 | ES_READONLY as u32 | ES_AUTOVSCROLL as u32,
+                SS_LEFT as u32,
                 224,
-                1260,
+                612,
                 total,
-                48,
+                38,
             );
-            SendMessageW(export, EM_SETLIMITTEXT, 32768, 0);
-            self.button("展开检测详情", DETAILS, 224, 1328, 196);
             let details = self.control(
                 "EDIT",
                 "",
@@ -543,7 +667,7 @@ impl App {
                     | ES_READONLY as u32
                     | ES_AUTOVSCROLL as u32,
                 224,
-                1380,
+                662,
                 total,
                 280,
             );
@@ -558,18 +682,50 @@ impl App {
             }
             let state = &self.compatibility;
             let snapshot = state.snapshot.as_deref();
+            let has_details =
+                snapshot.is_some() || state.error.is_some() || state.export_error.is_some();
+            let can_try_clock = !state.busy
+                && state.error.is_none()
+                && feature_result(
+                    snapshot.map(|value| &value.report),
+                    Feature::ClockAppearance,
+                )
+                .is_some_and(|item| item.status == FeatureStatus::DiskMatchedLiveCheckRequired);
+            let primary = if can_try_clock {
+                CLOCK_SETTINGS
+            } else if state.busy || state.error.is_some() || snapshot.is_none() {
+                CHECK
+            } else {
+                EXPORT
+            };
+            for id in [CLOCK_SETTINGS, CHECK, EXPORT] {
+                if id == primary {
+                    SetPropW(
+                        self.field(id),
+                        wide("LiteTray.Primary").as_ptr(),
+                        1usize as HANDLE,
+                    );
+                } else {
+                    RemovePropW(self.field(id), wide("LiteTray.Primary").as_ptr());
+                }
+                InvalidateRect(self.field(id), null(), 0);
+            }
             EnableWindow(self.field(CHECK), i32::from(!state.busy));
             EnableWindow(
                 self.field(EXPORT),
                 i32::from(snapshot.is_some() && !state.busy && !state.export_busy),
             );
-            EnableWindow(self.field(DETAILS), i32::from(snapshot.is_some()));
+            EnableWindow(self.field(DETAILS), i32::from(has_details));
+            EnableWindow(
+                self.field(OPEN_REPORT),
+                i32::from(state.export_path.is_some() && !state.export_busy),
+            );
             set_text(
                 self.field(CHECK),
                 if state.busy {
-                    "检测中…"
+                    "检查中…"
                 } else {
-                    "检测兼容性"
+                    "重新检查"
                 },
             );
             set_text(
@@ -577,23 +733,18 @@ impl App {
                 if state.export_busy {
                     "保存中…"
                 } else {
-                    "导出报告"
+                    "保存诊断报告"
                 },
             );
             set_text(
                 self.field(OS),
                 &snapshot
-                    .map(|value| value.os.label())
-                    .unwrap_or_else(|| tr("正在读取当前 Windows 信息…").into()),
+                    .map(|value| value.os.short_label())
+                    .unwrap_or_else(|| tr("这台电脑").into()),
             );
-            let profile = snapshot
-                .map(|value| {
-                    let recognized = value.report.modules.iter().filter(|module| module.status == inventory::ModuleStatus::Matched).count();
-                    let equivalent = value.report.modules.iter().filter(|module| module.recognition.as_ref().is_some_and(|item| item.basis == litetray_adapter_protocol::compatibility::MatchBasis::ExecutionEquivalent)).count();
-                    format!("{} {recognized}/{} · {} {equivalent}\r\n{}", tr("已识别模块："), value.report.modules.len(), tr("实现等价："), tr("可用功能见下方；展开详情可查看匹配依据和处理建议。"))
-                })
-                .unwrap_or_else(|| tr("模块资料：等待检测").into());
-            set_text(self.field(PROFILE), &profile);
+            let (summary, next_step) = state.summary();
+            set_text(self.field(SUMMARY), summary);
+            set_text(self.field(NEXT_STEP), next_step);
             set_text(self.field(MESSAGE), &state.check_message());
             set_text(self.field(EXPORT_MESSAGE), &state.export_message());
             set_text(self.field(STATUS), &state.footer());
@@ -602,30 +753,42 @@ impl App {
                     self.field(FEATURE_STATUS + index as u16),
                     feature_status(snapshot.map(|value| &value.report), feature),
                 );
+                set_text(
+                    self.field(FEATURE_NOTE + index as u16),
+                    feature_note(snapshot.map(|value| &value.report), feature),
+                );
             }
-            set_text(self.field(EVIDENCE), &evidence_text(snapshot));
-            set_text(self.field(CATALOG), &catalog_text(snapshot));
             set_text(
                 self.field(DETAILS),
                 if state.details_open {
-                    "收起检测详情"
+                    "收起诊断详情"
                 } else {
-                    "展开检测详情"
+                    "查看诊断详情"
                 },
             );
-            if state.details_open
-                && let Some(snapshot) = snapshot
-            {
-                set_text(self.field(DETAIL_TEXT), &details_text(snapshot));
+            if state.details_open {
+                set_text(self.field(DETAIL_TEXT), &state.diagnostic_details());
             }
             ShowWindow(
-                self.field(DETAIL_TEXT),
-                if state.details_open && snapshot.is_some() {
+                self.field(EXPORT_MESSAGE),
+                if state.details_open && !state.export_message().is_empty() {
                     SW_SHOWNA
                 } else {
                     SW_HIDE
                 },
             );
+            ShowWindow(
+                self.field(DETAIL_TEXT),
+                if state.details_open && has_details {
+                    SW_SHOWNA
+                } else {
+                    SW_HIDE
+                },
+            );
+            // A retry can temporarily hide error-only details. A new result
+            // must restore their scroll range even if the page was rebuilt
+            // while that background check was running.
+            page::finish(self.page_host);
         }
     }
     pub(super) unsafe fn start_compatibility_check(&mut self) {
@@ -734,11 +897,26 @@ mod tests {
             feature.status = FeatureStatus::DiskMatchedLiveCheckRequired;
         }
         for feature in FEATURES {
-            assert_eq!(
-                feature_status(Some(&value.report), feature),
-                "Modules match · runtime checks still required"
-            );
+            let item = feature_result(Some(&value.report), feature).unwrap();
+            if item.baseline_limitations.is_empty() {
+                assert_eq!(
+                    feature_status(Some(&value.report), feature),
+                    tr("可尝试启用")
+                );
+            } else {
+                assert_ne!(
+                    feature_status(Some(&value.report), feature),
+                    tr("可尝试启用")
+                );
+                assert!(!feature_note(Some(&value.report), feature).is_empty());
+            }
         }
+        assert!(
+            feature_note(Some(&value.report), Feature::ClockInput)
+                .to_ascii_lowercase()
+                .contains("crash")
+        );
+        assert!(details_text(&value).contains("notification_click_crash_report_unresolved"));
         let tested_ids: Vec<_> = value
             .supported_profiles
             .iter()
@@ -800,8 +978,14 @@ mod tests {
         state.finish(Err("fixture failure".into()));
         assert!(!state.busy);
         assert_eq!(state.snapshot.as_ref().unwrap().checked_at, previous);
-        assert!(state.check_message().contains("Check failed:"));
-        assert!(state.check_message().contains("Last completed:"));
+        assert!(
+            state
+                .check_message()
+                .contains(tr("本次检查失败 · 下方为上次结果"))
+        );
+        assert!(state.check_message().contains(tr("上次检查：")));
+        assert_eq!(state.summary().0, tr("未能完成检查"));
+        assert!(state.diagnostic_details().contains("fixture failure"));
         i18n::set_language(Language::ZhCn);
     }
     #[test]

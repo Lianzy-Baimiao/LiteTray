@@ -45,7 +45,9 @@ Download `LiteTray-<version>-Setup-x64.exe` from Releases. Installation is per u
 
 Choose to launch LiteTray when installation finishes to open settings. The home page's Taskbar clock card lets you enable the custom clock or restore the system clock directly. Use Clock settings to customize it, and Multiple monitors to choose your displays. Click the taskbar clock to open the calendar. An attached panel closes when you click outside it; a detached panel stays open. Closing settings keeps LiteTray running; use the tray menu to exit.
 
-Open **Settings → Compatibility** to see local module matches, built-in profiles and the recorded scope of acceptance checks. Inspection runs in the background without changing the system, and you can export the displayed report. A disk match still requires runtime checks; it does not confirm every click, menu or multiple-monitor scenario.
+Open **Settings → Compatibility** to see this computer's check results and feature limitations, with shortcuts to clock and multi-monitor settings. In 5.15.1, these fit on the first screen; module information and earlier test records are under Diagnostic details. You can save a report and open its folder. Passing the initial check means a feature is ready to try; LiteTray checks the actual connection when you enable it.
+
+![5.15.1 Compatibility page, rendered by the native UI with sample check results](docs/images/compatibility-5.15.1-en-light.png)
 
 [Usage and development guide, Chinese](docs/usage.md) · [Installer guide, Chinese](docs/installer.md) · [Weather templates, Chinese](docs/weather-format.md)
 

@@ -1400,7 +1400,7 @@ fn compatibility_results_update_controls_without_rebuilding_or_switching_pages()
         let clock = app.field(960);
         assert_eq!(IsWindowEnabled(app.field(compatibility::CHECK)), 0);
         assert_eq!(IsWindowEnabled(app.field(compatibility::EXPORT)), 0);
-        assert!(window_text(status).contains("正在检测"));
+        assert!(window_text(status).contains("正在检查"));
         app.tx
             .send(Event::Compatibility(Ok(Box::new(
                 compatibility_snapshot_for_check(),
@@ -1412,11 +1412,16 @@ fn compatibility_results_update_controls_without_rebuilding_or_switching_pages()
         assert_eq!(app.field(960), clock);
         assert_ne!(IsWindowEnabled(app.field(compatibility::CHECK)), 0);
         assert_ne!(IsWindowEnabled(app.field(compatibility::EXPORT)), 0);
-        assert!(window_text(status).contains("检测完成"));
-        for id in 960..964 {
-            assert_eq!(window_text(app.field(id)), "模块匹配 · 运行时仍需验证");
-        }
-        assert!(window_text(app.field(970)).contains("尚未验收"));
+        assert!(window_text(status).contains("检查完成"));
+        assert_eq!(window_text(clock), "可尝试启用");
+        assert_eq!(window_text(app.field(961)), "有已知问题");
+        assert_eq!(window_text(app.field(962)), "仍需实测");
+        assert!(window_text(app.field(965)).contains("可能崩溃"));
+        assert!(window_text(app.field(954)).contains("可尝试启用"));
+        assert_eq!(IsWindowEnabled(app.field(compatibility::OPEN_REPORT)), 0);
+        app.command(compatibility::DETAILS);
+        assert!(window_text(app.field(972)).contains("尚未验收"));
+        app.command(compatibility::DETAILS);
 
         let mut partial = compatibility_snapshot_for_check();
         partial.report.all_profile_images_matched = false;
@@ -1436,10 +1441,21 @@ fn compatibility_results_update_controls_without_rebuilding_or_switching_pages()
             .unwrap();
         app.receive();
         assert_eq!(app.field(960), clock);
-        assert_eq!(window_text(clock), "模块匹配 · 运行时仍需验证");
-        assert!(window_text(app.field(962)).contains("此功能暂不可用"));
-        assert!(window_text(app.field(954)).contains("已识别模块： 2/3"));
-        assert!(window_text(app.field(970)).contains("不能套用"));
+        assert_eq!(window_text(clock), "可尝试启用");
+        assert_eq!(window_text(app.field(962)), "暂不支持");
+        assert!(window_text(app.field(954)).contains("可以先试用任务栏时钟"));
+        app.command(compatibility::DETAILS);
+        assert!(window_text(app.field(972)).contains("不能套用"));
+        app.command(compatibility::DETAILS);
+
+        // These shortcuts navigate only; inspecting compatibility must never
+        // enable taskbar access or save unrelated settings as a side effect.
+        app.command(compatibility::CLOCK_SETTINGS);
+        assert_eq!(app.page, 1);
+        app.command(NAV + compatibility::PAGE as u16);
+        app.command(compatibility::TRAY_SETTINGS);
+        assert_eq!(app.page, 2);
+        app.command(NAV + compatibility::PAGE as u16);
 
         app.command(NAV + 7);
         let other_page = app.page_host;
@@ -1464,9 +1480,13 @@ fn compatibility_results_update_controls_without_rebuilding_or_switching_pages()
         );
         assert!(!app.compatibility.busy && !app.compatibility.export_busy);
         app.command(NAV + compatibility::PAGE as u16);
-        assert!(window_text(app.field(955)).contains("检测失败"));
-        assert!(window_text(app.field(955)).contains("上次完成"));
-        assert!(window_text(app.field(956)).contains(&export.display().to_string()));
+        assert!(window_text(app.field(955)).contains("本次检查失败"));
+        assert!(window_text(app.field(955)).contains("上次结果"));
+        assert!(window_text(app.field(955)).contains("上次检查"));
+        assert_ne!(IsWindowEnabled(app.field(compatibility::OPEN_REPORT)), 0);
+        app.command(compatibility::DETAILS);
+        assert!(window_text(app.field(972)).contains(&export.display().to_string()));
+        assert!(window_text(app.field(972)).contains("synthetic rescan failure"));
         assert!(window_text(app.field(STATUS)).contains("报告已保存"));
         app.tx
             .send(Event::CompatibilityExport(Err(
@@ -1476,6 +1496,33 @@ fn compatibility_results_update_controls_without_rebuilding_or_switching_pages()
         app.receive();
         assert!(window_text(app.field(956)).contains("报告保存失败"));
         assert!(window_text(app.field(STATUS)).contains("报告保存失败"));
+
+        // An initial failure has details but no previous snapshot. Rebuilding
+        // during a retry must not strand newly visible details below the page.
+        app.compatibility = compatibility::State {
+            attempted: true,
+            details_open: true,
+            error: Some("first check failed".into()),
+            ..Default::default()
+        };
+        app.render();
+        app.compatibility.error = None;
+        app.compatibility.busy = true;
+        app.render();
+        let mut range = SCROLLINFO {
+            cbSize: size_of::<SCROLLINFO>() as u32,
+            fMask: SIF_ALL,
+            ..std::mem::zeroed()
+        };
+        GetScrollInfo(app.page_host, SB_VERT, &mut range);
+        let collapsed_range = range.nMax;
+        app.receive_compatibility(Ok(Box::new(compatibility_snapshot_for_check())));
+        GetScrollInfo(app.page_host, SB_VERT, &mut range);
+        assert!(range.nMax > collapsed_range);
+        assert_ne!(
+            GetWindowLongW(app.field(972), GWL_STYLE) as u32 & WS_VISIBLE,
+            0
+        );
         assert_eq!(serde_json::to_value(&app.saved).unwrap(), saved);
         assert_eq!(serde_json::to_value(&app.draft).unwrap(), draft);
         assert_eq!(IsWindowVisible(app.hwnd), 0);
@@ -1721,7 +1768,10 @@ fn compatibility_details_remain_reachable_when_toggled_after_scrolling() {
             for _ in 0..3 {
                 SendMessageW(page, WM_VSCROLL, SB_BOTTOM as usize, 0);
                 let before = scroll();
-                assert!(before.nPos > 0);
+                assert_eq!(
+                    before.nPos, 0,
+                    "collapsed results must fit without scrolling"
+                );
                 assert_eq!(rect(details).top + before.nPos, original.top);
                 app.command(compatibility::DETAILS);
                 assert_ne!(GetWindowLongW(details, GWL_STYLE) as u32 & WS_VISIBLE, 0);
@@ -3503,6 +3553,41 @@ fn render_settings_artifacts() {
                             )),
                         );
                         app.command(compatibility::DETAILS);
+                        SendMessageW(app.page_host, WM_VSCROLL, SB_TOP as usize, 0);
+                        let original = app.compatibility.snapshot.clone();
+                        for scenario in ["partial", "unsupported", "failed", "checking"] {
+                            let mut sample = compatibility_snapshot_for_check();
+                            if matches!(scenario, "partial" | "unsupported") {
+                                sample.report.all_profile_images_matched = false;
+                                for item in &mut sample.report.features {
+                                    if scenario == "unsupported"
+                                        || matches!(
+                                            item.feature,
+                                            litetray::compatibility::Feature::TrayMirroring
+                                                | litetray::compatibility::Feature::SystemAreas
+                                        )
+                                    {
+                                        item.status = litetray::compatibility::FeatureStatus::UnsupportedModules;
+                                    }
+                                }
+                            }
+                            app.compatibility.snapshot = Some(std::sync::Arc::new(sample));
+                            app.compatibility.error = (scenario == "failed")
+                                .then(|| "Synthetic display-only scan failure".into());
+                            app.compatibility.busy = scenario == "checking";
+                            app.sync_compatibility_controls();
+                            write_window(
+                                app.hwnd,
+                                &output.join(format!(
+                                    "settings-{}-{page}-{scenario}.bmp",
+                                    if dark { "dark" } else { "light" }
+                                )),
+                            );
+                        }
+                        app.compatibility.snapshot = original;
+                        app.compatibility.error = None;
+                        app.compatibility.busy = false;
+                        app.sync_compatibility_controls();
                     }
                     if page == 9 {
                         for tab in 1..4 {
