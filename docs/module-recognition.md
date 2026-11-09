@@ -1,0 +1,63 @@
+# 按模块实现识别任务栏
+
+任务栏兼容性由三个独立模块的实际内容决定：`taskbar.dll` 提供宿主和字段布局，`twinui.pcshell.dll` 提供 XAML 子宿主及其 source，`SystemTray.dll` / `Taskbar.View.dll` 提供托盘坐标接口。Windows 产品名称、版本号和累计更新号只用于显示和记录，不能选择入口地址。
+
+共享解析模块位于 `crates/adapter-protocol/src/compatibility/recognition.rs`。主程序与注入模块各自读取自己的磁盘模块，调用 `recognize(role, relative_path, bytes)`；注入模块还必须核对 Explorer 已加载的路径、完整 PE/PDB 身份、函数入口和运行时对象归属。调用方提供的布局不能代替独立识别。
+
+## 两层静态识别
+
+第一层是完整 SHA-256 与 PE/PDB 身份匹配。第二层是 `ExecutionEquivalent`：完整执行代码、数据、地址和结构保持一致，只有明确列举的元数据发生变化。它允许一部分不在完整文件名单内的图像复用已有实现，没有把未知代码视作已支持。
+
+实现指纹为 `SHA256("litetray-execution-equivalence-v1" + NUL + normalized_file)`。规范化只清除以下内容：
+
+- COFF 时间戳、PE 校验和。
+- 调试目录的时间戳；唯一 RSDS 的 GUID/age（保留 PDB 名称）；结构明确的 REPRO 构建摘要和 PDB SHA1/SHA256 校验和。
+- `RT_VERSION` 中 `VS_FIXEDFILEINFO` 的文件/产品版本四个数值，以及格式正确的 `FileVersion`、`ProductVersion` 字符串内容。长度、键名、树形结构、文件类型、flags、其他字符串等全部保留。
+- 非映射、位于所有节区之后且文件末尾的有效 `WIN_CERTIFICATE` 记录，并将 Security Directory 的文件偏移和长度清零。证书结构、对齐和填充均检查；未知尾部数据不接受。
+
+其他文件字节全部参与指纹：完整节表、RVA、原始地址、大小、权限、入口点、代码、只读/可写数据、虚表、导入、异常展开、重定位、CFG、其他加载目录和资源。尤其不能清除整个 `.rdata`、`.rsrc` 或调试目录，XAML 模板、POGO 函数范围和扩展 DLL 特征保持原值。元数据不能位于可执行/可写节区，不能与其他加载目录、资源、目录结构或彼此重叠。
+
+实现、字段、RVA、模板或代码发生变化时，该层会拒绝复用。下一步仍需离线符号及指令数据流分析，并在相应系统验证运行、交互和恢复。此机制不承诺任意累计更新自动兼容。
+
+## 组合规则
+
+`assemble` 将已识别模块按接口契约组合：
+
+- `HostLayout` 与 `host_child_offset` 来自 taskbar 实现；返回的 `HostLayout.module` 使用当前模块身份。
+- `child_source_offset`、子宿主/工厂虚表来自 shell 实现。
+- 托盘 ABI 和入口独立来自 tray 实现，可缺省。托盘未识别时不应连带否定已识别的时钟路径。
+- 当前只有明确实现的 `XamlExplorerHostChildV1` / `SystemTrayFrameV1` 契约可以组合；运行时还必须通过子宿主类型、QI、root、source HWND 与任务栏归属检查。
+- 组合 ID 由当前模块 SHA-256 生成，只标识本次组合。它不是历史实测 profile ID，也不将混合组合或等价图像标记为完整实测。
+
+## 基线与复核
+
+`profiles/execution-fingerprints.json` 的每项绑定完整参考文件 SHA-256、角色和证据 profile ID。当前 18 个指纹来自实际保存的 Microsoft PE 文件，覆盖 22H2、23H2、LTSC 2024、两组 25H2 和 26300.9818 的三模块。26300.9711 更新前的原始 PE 未保留，其三项明确为 `null`，继续仅接受完整图像匹配，不能从 PDB 或 JSON 虚构指纹。
+
+生成器复用生产解析代码，不另写一个近似算法，也不下载 PDB、不访问 Explorer、不执行输入 DLL。向它传入一个或多个含 `System32` / `SystemApps` 的 Windows 模块根目录：
+
+```powershell
+cargo run -p litetray-adapter-protocol --example execution_fingerprints -- --exact-only=windows11-26300.9711-x64 <Windows模块根目录> ...
+cargo run -p litetray-adapter-protocol --example execution_fingerprints -- --verify --exact-only=windows11-26300.9711-x64 <Windows模块根目录> ...
+```
+
+第一次输出可审核的清单 JSON；`--verify` 用嵌入清单重跑完整匹配、修改时间戳后的未知身份匹配和每一个文件节的变异拒绝检查。2026-11-09 复核结果：18 个真实图像完整匹配；18 个仅元数据变化的未知身份被正确识别且返回当前身份；134 个节内容变异全部拒绝。另有单元测试检查代码/数据/PE 结构、调试区伪装、证书与未知 overlay、资源别名、XAML/资源内容变化、版本号范围、模块字段归属和新身份传递。这些检查验证静态识别边界，不属于其他 Windows 系统上的运行或交互实测。
+
+## 函数用途与模板差异
+
+同一个 DLL 可以同时提供不同用途和所有权的函数。离线分析现在分别输出 `screen_rect_traits`、`geometry_capabilities`；双入口时不设置单个默认 `abi_candidate`。每项能力单独记录已核验或尚待适配，不会因未使用的另一种 helper 不匹配而否定已证实的能力。
+
+| 模块样本 | 三参数传值入口用途 | 四参数借用入口 | 当前生产选择 |
+| --- | --- | --- | --- |
+| 22H2 22621.1702 / 23H2 22631.2861 | 未发现该签名 | 拖放命中测试，完整模板与四调用点通过 | 借用拖放入口 |
+| 普通24H2 BASE / LTSC 26100.1742 | Copilot按钮，完整106指令模板通过 | 拖放命中测试，新114指令完整模板与四调用点通过 | LTSC使用借用拖放入口；普通24H2仍为静态候选 |
+| 25H2 26200.8037 / 8457 | 通知区域图标/折叠区边界，参数与清理核验通过 | 115指令形状，尚未完成完整模板审核 | 传值通知区域入口 |
+| 26300.9818 | 通知区域边界，参数与清理核验通过 | 105指令形状，尚未完成完整模板审核 | 传值通知区域入口 |
+| 26300.9711 | 未保留原PE，不能完成新用途审查 | 不作新结论 | 保留历史实现，明确用途未分类 |
+
+生产 `tray_geometry` 明确区分 `notification_area_bounds`、`drag_drop_hit_testing` 和 `legacy_unclassified`，与调用约定配对校验。前三个托盘入口中共有的图标位置/边界方法仍独立核对。选择了拖放入口或通知区域入口不代表所有鼠标操作、拖放、菜单、悬停与多屏都已经验收。
+
+## 历史记录与当前识别
+
+`src/compatibility_historical_recipes.json` 保留提交 `03c7aeeeb25e5daa022d161fb32857815eb66f47` 的七组已测解析方案摘要。时钟记录绑定host/source模块和完整布局；依赖托盘的记录额外绑定托盘ABI、三个入口及模块。换了偏移、虚表、ABI或函数地址时，不能仅因DLL哈希不变就沿用原方案的验收。
+
+LTSC本轮换用借用拖放入口，兼容性页保留适用的旧包时钟记录；旧传值入口的模块/托盘准备记录不会被当前方案继承。该页的内置历史目录与本次发布验证记录应分别阅读。新增等价图像或跨参考组的模块组合也不会自动继承任何旧系统的完整实测。

@@ -3,7 +3,7 @@
 use crate::pe::{self, ImageIdentity};
 use litetray_adapter_protocol::{
     HostLayout, ModuleIdentity,
-    compatibility::{self, Module, Profile},
+    compatibility::{self, MatchBasis, Module, Profile, Recognized, Resolved, Role, TrayAbi},
 };
 use serde::Serialize;
 use std::{fs::File, io::Read, path::Path};
@@ -38,6 +38,13 @@ pub struct ModuleReport {
     pub status: ModuleStatus,
     pub image: Option<ImageIdentity>,
     pub reason: Option<String>,
+    pub recognition: Option<RecognitionReport>,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct RecognitionReport {
+    pub basis: MatchBasis,
+    pub evidence_profile: String,
+    pub implementation: String,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -76,9 +83,27 @@ pub struct Report {
     pub profile_id: Option<String>,
     pub profile_selection_reason: Option<String>,
     pub all_profile_images_matched: bool,
+    /// A composition of independently recognized modules, not test history.
+    pub implementation: Option<ImplementationReport>,
     pub modules: Vec<ModuleReport>,
     pub other_images: Vec<ModuleReport>,
     pub features: Vec<FeatureReport>,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct ImplementationReport {
+    pub id: String,
+    pub source_recipe: compatibility::SourceRecipe,
+    pub topology: compatibility::Topology,
+    pub host_child_offset: u32,
+    pub child_source_offset: u32,
+    pub tray_abi: Option<TrayAbi>,
+    pub tray_geometry: Option<compatibility::TrayGeometry>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Capabilities {
+    pub clocks: bool,
+    pub tray: bool,
+    pub notice: Option<String>,
 }
 impl Report {
     /// A disk match authorizes only the existing in-process preparation, which
@@ -97,6 +122,29 @@ impl Report {
             }
         }
         Ok(())
+    }
+    /// Preserve saved preferences, but allow the independently checked clock
+    /// to run if only the requested tray implementation is unavailable.
+    pub fn negotiate(&self, clocks: bool, tray: bool) -> Result<Capabilities, String> {
+        self.require(clocks, false)?;
+        let mut enabled = Capabilities {
+            clocks,
+            tray,
+            notice: None,
+        };
+        if tray && let Err(error) = self.require(false, true) {
+            if !clocks {
+                return Err(error);
+            }
+            enabled.tray = false;
+            enabled.notice = Some(format!(
+                "时钟已启用；托盘复制暂未启用。{error}。保存的托盘设置保持不变，可在兼容性页查看详情。"
+            ));
+        }
+        if !clocks && !tray {
+            return Err("没有请求启用的任务栏功能".into());
+        }
+        Ok(enabled)
     }
 }
 fn identity(image: &ImageIdentity) -> ModuleIdentity {
@@ -163,32 +211,58 @@ struct DiskImage {
     bytes: Vec<u8>,
 }
 impl DiskImage {
-    fn verify(
+    fn recognize<'a>(
         mut self,
-        expected: Option<(&Profile, &Module)>,
-        selection_reason: Option<&str>,
-    ) -> ModuleReport {
+        role: Role,
+        select: &impl Fn(Role, &str, &[u8]) -> Result<Recognized<'a>, String>,
+    ) -> (ModuleReport, Option<Recognized<'a>>) {
         if let Some(image) = &self.report.image {
-            if let Some((profile, expected)) = expected {
-                if expected.matches(&image.sha256, &identity(image)) {
-                    match verify_layout(profile, expected, &self.bytes) {
-                        Ok(()) => self.report.status = ModuleStatus::Matched,
+            match select(role, &self.report.relative_path, &self.bytes) {
+                Ok(recognized) => {
+                    if !recognized.module.matches(&image.sha256, &identity(image)) {
+                        self.report.status = ModuleStatus::InvalidImage;
+                        self.report.reason =
+                            Some("模块识别结果未绑定本次读取的完整身份和哈希".into());
+                        return (self.report, None);
+                    }
+                    match verify_layout(recognized.evidence, &recognized.module, &self.bytes) {
+                        Ok(()) => {
+                            self.report.status = ModuleStatus::Matched;
+                            self.report.recognition = Some(RecognitionReport {
+                                basis: recognized.basis,
+                                evidence_profile: recognized.evidence.id.clone(),
+                                implementation: match role {
+                                    Role::Taskbar => format!(
+                                        "XAML 宿主；元素偏移 {:#x}，子宿主偏移 {:#x}",
+                                        recognized.evidence.host.element_offset,
+                                        recognized.evidence.source.host_child_offset
+                                    ),
+                                    Role::Shell => format!(
+                                        "XamlExplorerHostChild；source 偏移 {:#x}",
+                                        recognized.evidence.source.child_source_offset
+                                    ),
+                                    Role::Tray => match recognized.evidence.tray_abi {
+                                        TrayAbi::SystemTrayCoordinatesX64V1 => {
+                                            "托盘坐标：三参数、传值对象".into()
+                                        }
+                                        TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1 => {
+                                            "托盘坐标：四参数、借用对象".into()
+                                        }
+                                    },
+                                },
+                            });
+                            return (self.report, Some(recognized));
+                        }
                         Err(error) => {
                             self.report.status = ModuleStatus::InvalidImage;
                             self.report.reason = Some(error);
                         }
                     }
-                } else {
-                    self.report.reason = Some(format!(
-                        "模块身份或 SHA-256 与所选兼容资料 {} 不匹配",
-                        profile.id
-                    ));
                 }
-            } else {
-                self.report.reason = selection_reason.map(str::to_owned);
+                Err(error) => self.report.reason = Some(error),
             }
         }
-        self.report
+        (self.report, None)
     }
 }
 fn inspect(root: &Path, relative: &str) -> DiskImage {
@@ -198,6 +272,7 @@ fn inspect(root: &Path, relative: &str) -> DiskImage {
         status: ModuleStatus::Missing,
         image: None,
         reason: None,
+        recognition: None,
     };
     let bytes = match bounded_read(&root.join(relative)) {
         Ok(bytes) => bytes,
@@ -287,18 +362,18 @@ fn features(modules: &[ModuleReport]) -> Vec<FeatureReport> {
     })
     .collect()
 }
-struct Inventory<'a> {
+struct Inventory {
     report: Report,
-    profile: Option<&'a Profile>,
+    resolved: Option<Resolved>,
 }
-impl Inventory<'_> {
+impl Inventory {
     fn host_layout(&self, clocks: bool, tray: bool) -> Result<HostLayout, String> {
         self.report.require(clocks, tray)?;
-        let profile = self.profile.ok_or_else(|| {
+        let resolved = self.resolved.as_ref().ok_or_else(|| {
             self.report
                 .profile_selection_reason
                 .clone()
-                .unwrap_or_else(|| "没有与任务栏磁盘模块匹配的兼容资料".into())
+                .unwrap_or_else(|| "尚未识别所需任务栏模块的实现特征".into())
         })?;
         if self
             .report
@@ -308,57 +383,97 @@ impl Inventory<'_> {
         {
             return Err("taskbar.dll 的磁盘布局校验未通过".into());
         }
-        Ok(profile.host.clone())
+        Ok(resolved.host.clone())
     }
 }
 fn collect_selected<'a>(
     system_root: &Path,
     os_build: Option<u32>,
-    select: impl FnOnce(&ModuleIdentity) -> Result<&'a Profile, String>,
-) -> Inventory<'a> {
-    // Select and validate from the same bytes. A later read must never switch
-    // taskbar versions while keeping another profile's shell or tray layout.
-    let taskbar = inspect(system_root, MODULE_PATHS[0]);
-    let selected = taskbar
-        .report
-        .image
-        .as_ref()
-        .ok_or_else(|| "无法取得 taskbar.dll 的磁盘身份，未选择兼容资料".into())
-        .and_then(|image| {
-            let module_identity = identity(image);
-            let profile = select(&module_identity)?;
-            if profile.taskbar.matches(&image.sha256, &module_identity) {
-                Ok(profile)
-            } else {
-                Err("taskbar.dll 的身份或 SHA-256 与内置兼容资料不匹配".into())
-            }
-        });
-    let (profile, selection_reason) = match selected {
-        Ok(profile) => (Some(profile), None),
-        Err(error) => (None, Some(error)),
-    };
-    let mut modules = vec![taskbar.verify(
-        profile.map(|profile| (profile, &profile.taskbar)),
-        selection_reason.as_deref(),
-    )];
-    for (index, fallback_path) in MODULE_PATHS.iter().enumerate().skip(1) {
-        let expected = profile.map(|profile| (profile, profile.modules()[index]));
-        let path = expected.map_or(*fallback_path, |(_, module)| module.relative_path.as_str());
-        modules.push(inspect(system_root, path).verify(expected, selection_reason.as_deref()));
+    select: impl Fn(Role, &str, &[u8]) -> Result<Recognized<'a>, String>,
+) -> Inventory {
+    // Every role is recognized from its own bytes. A template contributes only
+    // the fields owned by that module; OS labels and registry order play no part.
+    let (taskbar_report, taskbar) =
+        inspect(system_root, MODULE_PATHS[0]).recognize(Role::Taskbar, &select);
+    let (shell_report, shell) =
+        inspect(system_root, MODULE_PATHS[1]).recognize(Role::Shell, &select);
+    let mut trays: Vec<_> = [
+        MODULE_PATHS[2],
+        "SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy/Taskbar.View.dll",
+    ]
+    .into_iter()
+    .map(|path| inspect(system_root, path).recognize(Role::Tray, &select))
+    .collect();
+    let matched_trays: Vec<_> = trays
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, recognized))| recognized.is_some())
+        .map(|(index, _)| index)
+        .collect();
+    let tray_index = matched_trays.first().copied().unwrap_or_else(|| {
+        trays
+            .iter()
+            .position(|(report, _)| report.status != ModuleStatus::Missing)
+            .unwrap_or(0)
+    });
+    let (mut tray_report, mut tray) = trays.remove(tray_index);
+    if matched_trays.len() > 1 {
+        tray_report.status = ModuleStatus::InvalidImage;
+        tray_report.reason = Some("同时存在多种可识别的托盘模块，无法从磁盘确定实际使用者".into());
+        tray_report.recognition = None;
+        tray = None;
     }
-    // Inventory known alternate locations without loading them or guessing ABI.
+    let mut modules = vec![taskbar_report, shell_report, tray_report];
+    let (resolved, selection_reason) = match (&taskbar, &shell) {
+        (Some(taskbar), Some(shell)) => {
+            match compatibility::assemble(taskbar, shell, tray.as_ref()) {
+                Ok(plan) => (Some(plan), None),
+                Err(error) => {
+                    // A recognized image alone cannot authorize a mismatched
+                    // interface contract between modules.
+                    modules[1].status = ModuleStatus::InvalidImage;
+                    modules[1].reason = Some(error.clone());
+                    (None, Some(error))
+                }
+            }
+        }
+        _ => (
+            None,
+            Some("时钟需要同时识别任务栏宿主与 XAML 容器；请查看各模块的检查结果".into()),
+        ),
+    };
+    // Exact-image history is retained only for the original complete set.
+    let profile_id = match (&taskbar, &shell, &tray) {
+        (Some(host), Some(shell), Some(tray))
+            if [host, shell, tray].iter().all(|item| {
+                item.basis == MatchBasis::ExactImage && item.evidence.id == host.evidence.id
+            }) =>
+        {
+            Some(host.evidence.id.clone())
+        }
+        _ => None,
+    };
+    let implementation = resolved.as_ref().map(|plan| ImplementationReport {
+        id: plan.id.clone(),
+        source_recipe: plan.source.recipe,
+        topology: plan.topology,
+        host_child_offset: plan.source.host_child_offset,
+        child_source_offset: plan.source.child_source_offset,
+        tray_abi: plan.tray.as_ref().map(|tray| tray.abi),
+        tray_geometry: plan.tray.as_ref().map(|tray| tray.geometry),
+    });
     let other_images = [
         "explorer.exe",
-        "SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy/Taskbar.View.dll",
         "SystemApps/MicrosoftWindows.Client.CBS_cw5n1h2txyewy/Taskbar.View.dll",
         "SystemApps/MicrosoftWindows.Client.CBS_cw5n1h2txyewy/ExplorerExtensions.dll",
     ]
     .into_iter()
     .map(|path| inspect(system_root, path).report)
+    .chain(trays.into_iter().map(|(report, _)| report))
     .filter(|m| m.status != ModuleStatus::Missing)
     .collect();
     let report = Report {
-        schema: 1,
+        schema: 2,
         scope: "disk_only",
         os_build,
         collector_architecture: std::env::consts::ARCH,
@@ -366,23 +481,24 @@ fn collect_selected<'a>(
         network_accessed: false,
         loaded_modules_checked: false,
         runtime_topology_checked: false,
-        profile_id: profile.map(|profile| profile.id.clone()),
-        profile_selection_reason: selection_reason,
-        all_profile_images_matched: profile.is_some()
+        all_profile_images_matched: profile_id.is_some()
             && modules.iter().all(|m| m.status == ModuleStatus::Matched),
+        profile_id,
+        profile_selection_reason: selection_reason,
+        implementation,
         features: features(&modules),
         modules,
         other_images,
     };
-    Inventory { report, profile }
+    Inventory { report, resolved }
 }
-fn inventory(system_root: &Path, os_build: Option<u32>) -> Result<Inventory<'static>, String> {
+fn inventory(system_root: &Path, os_build: Option<u32>) -> Result<Inventory, String> {
     // A malformed built-in registry is a collector error, not an unsupported OS.
     compatibility::profiles()?;
     Ok(collect_selected(
         system_root,
         os_build,
-        compatibility::profile_for_taskbar,
+        compatibility::recognize,
     ))
 }
 pub fn collect(system_root: &Path, os_build: Option<u32>) -> Result<Report, String> {
@@ -390,6 +506,18 @@ pub fn collect(system_root: &Path, os_build: Option<u32>) -> Result<Report, Stri
 }
 pub fn preflight(system_root: &Path, clocks: bool, tray: bool) -> Result<HostLayout, String> {
     inventory(system_root, None)?.host_layout(clocks, tray)
+}
+pub fn negotiate(
+    system_root: &Path,
+    clocks: bool,
+    tray: bool,
+) -> Result<(HostLayout, Capabilities), String> {
+    let inventory = inventory(system_root, None)?;
+    let enabled = inventory.report.negotiate(clocks, tray)?;
+    Ok((
+        inventory.host_layout(enabled.clocks, enabled.tray)?,
+        enabled,
+    ))
 }
 
 #[cfg(test)]
@@ -409,6 +537,7 @@ mod tests {
                 status: ModuleStatus::Matched,
                 image: None,
                 reason: None,
+                recognition: None,
             })
             .collect()
     }

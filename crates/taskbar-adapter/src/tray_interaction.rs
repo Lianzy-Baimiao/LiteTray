@@ -778,23 +778,23 @@ unsafe extern "system" fn flyout_options(
     unsafe { show(&FLYOUT_OPTIONS_ORIGINAL, this, target, Some(options)) }
 }
 pub(crate) fn install(
-    profile: &'static litetray_adapter_protocol::compatibility::Profile,
+    tray: &litetray_adapter_protocol::compatibility::ResolvedTray,
 ) -> Result<(), String> {
     // Every new session must still match the same disk and loaded image.
     // Only the first installation checks unpatched function prefixes below.
     unsafe {
-        crate::compatibility::loaded(&profile.tray)?;
+        crate::compatibility::loaded(&tray.module)?;
     }
-    static INSTALLED: OnceLock<Result<&'static str, String>> = OnceLock::new();
+    static INSTALLED: OnceLock<Result<String, String>> = OnceLock::new();
     let installed = INSTALLED.get_or_init(|| unsafe {
-        let addresses = crate::tray_symbols::resolve(profile)?;
+        let addresses = crate::tray_symbols::resolve(tray)?;
         let user32 = GetModuleHandleW(crate::wide("user32.dll").as_ptr());
         let dispatch_address = GetProcAddress(user32, c"DispatchMessageW".as_ptr().cast()).ok_or("DispatchMessageW 不可用")? as usize;
         let mut entries = vec![
             Entry { target: dispatch_address, detour: dispatch as *const () as usize, original: &DISPATCH_ORIGINAL, arguments: 1 },
             Entry { target: addresses[0], detour: invocation as *const () as usize, original: &POINT_ORIGINAL, arguments: 3 },
             Entry { target: addresses[1], detour: icon_bounds as *const () as usize, original: &BOUNDS_ORIGINAL, arguments: 3 },
-            screen_rect_entry(profile.tray_abi, addresses[2]),
+            screen_rect_entry(tray.abi, addresses[2]),
             Entry { target: GetProcAddress(user32, c"SetWindowPos".as_ptr().cast()).ok_or("SetWindowPos 不可用")? as usize, detour: position as *const () as usize, original: &POSITION_ORIGINAL, arguments: 7 },
         ];
         for (markup, regular, options, old, old_options) in [
@@ -808,9 +808,9 @@ pub(crate) fn install(
             entries.push(Entry { target: base5.table::<IFlyoutBase5_Vtbl>().ShowAt as usize, detour: options, original: old_options, arguments: 3 });
         }
             hooks::install(&entries, 5)?;
-            Ok(profile.id.as_str())
+            Ok(tray.module.sha256.clone())
     }).as_ref().map_err(Clone::clone)?;
-    if *installed != profile.id {
+    if *installed != tray.module.sha256 {
         return Err("托盘钩子已绑定其他兼容资料，拒绝混用布局".into());
     }
     Ok(())

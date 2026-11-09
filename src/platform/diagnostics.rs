@@ -52,7 +52,7 @@ pub fn collect() -> Diagnostics {
             target_plan_error: taskbar_discovery_error.clone(),
             taskbar_discovery_error,
             taskbars,
-            adapter_status: "支持范围由精确模块资料和运行时检查决定；磁盘匹配不代表接管或交互已通过。各项实测范围见兼容性页签，此诊断不代表当前连接状态。".into(),
+            adapter_status: "按任务栏宿主、XAML 容器和托盘各自的实现特征选择功能；启用时核验实际模块与控件。磁盘识别不代表交互已验收，各项实测范围见兼容性页签。".into(),
         }
     }
 }

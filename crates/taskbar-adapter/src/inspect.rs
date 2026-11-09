@@ -10,15 +10,12 @@ use windows_sys::Win32::{
 };
 
 /// All entry addresses are validated before any undocumented function is called.
-pub(crate) unsafe fn validate_loaded(layout: &HostLayout) -> Result<usize, String> {
+pub(crate) unsafe fn validate_resolved(
+    plan: &litetray_adapter_protocol::compatibility::Resolved,
+) -> Result<usize, String> {
     unsafe {
-        let profile =
-            litetray_adapter_protocol::compatibility::profile_for_taskbar(&layout.module)?;
-        if layout != &profile.host {
-            return Err("宿主布局与内置兼容资料不一致".into());
-        }
-        let module = crate::compatibility::loaded(&profile.taskbar)?;
-        for symbol in &layout.symbols {
+        let module = crate::compatibility::loaded(&plan.taskbar)?;
+        for symbol in &plan.host.symbols {
             let address = module
                 .checked_add(symbol.rva as usize)
                 .ok_or("模块地址溢出")?;
@@ -196,21 +193,20 @@ pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
             error: None,
             tray_input: Some(crate::tray_interaction::diagnostics()),
         };
-        let module = match validate_loaded(layout) {
+        let implementation = match crate::compatibility::resolve(layout, false) {
+            Ok(plan) => plan,
+            Err(error) => {
+                response.error = Some(error);
+                return response;
+            }
+        };
+        let module = match validate_resolved(&implementation) {
             Ok(module) => module,
             Err(error) => {
                 response.error = Some(error);
                 return response;
             }
         };
-        let profile =
-            match litetray_adapter_protocol::compatibility::profile_for_taskbar(&layout.module) {
-                Ok(profile) => profile,
-                Err(error) => {
-                    response.error = Some(error);
-                    return response;
-                }
-            };
         let windows = match crate::taskbar_windows::current_thread() {
             Ok(windows) => windows,
             Err(error) => {
@@ -240,7 +236,7 @@ pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
             };
             match content(hwnd, secondary, module, layout).and_then(|root| {
                 report.topology = Some(
-                    match crate::discovery::View::discover(&root, profile.topology) {
+                    match crate::discovery::View::discover(&root, implementation.topology) {
                         Ok(view) => view.report,
                         Err(error) => litetray_adapter_protocol::topology::Report {
                             elements: vec![],
@@ -249,9 +245,10 @@ pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
                         },
                     },
                 );
-                let binding = crate::taskbar_source::resolve(hwnd, layout).and_then(|source| {
-                    crate::island::Binding::capture(hwnd, &source.source, &root)
-                });
+                let binding =
+                    crate::taskbar_source::resolve(hwnd, &implementation).and_then(|source| {
+                        crate::island::Binding::capture(hwnd, &source.source, &root)
+                    });
                 if let Err(error) = &binding {
                     report.geometry_error = Some(error.clone());
                 }

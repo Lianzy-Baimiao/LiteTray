@@ -78,13 +78,14 @@ unsafe fn prepare(request: &Prepare) -> Result<Reply, String> {
                 return Err("任务栏屏幕已变化".into());
             }
         }
+        let implementation = crate::compatibility::resolve(&request.layout, request.mirror_icons)?;
         let sources = routes
             .iter()
-            .map(|r| crate::taskbar_source::resolve(r.window as HWND, &request.layout))
+            .map(|r| crate::taskbar_source::resolve(r.window as HWND, &implementation))
             .collect::<Result<Vec<_>, _>>()?;
         let views = sources
             .iter()
-            .map(|s| View::discover(&s.root, s.profile.topology))
+            .map(|s| View::discover(&s.root, implementation.topology))
             .collect::<Result<Vec<_>, _>>()?;
         let bound = routes
             .iter()
@@ -105,10 +106,9 @@ unsafe fn prepare(request: &Prepare) -> Result<Reply, String> {
         }
         let receiver = request.owner.receiver as HWND;
         let interaction = if request.mirror_icons {
-            let profile = litetray_adapter_protocol::compatibility::profile_for_taskbar(
-                &request.layout.module,
+            crate::tray_interaction::install(
+                implementation.tray.as_ref().ok_or("托盘实现未准备")?,
             )?;
-            crate::tray_interaction::install(profile)?;
             Some(crate::tray_interaction::Runtime::new(
                 bound
                     .iter()

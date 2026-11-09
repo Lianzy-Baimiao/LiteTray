@@ -320,5 +320,6 @@
         86
       ]
     }
-  ]
+  ],
+  "tray_geometry": "notification_area_bounds"
 }

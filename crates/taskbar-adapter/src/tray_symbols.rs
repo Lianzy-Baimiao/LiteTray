@@ -1,15 +1,15 @@
 //! Exact-build SystemTray entry points, resolved from the matching Microsoft
 //! PDB offline. Reject changed images and pre-existing function patches.
-use litetray_adapter_protocol::compatibility::{Profile, TrayAbi};
-pub(crate) fn resolve(profile: &Profile) -> Result<[usize; 3], String> {
+use litetray_adapter_protocol::compatibility::{ResolvedTray, TrayAbi};
+pub(crate) fn resolve(tray: &ResolvedTray) -> Result<[usize; 3], String> {
     unsafe {
-        match profile.tray_abi {
+        match tray.abi {
             TrayAbi::SystemTrayCoordinatesX64V1
             | TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1 => {}
         }
-        let module = crate::compatibility::loaded(&profile.tray)?;
+        let module = crate::compatibility::loaded(&tray.module)?;
         let mut addresses = [0; 3];
-        for (index, entry) in profile.tray_entries.iter().enumerate() {
+        for (index, entry) in tray.entries.iter().enumerate() {
             let address = module
                 .checked_add(entry.rva as usize)
                 .ok_or("托盘入口地址溢出")?;

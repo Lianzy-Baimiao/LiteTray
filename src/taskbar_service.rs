@@ -13,6 +13,10 @@ use std::{
 };
 
 pub trait Session {
+    /// A live capability limitation, e.g. clock running while tray is pending.
+    fn notice(&self) -> Option<&str> {
+        None
+    }
     fn update(&self, frame: &Frame) -> Result<(), String>;
     /// Read-only comparison with the display/taskbar snapshot used at connect.
     /// An inconclusive observation must return false.
@@ -79,7 +83,7 @@ impl Snapshot {
             Status::Busy => "正在处理连接…",
         };
         match &self.reason {
-            Some(reason) if !matches!(self.status, Status::Running | Status::Disabled) => {
+            Some(reason) if self.status != Status::Disabled => {
                 format!("任务栏时钟：{label}\r\n{reason}")
             }
             _ => format!("任务栏时钟：{label}"),
@@ -259,7 +263,15 @@ impl<B: Backend> Service<B> {
         Snapshot {
             enabled: driver.enabled,
             status,
-            reason: driver.recovery.reason().map(str::to_owned),
+            reason: if status == Status::Running {
+                driver
+                    .connection
+                    .as_ref()
+                    .and_then(|session| session.notice())
+                    .map(str::to_owned)
+            } else {
+                driver.recovery.reason().map(str::to_owned)
+            },
         }
     }
     pub fn tick_millis(&self, wall_time: DateTime<Local>) -> u32 {
@@ -410,6 +422,7 @@ mod tests {
         fail_restore: Cell<bool>,
         environment_changed: Cell<bool>,
         environment_checks: Cell<usize>,
+        notice: RefCell<Option<String>>,
     }
     struct Fake(Rc<NativeState>);
     struct Lease(Rc<NativeState>);
@@ -437,6 +450,15 @@ mod tests {
         }
     }
     impl Session for Lease {
+        fn notice(&self) -> Option<&str> {
+            // A fixture flag is sufficient; the user-facing reason originates
+            // in real negotiation, tested through compatibility::Report.
+            if self.0.notice.borrow().is_some() {
+                Some("时钟已启用；托盘复制暂未启用")
+            } else {
+                None
+            }
+        }
         fn environment_matches(&self) -> bool {
             self.0
                 .environment_checks
@@ -487,6 +509,26 @@ mod tests {
         complete(native, Ok(()));
         service.tick(1, time(0)).unwrap();
         assert_eq!(service.snapshot().status, Status::Running);
+    }
+    #[test]
+    fn running_session_exposes_partial_capabilities_without_restarting_or_changing_preferences() {
+        let (service, native, mut config) = fixture();
+        config.tray.enabled = true;
+        config.tray.show_icons = true;
+        service.configure(config.clone(), 0).unwrap();
+        *native.notice.borrow_mut() = Some("partial capabilities".into());
+        connect(&service, &native);
+        let snapshot = service.snapshot();
+        assert_eq!(snapshot.status, Status::Running);
+        assert!(snapshot.text().contains("托盘复制暂未启用"));
+        assert_eq!(
+            serde_json::to_value(&service.driver.borrow().as_ref().unwrap().config).unwrap(),
+            serde_json::to_value(config).unwrap()
+        );
+        service.tick(2000, time(2)).unwrap();
+        assert_eq!(native.connects.get(), 1);
+        native.notice.borrow_mut().take();
+        assert!(service.snapshot().reason.is_none());
     }
     #[test]
     fn tray_can_stay_enabled_when_clock_is_disabled() {

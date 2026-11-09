@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub mod activation;
 pub mod clock;
 pub mod compatibility;
+pub mod pe;
 pub mod popup;
 pub mod routing;
 pub mod taskbar;

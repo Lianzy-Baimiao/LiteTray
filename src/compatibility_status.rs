@@ -44,6 +44,7 @@ pub struct ImplementationFamily {
     pub source_recipe: SourceRecipe,
     pub topology: Topology,
     pub tray_abi: TrayAbi,
+    pub tray_geometry: litetray_adapter_protocol::compatibility::TrayGeometry,
     pub description: &'static str,
 }
 
@@ -136,73 +137,98 @@ enum RecordedProfile {
     VirtualMachine23H22861,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoricalRecipe {
+    profile_id: String,
+    host_source_digest: String,
+    tray_digest: String,
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoricalRecipes {
+    schema: u32,
+    algorithm: String,
+    source_commit: String,
+    entries: Vec<HistoricalRecipe>,
+}
+fn historical_recipes() -> Result<&'static [HistoricalRecipe], String> {
+    static RECIPES: std::sync::OnceLock<Result<HistoricalRecipes, String>> =
+        std::sync::OnceLock::new();
+    RECIPES
+        .get_or_init(|| {
+            let recipes: HistoricalRecipes =
+                serde_json::from_str(include_str!("compatibility_historical_recipes.json"))
+                    .map_err(|error| error.to_string())?;
+            let hex = |value: &str, length| {
+                value.len() == length
+                    && value
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            };
+            let mut ids = std::collections::BTreeSet::new();
+            if recipes.schema != 1
+                || recipes.algorithm != "litetray-historical-recipe-v1"
+                || !hex(&recipes.source_commit, 40)
+                || recipes.entries.len() != 7
+                || recipes.entries.iter().any(|entry| {
+                    entry.profile_id.is_empty()
+                        || !ids.insert(&entry.profile_id)
+                        || !hex(&entry.host_source_digest, 64)
+                        || !hex(&entry.tray_digest, 64)
+                })
+            {
+                return Err("历史验收方案绑定无效".into());
+            }
+            Ok(recipes)
+        })
+        .as_ref()
+        .map(|recipes| recipes.entries.as_slice())
+        .map_err(Clone::clone)
+}
+fn recipe_digests(profile: &Profile) -> (String, String) {
+    use sha2::{Digest, Sha256};
+    let digest = |value: serde_json::Value| {
+        let mut digest = Sha256::new();
+        digest.update(b"litetray-historical-recipe-v1\0");
+        // serde_json's default maps sort keys recursively, matching the saved
+        // digest generator. Arrays retain ABI/entry order.
+        digest.update(serde_json::to_vec(&value).expect("finite recipe fields"));
+        format!("{:x}", digest.finalize())
+    };
+    (
+        digest(serde_json::json!({
+            "taskbar": profile.taskbar, "shell": profile.shell,
+            "host": profile.host, "source": profile.source, "topology": profile.topology,
+        })),
+        digest(serde_json::json!({
+            "tray": profile.tray, "tray_abi": profile.tray_abi, "tray_entries": profile.tray_entries,
+        })),
+    )
+}
 fn recorded_profile(profile: &Profile) -> Option<RecordedProfile> {
-    // Evidence is attached to exact images, not a reusable profile label.
-    // Replacing images under an existing ID must not inherit acceptance.
-    let hashes = profile.modules().map(|module| module.sha256.as_str());
-    match (profile.id.as_str(), hashes) {
-        (
-            "windows11-26300.9711-x64",
-            [
-                "ca1e335ac1fae5ff57519035302a2f365c4620d3a230f31f1231af7331760741",
-                "8ba440eded430a2417692a98b34695a12ad0ee000333dfed07e0c2723e17111c",
-                "c5f5260a2a56c4d7b0ee25978aa06c387b5ddffc57c5fe412be429d1289913ce",
-            ],
-        ) => Some(RecordedProfile::Previous9711),
-        (
-            "windows11-26300.9818-x64",
-            [
-                "a52f99f7be8cc1ee360025d1c06c1480a489b1d309bef230c05eb21a106ccf34",
-                "1894863a224d22bd8d3ef0e1ba382b4d3d3079e0fa9a1fdeee82f3ebace003b6",
-                "9772d19ec44f22ab2fcb976941d6ba6d1e66aabfb9d66367723bb9154ce7769f",
-            ],
-        ) => Some(RecordedProfile::Sandbox9818),
-        (
-            "windows11-26200.8457-x64",
-            [
-                "41326fffd57a2c6e08d1884a698bd9e9dfe90de0614de98733edaebacb5f5403",
-                "bc5e4daaace00d2eaff630f0f27078c29a0a56ae77b5cf51d3cfd5a766581f59",
-                "a920c97ace9f336855ebfea221101eb03739398c8b75ac6dcf28d82ed645aed5",
-            ],
-        ) => Some(RecordedProfile::VirtualMachine8457),
-        (
-            "windows11-26200.8037-x64",
-            [
-                "9312c39df6be503f54a3e9bee1a7b32a249375daba0e0a8d5941f941d6e09481",
-                "d56742e631ab34b07b0b908eddbdfd1811e8f0ad760641ba57125922f1ce1dc0",
-                "662d4cbfcbe2547ee2c66f68245acaaceb10c4280e6568b35c95aff295e20030",
-            ],
-        ) => Some(RecordedProfile::VirtualMachine8037),
-        (
-            "windows11-26100.1742-x64",
-            [
-                "b3be279bcb5a7fb63dbdc24cc1c55442a3965b68702a98fbdb6496d91cb40de5",
-                "3ef119746b60885b8923c49de95860caca0639aec1e2e7aa0a4113356b2cedb9",
-                "734e19a7e749f4112acc1e072ab35a11fdd3ffc04d8fcf54f603593758702d5b",
-            ],
-        ) => Some(RecordedProfile::VirtualMachineLtsc1742),
-        (
-            "windows11-22621.1702-x64",
-            [
-                "d39046dd6d75f693e770cfb14c50aebce7bfbe704d362735c42e0ab499b19472",
-                "14a91ac45b016694988f68f17eef84fab2d46196d11c1ee5bde95763ae008a03",
-                "1e5fe48b6418b4587544c4dbcbb526c8d0a1a9a2fbd81d2917b8c69e6b81d4be",
-            ],
-        ) => Some(RecordedProfile::VirtualMachine22H21702),
-        (
-            "windows11-22631.2861-x64",
-            [
-                "11f795ade465af0658e2168add113e48f439e412dc869fc0d5c5758fd3c339ef",
-                "2def9450cf84247eb31a802de9c72fbec58a2b1a7318ec200cb68ee8816393df",
-                "40b885be70c8ea0212bd2f995607753f86be8464588e2fb695be4d27ee364014",
-            ],
-        ) => Some(RecordedProfile::VirtualMachine23H22861),
+    // This only selects a historical record. Each scenario below separately
+    // verifies its complete historical module identities and implementation.
+    match profile.id.as_str() {
+        "windows11-26300.9711-x64" => Some(RecordedProfile::Previous9711),
+        "windows11-26300.9818-x64" => Some(RecordedProfile::Sandbox9818),
+        "windows11-26200.8457-x64" => Some(RecordedProfile::VirtualMachine8457),
+        "windows11-26200.8037-x64" => Some(RecordedProfile::VirtualMachine8037),
+        "windows11-26100.1742-x64" => Some(RecordedProfile::VirtualMachineLtsc1742),
+        "windows11-22621.1702-x64" => Some(RecordedProfile::VirtualMachine22H21702),
+        "windows11-22631.2861-x64" => Some(RecordedProfile::VirtualMachine23H22861),
         _ => None,
     }
 }
 
 fn evidence(profile: &Profile) -> Vec<ValidationEvidence> {
     let record = recorded_profile(profile);
+    let digests = recipe_digests(profile);
+    let previous = historical_recipes()
+        .ok()
+        .and_then(|entries| entries.iter().find(|entry| entry.profile_id == profile.id));
+    let host_matches = previous.is_some_and(|entry| entry.host_source_digest == digests.0);
+    let full_matches = host_matches && previous.is_some_and(|entry| entry.tray_digest == digests.1);
     SCENARIOS
         .into_iter()
         .map(|(scenario, scope)| {
@@ -443,6 +469,26 @@ fn evidence(profile: &Profile) -> Vec<ValidationEvidence> {
                 }
                 None => {}
             }
+            let recipe_matches = if scenario == ValidationScenario::ClockUpdateRestore {
+                host_matches
+            } else {
+                full_matches
+            };
+            if !recipe_matches {
+                evidence.status = ValidationStatus::NotRun;
+                evidence.recorded_on = None;
+                evidence.detail = "历史验收使用的模块、字段、虚表或坐标入口方案与当前实现不同；旧记录不能证明当前场景通过。";
+                // Keep the old document as context only when the old host is
+                // identical and just the tray implementation was replaced.
+                if !host_matches { evidence.reference = None; }
+                if host_matches && matches!(record, Some(RecordedProfile::VirtualMachineLtsc1742)) {
+                    evidence.detail = "旧包 LTSC 记录使用传值坐标入口；当前改为已核验的借用拖放入口，旧入口的准备/停止记录不适用于当前实现。当前场景待新包独立验收。";
+                }
+            } else if scenario == ValidationScenario::ClockUpdateRestore
+                && matches!(record, Some(RecordedProfile::VirtualMachineLtsc1742))
+            {
+                evidence.detail = "保留旧包单屏普通权限的时钟三次文字更新、宽度 240→320 及停止恢复记录；其 taskbar/source 模块与完整布局和当前相同。该记录只覆盖时钟，不验证当前已替换的借用托盘入口，也不是当前包复测结果。";
+            }
             evidence
         })
         .collect()
@@ -461,7 +507,8 @@ fn support_profile(profile: &Profile) -> SupportProfile {
             source_recipe: profile.source.recipe,
             topology: profile.topology,
             tray_abi: profile.tray_abi,
-            description: "同一任务栏实现可复用解析方案；每组模块仍须独立核验完整身份、哈希、布局和运行时归属。系统版本标签或构建区间不授权接管。",
+            tray_geometry: profile.tray_geometry,
+            description: "逐模块核验完整图像或严格实现等价；按宿主、XAML 容器与托盘的接口和调用用途组合。启用时独立核对当前模块和控件归属。",
         },
         modules: profile.modules().into_iter().cloned().collect(),
         evidence: evidence(profile),
@@ -498,13 +545,19 @@ mod tests {
                     _ => &mut profile.tray,
                 };
                 module.sha256 = "0".repeat(64);
-                assert!(
-                    evidence(&profile)
-                        .iter()
-                        .all(|item| item.status == ValidationStatus::NotRun
-                            && item.recorded_on.is_none()
-                            && item.reference.is_none())
-                );
+                assert!(evidence(&profile).iter().all(|item| {
+                    if module_index == 2 && item.scenario == ValidationScenario::ClockUpdateRestore
+                    {
+                        item.status
+                            == evidence(original)
+                                .into_iter()
+                                .find(|previous| previous.scenario == item.scenario)
+                                .unwrap()
+                                .status
+                    } else {
+                        item.status == ValidationStatus::NotRun && item.recorded_on.is_none()
+                    }
+                }));
             }
             for other in profiles()
                 .unwrap()
@@ -538,10 +591,139 @@ mod tests {
                     _ => mixed.tray = replacement.tray.clone(),
                 }
                 assert!(evidence(&mixed).iter().all(|item| {
-                    item.status == ValidationStatus::NotRun
-                        && item.recorded_on.is_none()
-                        && item.reference.is_none()
+                    if module_index == 2 && item.scenario == ValidationScenario::ClockUpdateRestore
+                    {
+                        item.status == ValidationStatus::Tested
+                    } else {
+                        item.status == ValidationStatus::NotRun && item.recorded_on.is_none()
+                    }
                 }));
+            }
+        }
+    }
+
+    #[test]
+    fn historical_recipe_digests_match_retained_profiles_except_replaced_ltsc_tray() {
+        let retained = historical_recipes().unwrap();
+        for profile in profiles().unwrap() {
+            let previous = retained
+                .iter()
+                .find(|entry| entry.profile_id == profile.id)
+                .unwrap();
+            let current = recipe_digests(profile);
+            assert_eq!(
+                current.0, previous.host_source_digest,
+                "{} host/source",
+                profile.id
+            );
+            assert_eq!(
+                current.1 == previous.tray_digest,
+                profile.id != "windows11-26100.1742-x64",
+                "{} tray",
+                profile.id
+            );
+        }
+        let ltsc = profiles()
+            .unwrap()
+            .iter()
+            .find(|profile| profile.id == "windows11-26100.1742-x64")
+            .unwrap();
+        let records = evidence(ltsc);
+        assert_eq!(
+            records
+                .iter()
+                .filter(|item| item.status == ValidationStatus::Tested)
+                .count(),
+            1
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|item| item.status == ValidationStatus::NotRun)
+                .count(),
+            6
+        );
+        assert_eq!(
+            records
+                .iter()
+                .find(|item| item.status == ValidationStatus::Tested)
+                .unwrap()
+                .scenario,
+            ValidationScenario::ClockUpdateRestore
+        );
+        for scenario in [
+            ValidationScenario::ModuleLayout,
+            ValidationScenario::TrayPrepareStop,
+        ] {
+            let item = records
+                .iter()
+                .find(|item| item.scenario == scenario)
+                .unwrap();
+            assert_eq!(item.reference, Some("docs/compatibility-next-versions.md"));
+            assert!(item.detail.contains("旧入口"));
+            assert!(item.recorded_on.is_none());
+        }
+    }
+
+    #[test]
+    fn changed_host_source_fields_invalidate_every_dependent_scenario() {
+        let original = profiles()
+            .unwrap()
+            .iter()
+            .find(|profile| profile.id == "windows11-26200.8037-x64")
+            .unwrap();
+        assert_eq!(
+            evidence(original)
+                .iter()
+                .filter(|item| item.status == ValidationStatus::Tested)
+                .count(),
+            3
+        );
+        for change in 0..5 {
+            let mut profile = original.clone();
+            match change {
+                0 => profile.host.element_offset += 8,
+                1 => profile.source.host_child_offset += 8,
+                2 => profile.source.child_source_offset += 8,
+                3 => profile.source.child_vtable_rva += 8,
+                _ => profile.host.symbols[2].prologue[0] ^= 1,
+            }
+            assert!(
+                evidence(&profile)
+                    .iter()
+                    .all(|item| item.status == ValidationStatus::NotRun
+                        && item.recorded_on.is_none()),
+                "change {change}"
+            );
+        }
+    }
+
+    #[test]
+    fn changed_tray_abi_and_entries_do_not_inherit_tray_acceptance() {
+        let original = profiles()
+            .unwrap()
+            .iter()
+            .find(|profile| profile.id == "windows11-26200.8037-x64")
+            .unwrap();
+        for change in 0..4 {
+            let mut profile = original.clone();
+            match change {
+                0 => profile.tray_abi = TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1,
+                1 => profile.tray_entries[0].rva += 8,
+                2 => profile.tray_entries[1].prologue[0] ^= 1,
+                _ => profile.tray_entries[2].rva += 8,
+            }
+            for item in evidence(&profile) {
+                assert_eq!(
+                    item.status,
+                    if item.scenario == ValidationScenario::ClockUpdateRestore {
+                        ValidationStatus::Tested
+                    } else {
+                        ValidationStatus::NotRun
+                    },
+                    "change {change} {:?}",
+                    item.scenario
+                );
             }
         }
     }

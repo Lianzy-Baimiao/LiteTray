@@ -3,6 +3,11 @@
 use crate::{HostLayout, ModuleIdentity};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
+mod recognition;
+pub use recognition::{
+    MatchBasis, Recognized, Resolved, ResolvedTray, Role, assemble, execution_fingerprint,
+    recognize,
+};
 
 const PROFILE_BYTES: &[&[u8]] = &[
     include_bytes!("../profiles/windows11-26300.9711-x64.json"),
@@ -63,12 +68,12 @@ impl Module {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceRecipe {
     XamlExplorerHostChildV1,
 }
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Topology {
     SystemTrayFrameV1,
@@ -81,6 +86,16 @@ pub enum TrayAbi {
     /// DragDropManager member retaining the caller's borrowed wrapper.
     /// Its opaque first register precedes the hidden RECT result pointer.
     SystemTrayDragDropBorrowedCoordinatesX64V1,
+}
+
+/// Reviewed consumers of the coordinate entry. Calling convention alone does
+/// not establish which interactions that entry participates in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrayGeometry {
+    NotificationAreaBounds,
+    DragDropHitTesting,
+    LegacyUnclassified,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,6 +140,7 @@ pub struct Profile {
     pub source: SourceLayout,
     pub topology: Topology,
     pub tray_abi: TrayAbi,
+    pub tray_geometry: TrayGeometry,
     pub tray_entries: [TrayEntry; 3],
 }
 impl Profile {
@@ -155,6 +171,18 @@ impl Profile {
         }
         for module in self.modules() {
             module.validate()?;
+        }
+        if !matches!(
+            (self.tray_abi, self.tray_geometry),
+            (
+                TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1,
+                TrayGeometry::DragDropHitTesting
+            ) | (
+                TrayAbi::SystemTrayCoordinatesX64V1,
+                TrayGeometry::NotificationAreaBounds | TrayGeometry::LegacyUnclassified
+            )
+        ) {
+            return Err("托盘坐标入口的 ABI 与已验证用途不一致".into());
         }
         if self.taskbar.name != "taskbar.dll"
             || self.taskbar.relative_path != "System32/taskbar.dll"
@@ -524,6 +552,12 @@ mod tests {
             ),
         ] {
             profile.tray_abi = abi;
+            profile.tray_geometry = match abi {
+                TrayAbi::SystemTrayCoordinatesX64V1 => TrayGeometry::NotificationAreaBounds,
+                TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1 => {
+                    TrayGeometry::DragDropHitTesting
+                }
+            };
             let mut encoded = serde_json::to_value(&profile).unwrap();
             assert_eq!(encoded["tray_abi"], name);
             assert_eq!(
@@ -542,6 +576,39 @@ mod tests {
             let mut encoded = serde_json::to_value(&profile).unwrap();
             encoded["tray_abi"] = serde_json::json!(unknown);
             assert!(Profile::decode(&serde_json::to_vec(&encoded).unwrap()).is_err());
+        }
+    }
+    #[test]
+    fn tray_geometry_requires_its_reviewed_calling_convention() {
+        let original = profiles().unwrap()[0].clone();
+        for abi in [
+            TrayAbi::SystemTrayCoordinatesX64V1,
+            TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1,
+        ] {
+            for geometry in [
+                TrayGeometry::NotificationAreaBounds,
+                TrayGeometry::DragDropHitTesting,
+                TrayGeometry::LegacyUnclassified,
+            ] {
+                let mut profile = original.clone();
+                profile.tray_abi = abi;
+                profile.tray_geometry = geometry;
+                let expected = matches!(
+                    (abi, geometry),
+                    (
+                        TrayAbi::SystemTrayCoordinatesX64V1,
+                        TrayGeometry::NotificationAreaBounds | TrayGeometry::LegacyUnclassified
+                    ) | (
+                        TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1,
+                        TrayGeometry::DragDropHitTesting
+                    )
+                );
+                assert_eq!(
+                    Profile::decode(&serde_json::to_vec(&profile).unwrap()).is_ok(),
+                    expected,
+                    "{abi:?}: {geometry:?}"
+                );
+            }
         }
     }
     #[test]

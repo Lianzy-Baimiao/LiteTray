@@ -85,6 +85,7 @@ $documents += @('crates/adapter-protocol/profiles/windows11-26200.8037-x64.json'
 $documents += @('docs/compatibility-next-versions.md','docs/windows11-next-versions-research.md')
 $documents += @('crates/adapter-protocol/profiles/windows11-22621.1702-x64.json','crates/adapter-protocol/profiles/windows11-22631.2861-x64.json','docs/compatibility-22h2-23h2.md')
 $documents += @('docs/windows11-commonality.md','docs/images/compatibility-5.14.0-zh-light.png','docs/images/compatibility-5.14.0-en-light.png')
+$documents += @('docs/module-recognition.md','crates/adapter-protocol/profiles/execution-fingerprints.json')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null

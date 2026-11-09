@@ -320,5 +320,6 @@
         41
       ]
     }
-  ]
+  ],
+  "tray_geometry": "drag_drop_hit_testing"
 }

@@ -14,10 +14,10 @@ from layouts import (GUARD_DISPATCH, GUARD_DISPATCH_FUNCTION, TRANSFORM_TO_VISUA
                      RAW_GET_CONTENT, RAW_IMPL_CONTENT, RAW_FACTORY_CREATE, GET_CONTENT, IMPL_CONTENT,
                      FACTORY_IMPLEMENTATION, BORROWED_TARGETS, BORROWED_CALLERS, BORROWED_SCREEN,
                      AS_FRAMEWORK_ELEMENT, DISPLAY_CURRENT_VIEW, TRANSFORM_BOUNDS,
-                     ICON_QUERY_INTERFACE, ICON_QUERY_INNER,
+                     ICON_QUERY_INTERFACE, ICON_QUERY_INNER, TRAY_SYMBOLS, tray_layout,
                      aligned_offset, anchored_symbol, anchored_source_functions, borrowed_caller_window,
                      borrowed_returned_caller_window, borrowed_named_cleanup_thunks, coordinate_member,
-                     find_sequence, implementation_source_field, match_borrowed_body, owned_cleanup,
+                     find_sequence, implementation_source_field, match_borrowed_body, owned_cleanup, owned_caller_window,
                      returned_wrapper_helper)
 
 
@@ -171,7 +171,9 @@ def borrowed_body_fixture(delegated=False):
                  "transform_bounds": TRANSFORM_BOUNDS, "destructor": UNKNOWN_DESTRUCTOR}
         slot = 0x573180
     addresses = {names[key]: value for key, value in zip(names, values)}
-    image = SimpleNamespace(exact=addresses.__getitem__, import_slot=lambda dll, name: slot)
+    image = Image.__new__(Image)
+    image.symbols = [{"decorated_name": name, "rva": rva} for name, rva in addresses.items()]
+    image.import_slot = lambda dll, name: slot
     return image, list(decoder.disasm(raw, start)), decoder
 
 
@@ -224,7 +226,274 @@ def borrowed_caller_fixture(returned=False, zero_register=False, clobber_zero=Fa
     return image, code, index, decoder
 
 
+def coexisting_tray_fixture():
+    """Literal owned/borrowed bodies and real caller windows in synthetic PE bounds."""
+    image = Image.__new__(Image)
+    image.role = "tray"
+    image.path = Path("Taskbar.View.dll")
+    bodies = {
+        0x48346c: bytes.fromhex("""
+            48895c240848897424205557415441564157488bec4881ec800000000f29742470488b05ac9b35004833c4488945e04d
+            8bf8488bf24c8bf1488955b8488365a0004c8d45a0488d55b0488bcee88fa9beff9048837da0007409488d4da0e8221c
+            b8ff488bcee88aaabeff0f57f6f20f5af0488bcee81faabeff0f57c9f20f5ac88365a0008365a400f30f1175a8f30f11
+            4dac4c8d45a0488d55c0488d4db0e8b12cd3ff498bcfff1590cc3a008bf8f30f2c4dc041bc60000000458bc48bd0ff15
+            887026008945d0f30f2c4dc4458bc48bd7ff15757026008945d4f30f2c4dc8458bc48bd7ff15627026008bd8f30f2c4d
+            c0458bc48bd7ff155070260003d8895dd8f30f2c4dcc458bc48bd7ff153b7026008bd8f30f2c4dc4458bc48bd7ff1529
+            70260003d8895ddc458d4c24a24c8d45d033d2498bcfff1518cc3a000f1045d0f3410f7f06488d4db0e80611b8ff9048
+            8bcee8fd10b8ff498bc6488b4de04833cce8ded5f3ff4c8d9c2480000000498b5b30498b73480f28742470498be3415f
+            415e415c5f5dc3
+        """),
+        0x6dcb0: bytes.fromhex("""
+            40555356574156488bec4883ec700f29742460488b0576f376004833c4488945e84d8bf1498bf8488bf2488d55b0498b
+            c8e80a5efbff90488d55d0488bc8e891e4f9ff904c8bc0488d55b8488bcfe849010000488bd8488bcfe8520200000f57
+            f6f20f5af0488bcfe8e70100000f57c9f20f5ac88365c0008365c400f30f1175c8f30f114dcc0f57c00f1145d8488b0b
+            488b010f1045c0660f7f45c04c8d45d8488d55c0488b4048ff1522cd670085c00f88d500000048837db800740a488d4d
+            b8e87a73f9ff9048837dd000740a488d4dd0e86973f9ff9048837db0007409488d4db0e85873f9ff488d4db0e85f68fb
+            ff90488bc8e8b267fbff0f57f6f20f5af048837db0007409488d4db0e82f73f9fff30f104dd8f30f59cef30f2cc18906
+            f30f1055dcf30f59d6f30f2cc2894604f30f1045e0f30f59c6f30f58c1f30f2cd0895608f30f104de4f30f59cef30f58
+            caf30f2cd189560c41b9020000004c8bc633d2498bceff15a4237c00488bc6488b4de84833cce8852d35000f28742460
+            4883c470415e5f5e5b5dc38bc8e87a0c0500cc
+        """),
+        0x4892a0: bytes.fromhex("""
+            488bc448895810488970184889782055488d68a14881ec00010000488b057e3d35004833c448894547488bd9e88b87ff
+            ff488bbbf8000000488b4b084885c9750748214c2420eb25488365ff00488b014c8d45ff488d15e5882700488b00ff15
+            7c172600488b45ff48894424204c8bc7488d542420488d4d07e84ea1ffff0f1008488b48088bc166490f7ec8412bc099
+            2bc2d1f8418d3c0049c1e82048c1e920412bc88bc1992bc2d1f8418d3400c3
+        """),
+        0x46c0: bytes.fromhex("""
+            4883ec28488339007405e8210a00004883c428c3
+        """),
+        0x6de4c: bytes.fromhex("""
+            405356574883ec50488b05e5f176004833c44889442440498bf0488bda4889542430488364243000488b094885c9747e
+            488364243800488b014c8d442438488d1527106900488b00ff15e6cb6700488b4c2438488bf948894c2420488b014c8d
+            442430488b16488b8010030000ff15c1cb670085c0782f4885ff740a488d4c2420e81e72f9ff488b4c243048890b488b
+            c3488b4c24404833cce8c62c35004883c4505f5e5bc38bc8e8c30b05009033ffeba4
+        """),
+        0x1b61c0: bytes.fromhex("""
+            40534883ec300f57c0488bda0f1102488b09410f10004c8bc2488d542420488b01f30f7f442420488b4048ff158f4853
+            0085c07809488bc34883c4305bc38bc8e8b788f0ffcc
+        """),
+        0x6c984: bytes.fromhex("""
+            48895c2418574883ec50488b05ab0677004833c44889442440488bda488bf94883c140488d542428e8b7e02f0090488b
+            5424284885d27456488b7f08488d4c2420e8ee090000904c8bcf4c8d442420488d542430e8d31200009048837c242000
+            740a488d4c2420e80087f9ff488bd3488d4c2430ff15d2367c009085c00f95c3488d4c2428e8aa0800008ac3eb0232c0
+            488b4c24404833cce88f413500488b5c24704883c4505fc3
+        """),
+        0x6cf04: bytes.fromhex("""
+            48895c24185556574154415541564157488bec4883ec70488b051e0177004833c4488945f0488bfa4c8bf94883c13848
+            8d55c0e814edffff90488b75c04885f60f848100000080be70020000007405498b0feb04498b4f08498d5f08ff156231
+            7c0085c07461498bc780be7002000000480f44c3488b18488bd6488d4db0e8bd030000904c8bcb4c8d45b0488d55d0e8
+            180d00009048837db0007409488d4db0e84781f9ff488bd7488d4dd0ff151a317c0085c07411488d4dc0e8f502000048
+            8bc6e9500100004885f67409488d4dc0e8df0200004d8b6720498b4728488945d04c3be00f842b010000498b1c244889
+            5dc84885db7411488b03488bcb488b4008ff1575da6700904885db7442488365c000488b034c8d45c0488d15d40d6900
+            488bcb488b4018ff154fda6700488b45c04885c074094c8db0d0fdffffeb034533f6488365c000498bc64d8beeeb0845
+            33f633c04533ed4c8975b84885c0746e498d77084180bd70020000007405498b0feb03488b0eff1548307c0085c0744e
+            4180bd7002000000490f45f7488b36498bd6488d4db0e8a5020000904c8bce4c8d45b0488d55e0e8000c00009048837d
+            b0007409488d4db0e82f80f9ff488bd7488d4de0ff1502307c0085c0752a4d85f6740a488d4db8e8d8010000904885db
+            7409488d4dc8e80180f9ff4983c408488b45d0e9e9feffff488d4db8e8b3010000904885db7409488d4dc8e8dc7ff9ff
+            498bc6eb0233c0488b4df04833cce8893a3500488b9c24c00000004883c470415f415e415d415c5f5e5dc3
+        """),
+        0x6e874: bytes.fromhex("""
+            48895c24205556574883ec50488b05b9e776004833c44889442440498bd8488bea33ff4038ba700200007405488b31eb
+            04488b7108488b4a084885c9750748897c2420eb2748897c2428488b014c8d442428488d1513336900488b00ff15aac1
+            6700488b44242848894424204c8bce4c8d442420488d542430e8bef3ffff9048397c2420740a488d4c2420e8ec67f9ff
+            8b4424380344243099b902000000f7f93bd80f9ec20fb6da488bcde83c0000008acb80f1010fb6d183f8010f45d384d2
+            400f94c78bc7488b4c24404833cce869223500488b9c24880000004883c4505f5e5dc3
+        """),
+        0x1000: bytes.fromhex("""
+            498bf0488bda488bf9f30f1103f30f114b04488bc3c3
+        """),
+        0x1100: bytes.fromhex("""
+            498bf0488bda488bf9f30f1103f30f114b04f30f115308f30f115b0c488bc3c3
+        """),
+    }
+    leaves = {
+        0x50f0: bytes.fromhex("488b1148c70100000000488bca488b02488b401048ff2575596e00"),
+        0x6b8230: bytes.fromhex("488d8a28000000e984c494ff"),
+        0x6b83e0: bytes.fromhex("488d8a20000000e9d4c294ff"),
+        0x6b8c40: bytes.fromhex("488d8a40000000e974ba94ff"),
+    }
+    addresses = dict(zip((name for key, name in BORROWED_TARGETS.items() if key != "display_factory"),
+                         (146160, 49540, 450124, 450400, 450308, 148828, 780988, 20720, 3935152, 8245312, 7252608)))
+    addresses.update({
+        DISPLAY_CURRENT_VIEW: 0x24600,
+        TRANSFORM_BOUNDS: 0x1b61c0,
+        UNKNOWN_DESTRUCTOR: 0x46c0,
+        TRAY_SYMBOLS[0][1]: 0x1000, TRAY_SYMBOLS[1][1]: 0x1100,
+        TRAY_SYMBOLS[2][1]: 0x48346c,
+        BORROWED_SCREEN: 0x6dcb0,
+        '?ToggleEdgeCopilot@CopilotIcon@implementation@SystemTray@winrt@@AEAAXXZ': 0x4892a0,
+    })
+    addresses['?HitTestChevron@DragDropManager@implementation@SystemTray@winrt@@AEAA_NUtagPOINT@@@Z'] = 0x6c984
+    addresses['?HitTestNotifyIcons@DragDropManager@implementation@SystemTray@winrt@@AEAAPEAUNotifyIconView@234@UtagPOINT@@@Z'] = 0x6cf04
+    addresses['?GetRelativeDropPosition@DragDropManager@implementation@SystemTray@winrt@@AEAA?AW4MoveTargetRelativePosition@@AEBUNotifyIconView@234@UtagPOINT@@@Z'] = 0x6e874
+    addresses["`winrt::SystemTray::implementation::DragDropManager::ScreenRectForElement'::`1'::dtor$2"] = 0x6b8230
+    addresses["`winrt::SystemTray::implementation::DragDropManager::ScreenRectForElement'::`1'::dtor$0"] = 0x6b83e0
+    addresses["`winrt::SystemTray::implementation::DragDropManager::ScreenRectForElement'::`1'::dtor$3"] = 0x6b83e0
+    addresses["`winrt::SystemTray::implementation::DragDropManager::ScreenRectForElement'::`1'::dtor$1"] = 0x6b8c40
+    image.symbols = [{"decorated_name": name, "rva": rva} for name, rva in addresses.items()]
+    data = {
+        0x701be0: bytes.fromhex("9bd091a3994a7c4b9d8d6fa5d01f6fbf"),
+    }
+    def read(rva, count, executable=True):
+        for start, raw in {**bodies, **leaves, **data}.items():
+            if start <= rva and rva + count <= start + len(raw):
+                return raw[rva - start:rva - start + count]
+        raise EvidenceError("Missing synthetic bytes")
+    image.bytes = read
+    image.section = lambda *args: {"section_start": 0x1000, "section_size": 0x900000, "executable": True}
+    image.identity = {"image_size": 0x900000}
+    image.pe = SimpleNamespace(
+        OPTIONAL_HEADER=SimpleNamespace(ImageBase=0x180000000),
+        sections=[SimpleNamespace(VirtualAddress=rva, Misc_VirtualSize=len(raw), SizeOfRawData=len(raw),
+                                  Characteristics=0x60000020) for rva, raw in bodies.items()],
+        DIRECTORY_ENTRY_EXCEPTION=[SimpleNamespace(struct=SimpleNamespace(BeginAddress=rva,
+            EndAddress=rva + len(raw))) for rva, raw in bodies.items()],
+        DIRECTORY_ENTRY_IMPORT=[
+            SimpleNamespace(dll=b'api-ms-win-core-largeinteger-l1-1-0.dll', imports=[SimpleNamespace(name=b'MulDiv',
+                address=0x180000000 + 0x6ea5b8)]),
+            SimpleNamespace(dll=b'USER32.dll', imports=[SimpleNamespace(name=b'GetDpiForWindow',
+                address=0x180000000 + 0x8301a8)]),
+            SimpleNamespace(dll=b'USER32.dll', imports=[SimpleNamespace(name=b'MapWindowPoints',
+                address=0x180000000 + 0x8301c0)]),
+        ])
+    return image, bodies, data
+
 class Rejections(unittest.TestCase):
+    def test_coexisting_geometry_records_both_real_consumers_without_name_precedence(self):
+        image, _, _ = coexisting_tray_fixture()
+        result = tray_layout(image, [])
+        traits = {row["trait_id"]: row for row in result["screen_rect_traits"]}
+        self.assertEqual(set(traits), {"copilot_button_owned", "drag_drop_borrowed"})
+        self.assertTrue(all(row["status"] == "reviewed" for row in traits.values()))
+        self.assertIsNone(result["abi_candidate"])
+        self.assertEqual(result["implementation_selection"], "requires_consumer_choice")
+        self.assertEqual([row["role"] for row in result["entries"]], ["invocation_point", "icon_bounds"])
+        self.assertEqual(result["geometry_capabilities"]["notification_area_bounds"]["status"], "unavailable")
+        self.assertEqual(result["geometry_capabilities"]["drag_drop_hit_testing"]["trait_id"], "drag_drop_borrowed")
+        self.assertEqual(len(traits["copilot_button_owned"]["usage"]["callers"]), 1)
+        self.assertEqual(len(traits["drag_drop_borrowed"]["usage"]["callers"]), 4)
+
+    def test_unknown_borrowed_shape_disables_only_its_capability(self):
+        image, bodies, _ = coexisting_tray_fixture()
+        rva = image.exact(BORROWED_SCREEN)
+        bodies[rva] = bodies[rva].replace(bytes.fromhex("4d8bf1"), bytes.fromhex("4d8bf0"), 1)
+        result = tray_layout(image, [])
+        traits = {row["trait_id"]: row for row in result["screen_rect_traits"]}
+        self.assertEqual(traits["copilot_button_owned"]["status"], "reviewed")
+        self.assertEqual(traits["drag_drop_borrowed"]["status"], "unreviewed")
+        self.assertIsNone(result["abi_candidate"])
+        self.assertEqual(result["geometry_capabilities"]["drag_drop_hit_testing"]["status"], "unreviewed")
+        self.assertTrue(traits["drag_drop_borrowed"]["analysis_blockers"])
+
+    def test_nonadjacent_owned_null_diamond_still_requires_exact_query_and_transfer_branches(self):
+        decoder = Cs(CS_ARCH_X86, CS_MODE_64)
+        decoder.detail = True
+        raw = bytes.fromhex("""
+            488b5db0 4885db 751a 48215dd0 eb3b 488d55b8 488bce e8f9100000 807dc800 744a ebce
+            488365d800 488b03 4c8d45d8 488d155a8f0e00 488bcb 488b00 ff15ee270d00
+            488b45d8 488945d0 4c8bc7 488d55d0 488d4db8 e8ea f4ffff 0f1030
+        """)
+        image = SimpleNamespace(exact=lambda name: 0x18B9D8,
+                                bytes=lambda *args: bytes.fromhex("9bd091a3994a7c4b9d8d6fa5d01f6fbf"))
+        code = list(decoder.disasm(raw, 0xB91A8))
+        index = len(code) - 2
+        self.assertEqual(owned_caller_window(image, code, index)["query_interface_slot"], 0)
+        for old, new in (("751a", "751b"), ("eb3b", "eb3e"), ("48215dd0", "48215dd8")):
+            with self.subTest(mutated=old), self.assertRaises(EvidenceError):
+                owned_caller_window(image, list(decoder.disasm(raw.replace(bytes.fromhex(old), bytes.fromhex(new), 1),
+                                                             0xB91A8)), index)
+
+    def test_coexisting_signatures_reject_multiple_rvas_same_address_and_overlapping_bounds(self):
+        for kind in ("multiple", "same", "overlap"):
+            image, bodies, _ = coexisting_tray_fixture()
+            owned = image.exact(TRAY_SYMBOLS[2][1])
+            if kind == "multiple":
+                image.symbols.append({"decorated_name": BORROWED_SCREEN, "rva": 0x9000})
+            else:
+                borrowed = next(row for row in image.symbols if row["decorated_name"] == BORROWED_SCREEN)
+                borrowed["rva"] = owned if kind == "same" else owned + 5
+                if kind == "overlap":
+                    image.pe.DIRECTORY_ENTRY_EXCEPTION.append(SimpleNamespace(struct=SimpleNamespace(
+                        BeginAddress=owned + 5, EndAddress=owned + len(bodies[owned]))))
+            with self.subTest(kind=kind), self.assertRaises(EvidenceError):
+                tray_layout(image, [])
+
+    def test_owned_consumer_requires_exact_name_iid_query_slot_and_target(self):
+        caller_name = "?ToggleEdgeCopilot@CopilotIcon@implementation@SystemTray@winrt@@AEAAXXZ"
+        for mutation in ("name", "caller_rva", "iid", "query_slot", "cfg", "wrapper", "branch", "screen_target"):
+            image, bodies, data = coexisting_tray_fixture()
+            caller_rva = image.exact(caller_name)
+            raw = bodies[caller_rva]
+            if mutation in ("name", "caller_rva"):
+                symbol = next(s for s in image.symbols if s["decorated_name"] == caller_name)
+                if mutation == "name":
+                    symbol["decorated_name"] += "Extra"
+                else:
+                    symbol["rva"] += 8
+            elif mutation == "iid":
+                data[next(iter(data))] = bytes(16)
+            elif mutation == "screen_target":
+                call = next(i for i in image.function(caller_rva) if i.mnemonic == "call" and
+                            i.operands[0].type == 2 and i.operands[0].imm == image.exact(TRAY_SYMBOLS[2][1]))
+                wrong = b"\xe8" + struct.pack("<i", image.exact(BORROWED_SCREEN) - call.address - 5)
+                bodies[caller_rva] = raw.replace(bytes(call.bytes), wrong, 1)
+            else:
+                old, new = {"query_slot": ("488b00", "488b01"), "cfg": ("ff157c172600", "ff1584172600"),
+                            "wrapper": ("4889442420", "4889442428"), "branch": ("eb25", "eb28")}[mutation]
+                bodies[caller_rva] = raw.replace(bytes.fromhex(old), bytes.fromhex(new), 1)
+                self.assertNotEqual(bodies[caller_rva], raw)
+            with self.subTest(mutation=mutation):
+                result = tray_layout(image, [])
+                trait = next(t for t in result["screen_rect_traits"] if t["entry"]["decorated_symbol"] == TRAY_SYMBOLS[2][1])
+                self.assertEqual(trait["status"], "unreviewed")
+                self.assertTrue(any(b["stage"] == "usage" for b in trait["analysis_blockers"]))
+                self.assertNotEqual(result["geometry_capabilities"]["copilot_button_geometry"]["status"], "reviewed")
+
+    def test_complete_owned_template_rejects_changed_arithmetic_import_and_extra_instruction(self):
+        for mutation in ("arithmetic", "import", "extra"):
+            image, bodies, _ = coexisting_tray_fixture()
+            rva = image.exact(TRAY_SYMBOLS[2][1])
+            raw = bodies[rva]
+            if mutation == "arithmetic":
+                bodies[rva] = raw.replace(bytes.fromhex("03d8"), bytes.fromhex("03d9"), 1)
+            elif mutation == "import":
+                image.pe.DIRECTORY_ENTRY_IMPORT[0].imports[0].address += 8
+            else:
+                bodies[rva] += b"\x90"
+                next(e.struct for e in image.pe.DIRECTORY_ENTRY_EXCEPTION if e.struct.BeginAddress == rva).EndAddress += 1
+                next(s for s in image.pe.sections if s.VirtualAddress == rva).Misc_VirtualSize += 1
+                next(s for s in image.pe.sections if s.VirtualAddress == rva).SizeOfRawData += 1
+            with self.subTest(mutation=mutation):
+                result = tray_layout(image, [])
+                owned = next(t for t in result["screen_rect_traits"] if t["trait_id"] == "copilot_button_owned")
+                self.assertEqual(owned["abi_status"], "unreviewed")
+                self.assertEqual(result["geometry_capabilities"]["drag_drop_hit_testing"]["status"], "reviewed")
+
+    def test_inline_tail_borrowed_template_checks_tail_branch_named_target_cleanup_and_callers(self):
+        for mutation in ("tail", "target", "cleanup", "caller"):
+            image, bodies, _ = coexisting_tray_fixture()
+            rva = image.exact(BORROWED_SCREEN)
+            raw = bodies[rva]
+            if mutation == "tail":
+                bodies[rva] = raw.replace(bytes.fromhex("0f88d5000000"), bytes.fromhex("0f88d6000000"), 1)
+            elif mutation == "target":
+                symbol = next(s for s in image.symbols if s["decorated_name"] == DISPLAY_CURRENT_VIEW)
+                symbol["rva"] += 8
+            elif mutation == "cleanup":
+                bodies[rva] = raw.replace(bytes.fromhex("488d4db8"), bytes.fromhex("488d4fb8"), 1)
+            else:
+                caller = image.exact(next(iter(BORROWED_CALLERS)))
+                site = next(s for s in image.direct_callers(rva)[0] if s["function_rva"] == caller)
+                cleanup = site["code"][site["index"] + 4]
+                offset = cleanup.address - caller
+                bodies[caller] = bodies[caller][:offset] + bytes.fromhex("488d4c2428") + bodies[caller][offset + cleanup.size:]
+            with self.subTest(mutation=mutation):
+                result = tray_layout(image, [])
+                trait = next(t for t in result["screen_rect_traits"] if t["trait_id"] == "drag_drop_borrowed")
+                self.assertEqual(trait["status"], "unreviewed")
+                self.assertEqual(result["geometry_capabilities"]["copilot_button_geometry"]["status"], "reviewed")
+
     def test_raw_source_aliases_are_disambiguated_by_vtable_and_direct_call(self):
         image, _, _ = source_alias_fixture()
         getter, _, implementation, _, bindings = anchored_source_functions(image, 0x6000, 0x7000, [])
@@ -281,7 +550,7 @@ class Rejections(unittest.TestCase):
         for delegated in (False, True):
             image, code, _ = borrowed_body_fixture(delegated)
             targets, _, chosen = match_borrowed_body(image, code)
-            self.assertEqual(chosen, delegated)
+            self.assertEqual(chosen, "delegated" if delegated else "inline")
             self.assertEqual(targets["map_window_points"], 0x573180 if delegated else 0x6F90C0)
 
     def test_borrowed_screen_rejects_argument_swaps_output_aliases_and_changed_return(self):

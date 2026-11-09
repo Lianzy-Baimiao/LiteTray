@@ -15,7 +15,7 @@ use crate::{
 };
 use litetray_adapter_protocol::{
     clock::{Frame, Owner, Style, Text},
-    compatibility::{Profile, profiles},
+    compatibility::Resolved,
     routing::{Options, Plan, Route},
 };
 use std::{
@@ -77,7 +77,7 @@ impl Drop for Parent {
 }
 struct Module {
     handle: HMODULE,
-    profile: &'static Profile,
+    profile: Resolved,
 }
 impl Drop for Module {
     fn drop(&mut self) {
@@ -102,16 +102,7 @@ fn inspected_module() -> Result<Module, String> {
         cfg!(target_arch = "x86_64"),
         "only inspected x64 ABI is supported",
     )?;
-    let mut candidates = profiles()?
-        .iter()
-        .filter(|profile| crate::compatibility::verified_file(&profile.taskbar).is_ok());
-    let profile = candidates
-        .next()
-        .ok_or("没有与当前任务栏模块匹配的内置兼容资料")?;
-    require(
-        candidates.next().is_none(),
-        "one exact taskbar compatibility profile",
-    )?;
+    let profile = crate::compatibility::recognize_system(false)?;
     let path = crate::compatibility::verified_file(&profile.shell)?;
     let module = Module {
         handle: unsafe {
@@ -125,7 +116,7 @@ fn inspected_module() -> Result<Module, String> {
     };
     require(!module.handle.is_null(), "load inspected system module")?;
     require(
-        unsafe { crate::compatibility::loaded(&profile.shell)? } == module.handle as usize,
+        unsafe { crate::compatibility::loaded(&module.profile.shell)? } == module.handle as usize,
         "loaded image and PDB identity",
     )?;
     Ok(module)

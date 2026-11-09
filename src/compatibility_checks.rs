@@ -107,11 +107,42 @@ impl Drop for SystemRoot {
     }
 }
 
+fn recognize_from<'a>(
+    profiles: &[&'a Profile],
+    role: Role,
+    path: &str,
+    bytes: &[u8],
+) -> Result<Recognized<'a>, String> {
+    let image = pe::identity(bytes)?;
+    let identity = identity(&image);
+    let index = match role {
+        Role::Taskbar => 0,
+        Role::Shell => 1,
+        Role::Tray => 2,
+    };
+    let mut matching = profiles.iter().filter(|profile| {
+        let module = profile.modules()[index];
+        module.relative_path == path && module.matches(&image.sha256, &identity)
+    });
+    let evidence = *matching.next().ok_or("unrecognized fixture")?;
+    if matching.next().is_some() {
+        return Err("ambiguous fixture".into());
+    }
+    Ok(Recognized {
+        role,
+        module: evidence.modules()[index].clone(),
+        evidence,
+        basis: MatchBasis::ExactImage,
+    })
+}
+
 #[test]
-fn disk_preflight_returns_the_selected_profile_layout_for_each_version() {
+fn disk_preflight_binds_each_module_to_its_own_bytes_and_layout() {
     for fixture in [Fixture::new(17), Fixture::new(18)] {
         let root = SystemRoot::new(fixture.images.each_ref().map(Vec::as_slice));
-        let result = collect_selected(&root.0, Some(26300), |_| Ok(&fixture.profile));
+        let result = collect_selected(&root.0, Some(26300), |role, path, bytes| {
+            recognize_from(&[&fixture.profile], role, path, bytes)
+        });
         assert_eq!(
             result.report.profile_id.as_deref(),
             Some(fixture.profile.id.as_str())
@@ -122,16 +153,25 @@ fn disk_preflight_returns_the_selected_profile_layout_for_each_version() {
             result.host_layout(true, true).unwrap(),
             fixture.profile.host
         );
+        assert!(
+            result
+                .report
+                .implementation
+                .as_ref()
+                .unwrap()
+                .tray_abi
+                .is_some()
+        );
     }
 }
 
 #[test]
-fn unknown_taskbar_does_not_attribute_other_modules_to_a_default_profile() {
+fn unknown_and_ambiguous_modules_never_choose_a_default() {
     let fixture = Fixture::new(19);
     let root = SystemRoot::new(fixture.images.each_ref().map(Vec::as_slice));
     let result = collect(&root.0, Some(26300)).unwrap();
     assert_eq!(result.profile_id, None);
-    assert!(serde_json::to_value(&result).unwrap()["profile_id"].is_null());
+    assert!(result.implementation.is_none());
     assert!(
         result
             .modules
@@ -145,11 +185,12 @@ fn unknown_taskbar_does_not_attribute_other_modules_to_a_default_profile() {
             .all(|feature| feature.status == FeatureStatus::UnsupportedModules)
     );
     assert!(preflight(&root.0, true, true).is_err());
-
-    let ambiguous = collect_selected(&root.0, Some(26300), |_| Err("ambiguous fixture".into()));
+    let ambiguous = collect_selected(&root.0, Some(26300), |role, path, bytes| {
+        recognize_from(&[&fixture.profile, &fixture.profile], role, path, bytes)
+    });
     assert_eq!(ambiguous.report.profile_id, None);
     assert_eq!(
-        ambiguous.report.profile_selection_reason.as_deref(),
+        ambiguous.report.modules[0].reason.as_deref(),
         Some("ambiguous fixture")
     );
     assert!(ambiguous.host_layout(true, true).is_err());
@@ -157,7 +198,7 @@ fn unknown_taskbar_does_not_attribute_other_modules_to_a_default_profile() {
 }
 
 #[test]
-fn known_taskbar_identity_with_changed_hash_cannot_select_a_profile() {
+fn known_taskbar_identity_with_changed_code_keeps_other_roles_recognized_but_cannot_activate() {
     let mut fixture = Fixture::new(20);
     fixture.images[0][0x500] ^= 1;
     assert_eq!(
@@ -165,67 +206,94 @@ fn known_taskbar_identity_with_changed_hash_cannot_select_a_profile() {
         fixture.profile.taskbar.identity
     );
     let root = SystemRoot::new(fixture.images.each_ref().map(Vec::as_slice));
-    let result = collect_selected(&root.0, Some(26300), |_| Ok(&fixture.profile));
+    let result = collect_selected(&root.0, Some(26300), |role, path, bytes| {
+        recognize_from(&[&fixture.profile], role, path, bytes)
+    });
     assert_eq!(result.report.profile_id, None);
     assert!(!result.report.all_profile_images_matched);
+    assert_eq!(result.report.modules[0].status, ModuleStatus::UnknownImage);
+    assert_eq!(result.report.modules[1].status, ModuleStatus::Matched);
+    assert_eq!(result.report.modules[2].status, ModuleStatus::Matched);
+    assert!(result.host_layout(true, false).is_err());
+    assert!(result.host_layout(false, true).is_err());
+}
+
+#[test]
+fn recognition_must_bind_full_current_identity_and_hash() {
+    let fixture = Fixture::new(26);
+    let root = SystemRoot::new(fixture.images.each_ref().map(Vec::as_slice));
+    let result = collect_selected(&root.0, Some(26300), |role, path, bytes| {
+        let mut recognized = recognize_from(&[&fixture.profile], role, path, bytes)?;
+        recognized.module.identity.timestamp ^= 1;
+        Ok(recognized)
+    });
     assert!(
         result
             .report
             .modules
             .iter()
-            .all(|module| module.status == ModuleStatus::UnknownImage)
+            .all(|module| module.status == ModuleStatus::InvalidImage)
     );
-    assert!(result.host_layout(true, false).is_err());
-    assert!(result.host_layout(false, true).is_err());
-}
-
-#[test]
-fn matching_taskbar_hash_does_not_replace_the_full_identity_check() {
-    let mut fixture = Fixture::new(26);
-    fixture.profile.taskbar.identity.timestamp ^= 1;
-    fixture.profile.host.module = fixture.profile.taskbar.identity.clone();
-    fixture.profile.validate().unwrap();
-    let root = SystemRoot::new(fixture.images.each_ref().map(Vec::as_slice));
-    let result = collect_selected(&root.0, Some(26300), |_| Ok(&fixture.profile));
-    assert_eq!(result.report.profile_id, None);
     assert!(result.host_layout(true, true).is_err());
 }
 
 #[test]
-fn mixing_shell_versions_cannot_combine_profiles() {
-    let old = Fixture::new(21);
-    let new = Fixture::new(22);
+fn compatible_module_contracts_combine_only_their_own_fields_without_inheriting_acceptance() {
+    let mut old = Fixture::new(21);
+    let mut new = Fixture::new(22);
+    old.profile.source.host_child_offset = 0x18;
+    old.profile.source.child_source_offset = 0x10;
+    new.profile.source.host_child_offset = 0x38;
+    new.profile.source.child_source_offset = 0x20;
+    new.profile.source.child_vtable_rva = 0x20c0;
     let root = SystemRoot::new([&old.images[0], &new.images[1], &old.images[2]]);
-    let result = collect_selected(&root.0, Some(26300), |_| Ok(&old.profile));
-    assert_eq!(
-        result.report.profile_id.as_deref(),
-        Some(old.profile.id.as_str())
-    );
-    assert_eq!(result.report.modules[0].status, ModuleStatus::Matched);
-    assert_eq!(result.report.modules[1].status, ModuleStatus::UnknownImage);
-    assert_eq!(result.report.modules[2].status, ModuleStatus::Matched);
+    let result = collect_selected(&root.0, Some(26300), |role, path, bytes| {
+        recognize_from(&[&old.profile, &new.profile], role, path, bytes)
+    });
     assert!(
         result
             .report
-            .features
+            .modules
             .iter()
-            .all(|feature| feature.status == FeatureStatus::UnsupportedModules)
+            .all(|module| module.status == ModuleStatus::Matched)
     );
-    assert!(result.host_layout(true, false).is_err());
-    assert!(result.host_layout(false, true).is_err());
+    assert_eq!(result.report.profile_id, None);
+    assert!(!result.report.all_profile_images_matched);
+    assert_eq!(result.host_layout(true, true).unwrap(), old.profile.host);
+    let plan = result.resolved.unwrap();
+    assert_eq!(plan.source.host_child_offset, 0x18);
+    assert_eq!(plan.source.child_source_offset, 0x20);
+    assert_eq!(plan.source.child_vtable_rva, 0x20c0);
+    assert_eq!(plan.shell.sha256, new.profile.shell.sha256);
+    assert_eq!(plan.tray.unwrap().module.sha256, old.profile.tray.sha256);
 }
 
 #[test]
-fn mixing_tray_versions_blocks_only_features_that_need_the_tray() {
+fn unknown_tray_degrades_only_requested_tray_and_never_enables_an_unrequested_clock() {
     let old = Fixture::new(23);
     let new = Fixture::new(24);
     let root = SystemRoot::new([&old.images[0], &old.images[1], &new.images[2]]);
-    let result = collect_selected(&root.0, Some(26300), |_| Ok(&old.profile));
+    let result = collect_selected(&root.0, Some(26300), |role, path, bytes| {
+        recognize_from(&[&old.profile], role, path, bytes)
+    });
     assert!(!result.report.all_profile_images_matched);
     assert_eq!(result.report.modules[2].status, ModuleStatus::UnknownImage);
     assert_eq!(result.host_layout(true, false).unwrap(), old.profile.host);
     assert!(result.host_layout(false, true).is_err());
     assert!(result.host_layout(true, true).is_err());
+    assert_eq!(
+        result.report.negotiate(true, false).unwrap(),
+        Capabilities {
+            clocks: true,
+            tray: false,
+            notice: None
+        }
+    );
+    let partial = result.report.negotiate(true, true).unwrap();
+    assert!(partial.clocks && !partial.tray);
+    assert!(partial.notice.unwrap().contains("托盘复制暂未启用"));
+    assert!(result.report.negotiate(false, true).is_err());
+    assert!(result.report.negotiate(false, false).is_err());
 }
 
 #[test]
@@ -234,11 +302,10 @@ fn correct_module_hash_does_not_skip_layout_verification() {
     fixture.profile.host.symbols[2].prologue[0] ^= 1;
     fixture.profile.validate().unwrap();
     let root = SystemRoot::new(fixture.images.each_ref().map(Vec::as_slice));
-    let result = collect_selected(&root.0, Some(26300), |_| Ok(&fixture.profile));
-    assert_eq!(
-        result.report.profile_id.as_deref(),
-        Some(fixture.profile.id.as_str())
-    );
+    let result = collect_selected(&root.0, Some(26300), |role, path, bytes| {
+        recognize_from(&[&fixture.profile], role, path, bytes)
+    });
+    assert_eq!(result.report.profile_id, None);
     assert_eq!(result.report.modules[0].status, ModuleStatus::InvalidImage);
     assert!(
         result
@@ -291,12 +358,15 @@ fn support_catalog_keeps_recorded_scope_separate_from_built_in_support() {
                     | "windows11-26100.1742-x64"
                     | "windows11-22621.1702-x64"
                     | "windows11-22631.2861-x64"
-            ) && matches!(
-                evidence.scenario,
-                ValidationScenario::ModuleLayout
-                    | ValidationScenario::ClockUpdateRestore
-                    | ValidationScenario::TrayPrepareStop
-            ) {
+            ) && (profile.id != "windows11-26100.1742-x64"
+                || evidence.scenario == ValidationScenario::ClockUpdateRestore)
+                && matches!(
+                    evidence.scenario,
+                    ValidationScenario::ModuleLayout
+                        | ValidationScenario::ClockUpdateRestore
+                        | ValidationScenario::TrayPrepareStop
+                )
+            {
                 ValidationStatus::Tested
             } else {
                 ValidationStatus::NotRun
@@ -400,11 +470,13 @@ fn detection_summary_preserves_disk_limits_and_feature_independence() {
     let old = Fixture::new(27);
     let new = Fixture::new(28);
     let root = SystemRoot::new([&old.images[0], &old.images[1], &new.images[2]]);
-    let inventory = collect_selected(&root.0, Some(26300), |_| Ok(&old.profile));
+    let inventory = collect_selected(&root.0, Some(26300), |role, path, bytes| {
+        recognize_from(&[&old.profile], role, path, bytes)
+    });
     let report = &inventory.report;
     let before = serde_json::to_value(report).unwrap();
     let summary = report.summary();
-    assert_eq!(summary.profile_id, Some(old.profile.id.as_str()));
+    assert_eq!(summary.profile_id, None);
     assert_eq!(summary.matched_module_count, 2);
     assert_eq!(summary.required_module_count, 3);
     assert!(!summary.all_profile_images_matched);

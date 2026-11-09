@@ -42,6 +42,8 @@ $summary = [ordered]@{
     baseline_results=$null
     os=$null
     profile_id=$null
+    source_implementation_id=$null
+    source_module_sha256=$null
     package_manifest_sha256=$settings.package_manifest_sha256
     prerequisite_checks_passed=$false
     explorer_takeover_automated=$true
@@ -173,12 +175,27 @@ try {
         }
     }
     $disk = Read-Report (Join-Path $baselineOutput 'compatibility.json')
-    if ($disk.scope -ne 'disk_only' -or $disk.explorer_accessed -ne $false -or
+    if ($disk.schema -ne 2 -or $disk.scope -ne 'disk_only' -or $disk.explorer_accessed -ne $false -or
         $disk.network_accessed -ne $false -or $disk.all_profile_images_matched -ne $true -or
         [string]::IsNullOrWhiteSpace([string]$disk.profile_id)) {
         throw 'All profile images must match on disk before any Explorer check is permitted.'
     }
     $summary.profile_id=$disk.profile_id
+    # The private source test intentionally has no tray implementation. Bind
+    # its combination ID to the actual host/shell hashes, not historical labels
+    # or the disk report's three-module combination ID.
+    $hostModules=@($disk.modules | Where-Object { $_.name -eq 'taskbar.dll' -and $_.status -eq 'matched' })
+    $sourceModules=@($disk.modules | Where-Object { $_.name -eq 'twinui.pcshell.dll' -and $_.status -eq 'matched' })
+    if ($hostModules.Count -ne 1 -or $sourceModules.Count -ne 1 -or
+        $hostModules[0].image.sha256 -notmatch '^[0-9a-f]{64}$' -or
+        $sourceModules[0].image.sha256 -notmatch '^[0-9a-f]{64}$') {
+        throw 'Private source prerequisites lack unique current module hashes.'
+    }
+    $sourceKey="litetray-module-combination-v1"+[char]0+$hostModules[0].image.sha256+[char]0+$sourceModules[0].image.sha256+[char]0+"absent"+[char]0
+    $sourceHasher=[Security.Cryptography.SHA256]::Create()
+    try { $summary.source_implementation_id='modules-'+[BitConverter]::ToString($sourceHasher.ComputeHash([Text.Encoding]::ASCII.GetBytes($sourceKey))).Replace('-','').ToLowerInvariant() }
+    finally { $sourceHasher.Dispose() }
+    $summary.source_module_sha256=$sourceModules[0].image.sha256
     $xaml = Read-Report (Join-Path $baselineOutput 'xaml-clock.stdout.json')
     if ($xaml.passed -ne $true -or $xaml.explorer_accessed -ne $false -or
         $xaml.environment -ne 'isolated_xaml_in_host_process') {
@@ -190,8 +207,9 @@ try {
         param($result)
         if ($result.explorer_accessed -ne $false -or
             $result.environment -ne 'isolated_private_shell_host_in_app_process' -or
-            $result.profile_id -ne $summary.profile_id) {
-            throw 'Private Shell host self-test did not confirm the selected profile and isolated boundary.'
+            $result.profile_id -ne $summary.source_implementation_id -or
+            $result.module_sha256 -ne $summary.source_module_sha256) {
+            throw 'Private Shell host self-test did not confirm the current host/source implementation and isolated boundary.'
         }
     }
     $summary.prerequisite_checks_passed=$true

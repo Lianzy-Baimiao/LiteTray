@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "algorithm": "litetray-historical-recipe-v1",
+  "source_commit": "03c7aeeeb25e5daa022d161fb32857815eb66f47",
+  "entries": [
+    {
+      "profile_id": "windows11-22621.1702-x64",
+      "host_source_digest": "ad21a50dfdcfab6432565451eb8471add4efab0ee1e27b014d4b6c789c483503",
+      "tray_digest": "16835b6e84fa72dd82a07b4ea6ed3e826f667d5fe1c76c028d075775a063c4e9"
+    },
+    {
+      "profile_id": "windows11-22631.2861-x64",
+      "host_source_digest": "17f01320905328a60f051f697bbb6c92404317b9ef2d1194bca986c4ed5e91ed",
+      "tray_digest": "57d69023c469928fc0b726a3e2c18979ecc6b6d105ee2095585fb1b9ca1d66f8"
+    },
+    {
+      "profile_id": "windows11-26100.1742-x64",
+      "host_source_digest": "c5a90b6cc79ad0a005819cea6d1c8906035bf050499e1252eed55b555cc360a3",
+      "tray_digest": "55f3cc80b83390e512331a26821105212270a739967745cce250f79cc30be2d4"
+    },
+    {
+      "profile_id": "windows11-26200.8037-x64",
+      "host_source_digest": "3585ca89a0e28e12992ce7048286804fa9863434367e1e042aaf433ffecac28f",
+      "tray_digest": "d95297de07c218d532e63de735b9869fe9f989cea7b9ce93c1a366bee97d1159"
+    },
+    {
+      "profile_id": "windows11-26200.8457-x64",
+      "host_source_digest": "57f9b8d059cab4a64b2715263e1eeda09aee6aaefeb0ee1369d86b01ffda3de9",
+      "tray_digest": "672e687997a36f8918e8e16b35551998467ffedfefed3b20a76efcb22ed4a538"
+    },
+    {
+      "profile_id": "windows11-26300.9711-x64",
+      "host_source_digest": "37b356906e9f4bb517d53d9fed2d1ef551186d0fb1823633334aa589e4d8c8f6",
+      "tray_digest": "bff899080d0d5eca2a3c59cfa49bb8e1360276ede741d9454b6d06b9c5a962f9"
+    },
+    {
+      "profile_id": "windows11-26300.9818-x64",
+      "host_source_digest": "fcc35370e7abe50a9f8da1f22a429e6d69a4b3816d02d4c7b0bb49f135b7fd43",
+      "tray_digest": "9e64b1440a06f4dc7ac4d35a15e8b823d76489ea98a2eddde8ae3f7295de115d"
+    }
+  ]
+}

@@ -239,7 +239,7 @@ fn feature_status(report: Option<&Report>, feature: Feature) -> &'static str {
     };
     tr(match item.status {
         FeatureStatus::DiskMatchedLiveCheckRequired => "模块匹配 · 运行时仍需验证",
-        FeatureStatus::UnsupportedModules => "模块未收录 · 暂不支持接管",
+        FeatureStatus::UnsupportedModules => "模块结构待适配 · 此功能暂不可用",
         FeatureStatus::MissingModules => "缺少所需模块",
         FeatureStatus::InspectionFailed => "模块检查失败",
     })
@@ -337,6 +337,49 @@ fn details_text(snapshot: &Snapshot) -> String {
         if let Some(reason) = &module.reason {
             lines.push(reason.clone());
         }
+        if let Some(recognition) = &module.recognition {
+            lines.push(format!(
+                "{} {}",
+                tr("识别方式："),
+                tr(match recognition.basis {
+                    litetray_adapter_protocol::compatibility::MatchBasis::ExactImage =>
+                        "完整模块匹配",
+                    litetray_adapter_protocol::compatibility::MatchBasis::ExecutionEquivalent =>
+                        "实现等价（仅允许已定义的元数据变化）",
+                })
+            ));
+            lines.push(recognition.implementation.clone());
+            lines.push(format!(
+                "{} {}",
+                tr("参考实现："),
+                recognition.evidence_profile
+            ));
+        } else {
+            lines.push(tr(match module.status {
+                inventory::ModuleStatus::Missing => "处理建议：确认系统组件完整，完成 Windows 更新后重新检测。",
+                inventory::ModuleStatus::InvalidImage | inventory::ModuleStatus::ReadFailed => "处理建议：模块读取或结构核验失败；完成系统更新后重新检测，并保留报告中的具体错误。",
+                _ => "处理建议：此模块需要新的实现模板；导出报告可提供身份与失败原因。其他已识别模块的功能仍可使用。",
+            }).into());
+        }
+    }
+    if let Some(plan) = &snapshot.report.implementation {
+        lines.push(format!(
+            "\r\n{} {:?} / {:?}\r\nHostChild: {:#x}; ChildSource: {:#x}; Tray: {:?}",
+            tr("当前实现组合："),
+            plan.source_recipe,
+            plan.topology,
+            plan.host_child_offset,
+            plan.child_source_offset,
+            plan.tray_abi
+        ));
+        if let Some(geometry) = plan.tray_geometry {
+            use litetray_adapter_protocol::compatibility::TrayGeometry;
+            lines.push(tr(match geometry {
+                TrayGeometry::NotificationAreaBounds => "坐标入口用途：通知区域与图标边界。拖放使用另一路径，完整交互仍待验收。",
+                TrayGeometry::DragDropHitTesting => "坐标入口用途：托盘拖放命中测试。已与 Copilot 按钮的坐标入口区分，完整交互仍待验收。",
+                TrayGeometry::LegacyUnclassified => "坐标入口用途：历史实现，尚未完成调用用途分类。",
+            }).into());
+        }
     }
     if let Some(profile) = selected_profile(snapshot) {
         for item in &profile.evidence {
@@ -421,7 +464,7 @@ impl App {
                 44,
             );
             self.divider(224, 346, total);
-            self.section("四项功能的模块匹配", 224, 366, total);
+            self.section("按模块特征判断可用功能", 224, 366, total);
             for (index, feature) in FEATURES.into_iter().enumerate() {
                 let x = 224 + (index as i32 % 2) * (half + 24);
                 let y = 410 + (index as i32 / 2) * 80;
@@ -438,7 +481,7 @@ impl App {
                 );
             }
             self.caption(
-                "磁盘匹配不是本机实测通过；启用接管时仍会检查运行中的模块和控件归属。",
+                "磁盘识别后，启用时仍会核验运行中的模块与控件。托盘暂不兼容时，已兼容的时钟可继续运行。",
                 224,
                 584,
                 total,
@@ -477,7 +520,7 @@ impl App {
                 total,
                 134,
             );
-            self.caption("Windows 11 的多个版本可能共用任务栏结构。支持范围按精确模块判断，不按 22H2、23H2、24H2 或 25H2 标签放行。", 224, 1180, total, 64);
+            self.caption("逐个识别宿主、XAML 容器和托盘实现。仅版本等元数据改变可复用已核验模板；代码、数据或布局改变则单独适配。系统版本号仅作说明。", 224, 1180, total, 64);
             let export = self.control(
                 "EDIT",
                 "",
@@ -544,12 +587,10 @@ impl App {
                     .unwrap_or_else(|| tr("正在读取当前 Windows 信息…").into()),
             );
             let profile = snapshot
-                .map(|value| match value.report.profile_id.as_deref() {
-                    Some(id) if value.report.all_profile_images_matched => {
-                        format!("{} {id}", tr("精确匹配的模块资料："))
-                    }
-                    Some(id) => format!("{} {id}", tr("部分模块匹配，适用功能见下方：")),
-                    None => tr("本机模块尚未匹配已收录资料").into(),
+                .map(|value| {
+                    let recognized = value.report.modules.iter().filter(|module| module.status == inventory::ModuleStatus::Matched).count();
+                    let equivalent = value.report.modules.iter().filter(|module| module.recognition.as_ref().is_some_and(|item| item.basis == litetray_adapter_protocol::compatibility::MatchBasis::ExecutionEquivalent)).count();
+                    format!("{} {recognized}/{} · {} {equivalent}\r\n{}", tr("已识别模块："), value.report.modules.len(), tr("实现等价："), tr("可用功能见下方；展开详情可查看匹配依据和处理建议。"))
                 })
                 .unwrap_or_else(|| tr("模块资料：等待检测").into());
             set_text(self.field(PROFILE), &profile);
@@ -716,6 +757,11 @@ mod tests {
             .collect();
         assert_eq!(tested_ids.len(), 6);
         for id in tested_ids {
+            let tested = if id == "windows11-26100.1742-x64" {
+                1
+            } else {
+                3
+            };
             value.report.profile_id = Some(id);
             value.report.all_profile_images_matched = false;
             assert!(selected_profile(&value).is_none());
@@ -725,8 +771,11 @@ mod tests {
             assert!(evidence.contains("Not validated"));
             assert!(evidence.contains("Tray mirroring"));
             assert!(evidence.contains("Recorded test (limited scope)"));
-            assert_eq!(evidence.matches("Recorded test (limited scope)").count(), 3);
-            assert_eq!(evidence.matches("Not validated").count(), 4);
+            assert_eq!(
+                evidence.matches("Recorded test (limited scope)").count(),
+                tested
+            );
+            assert_eq!(evidence.matches("Not validated").count(), 7 - tested);
         }
         for (id, system) in [
             ("windows11-22621.1702-x64", "22H2 22621.1702"),

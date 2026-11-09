@@ -56,6 +56,14 @@ BORROWED_CALLERS = {
     "?HitTestNotifyIcons@DragDropManager@implementation@SystemTray@winrt@@AEAAPEAUNotifyIconView@234@UtagPOINT@@@Z": 2,
     "?GetRelativeDropPosition@DragDropManager@implementation@SystemTray@winrt@@AEAA?AW4MoveTargetRelativePosition@@AEBUNotifyIconView@234@UtagPOINT@@@Z": 1,
 }
+OWNED_CALLER_PURPOSES = {
+    "?ToggleEdgeCopilot@CopilotIcon@implementation@SystemTray@winrt@@AEAAXXZ": "copilot_button_geometry",
+    "?OnPointerEntered@CopilotIcon@implementation@SystemTray@winrt@@QEAAXUPointerRoutedEventArgs@Input@Xaml@UI@Windows@4@@Z": "copilot_button_geometry",
+    "?OnPointerExited@CopilotIcon@implementation@SystemTray@winrt@@QEAAXUPointerRoutedEventArgs@Input@Xaml@UI@Windows@4@@Z": "copilot_button_geometry",
+    "?TryGetChevronScreenRect@NotificationAreaIconsDataModel@implementation@SystemTray@winrt@@AEAA?AV?$optional@UtagRECT@@@std@@XZ": "notification_area_bounds",
+    "?TryGetIconScreenRect@NotificationAreaIconsDataModel@implementation@SystemTray@winrt@@AEAA?AV?$optional@UtagRECT@@@std@@XZ": "notification_area_bounds",
+    "?OnScreenBoundsRequested@NotificationAreaIconsDataModel@implementation@SystemTray@winrt@@AEAAXAEBUIInspectable@Foundation@Windows@4@0@Z": "notification_area_bounds",
+}
 TRANSFORM_BOUNDS = "?TransformBounds@?$consume_Windows_UI_Xaml_Media_IGeneralTransform@UIGeneralTransform@Media@Xaml@UI@Windows@winrt@@@impl@winrt@@QEBA@AEBURect@Foundation@Windows@3@@Z"
 DISPLAY_CURRENT_VIEW = "?GetForCurrentView@DisplayInformation@Display@Graphics@Windows@winrt@@SA@XZ"
 AS_FRAMEWORK_ELEMENT = {
@@ -285,6 +293,237 @@ pop rsi
 pop rbx
 pop rbp
 ret
+"""
+OWNED_TRANSFORM_BODY = """
+mov qword ptr [rsp + 8], rbx
+mov qword ptr [rsp + 0x20], rsi
+push rbp
+push rdi
+push r12
+push r14
+push r15
+mov rbp, rsp
+sub rsp, 0x80
+movaps xmmword ptr [rsp + 0x70], xmm6
+mov rax, [$security_cookie]
+xor rax, rsp
+mov qword ptr [rbp - 0x20], rax
+mov r15, r8
+mov rsi, rdx
+mov r14, rcx
+mov qword ptr [rbp - 0x48], rdx
+and qword ptr [rbp - 0x60], 0
+lea r8, [rbp - 0x60]
+lea rdx, [rbp - 0x50]
+mov rcx, rsi
+call $transform
+nop
+cmp qword ptr [rbp - 0x60], 0
+je @branch_0
+lea rcx, [rbp - 0x60]
+call $release
+@branch_0
+mov rcx, rsi
+call $actual_width
+xorps xmm6, xmm6
+cvtsd2ss xmm6, xmm0
+mov rcx, rsi
+call $actual_height
+xorps xmm1, xmm1
+cvtsd2ss xmm1, xmm0
+and dword ptr [rbp - 0x60], 0
+and dword ptr [rbp - 0x5c], 0
+movss dword ptr [rbp - 0x58], xmm6
+movss dword ptr [rbp - 0x54], xmm1
+lea r8, [rbp - 0x60]
+lea rdx, [rbp - 0x40]
+lea rcx, [rbp - 0x50]
+call $transform_bounds
+mov rcx, r15
+call [$get_dpi]
+mov edi, eax
+cvttss2si ecx, dword ptr [rbp - 0x40]
+mov r12d, 0x60
+mov r8d, r12d
+mov edx, eax
+call [$mul_div]
+mov dword ptr [rbp - 0x30], eax
+cvttss2si ecx, dword ptr [rbp - 0x3c]
+mov r8d, r12d
+mov edx, edi
+call [$mul_div]
+mov dword ptr [rbp - 0x2c], eax
+cvttss2si ecx, dword ptr [rbp - 0x38]
+mov r8d, r12d
+mov edx, edi
+call [$mul_div]
+mov ebx, eax
+cvttss2si ecx, dword ptr [rbp - 0x40]
+mov r8d, r12d
+mov edx, edi
+call [$mul_div]
+add ebx, eax
+mov dword ptr [rbp - 0x28], ebx
+cvttss2si ecx, dword ptr [rbp - 0x34]
+mov r8d, r12d
+mov edx, edi
+call [$mul_div]
+mov ebx, eax
+cvttss2si ecx, dword ptr [rbp - 0x3c]
+mov r8d, r12d
+mov edx, edi
+call [$mul_div]
+add ebx, eax
+mov dword ptr [rbp - 0x24], ebx
+lea r9d, [r12 - 0x5e]
+lea r8, [rbp - 0x30]
+xor edx, edx
+mov rcx, r15
+call [$map_window_points]
+movups xmm0, xmmword ptr [rbp - 0x30]
+movdqu xmmword ptr [r14], xmm0
+lea rcx, [rbp - 0x50]
+call $destructor
+nop
+mov rcx, rsi
+call $destructor
+mov rax, r14
+mov rcx, qword ptr [rbp - 0x20]
+xor rcx, rsp
+call $security_check
+lea r11, [rsp + 0x80]
+mov rbx, qword ptr [r11 + 0x30]
+mov rsi, qword ptr [r11 + 0x48]
+movaps xmm6, xmmword ptr [rsp + 0x70]
+mov rsp, r11
+pop r15
+pop r14
+pop r12
+pop rdi
+pop rbp
+ret
+"""
+
+BORROWED_INLINE_TAIL_BODY = """
+push rbp
+push rbx
+push rsi
+push rdi
+push r14
+mov rbp, rsp
+sub rsp, 0x70
+movaps xmmword ptr [rsp + 0x60], xmm6
+mov rax, [$security_cookie]
+xor rax, rsp
+mov qword ptr [rbp - 0x18], rax
+mov r14, r9
+mov rdi, r8
+mov rsi, rdx
+lea rdx, [rbp - 0x50]
+mov rcx, r8
+call $xaml_root
+nop
+lea rdx, [rbp - 0x30]
+mov rcx, rax
+call $root_content
+nop
+mov r8, rax
+lea rdx, [rbp - 0x48]
+mov rcx, rdi
+call $transform
+mov rbx, rax
+mov rcx, rdi
+call $actual_width
+xorps xmm6, xmm6
+cvtsd2ss xmm6, xmm0
+mov rcx, rdi
+call $actual_height
+xorps xmm1, xmm1
+cvtsd2ss xmm1, xmm0
+and dword ptr [rbp - 0x40], 0
+and dword ptr [rbp - 0x3c], 0
+movss dword ptr [rbp - 0x38], xmm6
+movss dword ptr [rbp - 0x34], xmm1
+xorps xmm0, xmm0
+movups xmmword ptr [rbp - 0x28], xmm0
+mov rcx, qword ptr [rbx]
+mov rax, qword ptr [rcx]
+movups xmm0, xmmword ptr [rbp - 0x40]
+movdqa xmmword ptr [rbp - 0x40], xmm0
+lea r8, [rbp - 0x28]
+lea rdx, [rbp - 0x40]
+mov rax, qword ptr [rax + 0x48]
+call [$guard_dispatch]
+test eax, eax
+js @branch_4
+cmp qword ptr [rbp - 0x48], 0
+je @branch_0
+lea rcx, [rbp - 0x48]
+call $release
+nop
+@branch_0
+cmp qword ptr [rbp - 0x30], 0
+je @branch_1
+lea rcx, [rbp - 0x30]
+call $release
+nop
+@branch_1
+cmp qword ptr [rbp - 0x50], 0
+je @branch_2
+lea rcx, [rbp - 0x50]
+call $release
+@branch_2
+lea rcx, [rbp - 0x50]
+call $display_factory
+nop
+mov rcx, rax
+call $scale
+xorps xmm6, xmm6
+cvtsd2ss xmm6, xmm0
+cmp qword ptr [rbp - 0x50], 0
+je @branch_3
+lea rcx, [rbp - 0x50]
+call $release
+@branch_3
+movss xmm1, dword ptr [rbp - 0x28]
+mulss xmm1, xmm6
+cvttss2si eax, xmm1
+mov dword ptr [rsi], eax
+movss xmm2, dword ptr [rbp - 0x24]
+mulss xmm2, xmm6
+cvttss2si eax, xmm2
+mov dword ptr [rsi + 4], eax
+movss xmm0, dword ptr [rbp - 0x20]
+mulss xmm0, xmm6
+addss xmm0, xmm1
+cvttss2si edx, xmm0
+mov dword ptr [rsi + 8], edx
+movss xmm1, dword ptr [rbp - 0x1c]
+mulss xmm1, xmm6
+addss xmm1, xmm2
+cvttss2si edx, xmm1
+mov dword ptr [rsi + 0xc], edx
+mov r9d, 2
+mov r8, rsi
+xor edx, edx
+mov rcx, r14
+call [$map_window_points]
+mov rax, rsi
+mov rcx, qword ptr [rbp - 0x18]
+xor rcx, rsp
+call $security_check
+movaps xmm6, xmmword ptr [rsp + 0x60]
+add rsp, 0x70
+pop r14
+pop rdi
+pop rsi
+pop rbx
+pop rbp
+ret
+@branch_4
+mov ecx, eax
+call $throw_hresult
+int3
 """
 TRANSFORM_BOUNDS_BODY = """
 push rbx
@@ -743,26 +982,38 @@ def match_instruction_template(code, template, targets):
 
 
 def match_borrowed_body(image, code):
-    require(len(code) in (96, 114), "Borrowed ScreenRect body has an unreviewed instruction count")
-    delegated = len(code) == 96
-    names = dict(BORROWED_TARGETS)
-    if delegated:
-        names.update(display_factory=DISPLAY_CURRENT_VIEW, transform_bounds=TRANSFORM_BOUNDS,
-                     destructor=UNKNOWN_DESTRUCTOR)
-    targets = {key: image.exact(name) for key, name in names.items()}
-    targets["map_window_points"] = image.import_slot("user32.dll", "MapWindowPoints")
-    match_instruction_template(code, BORROWED_DELEGATED_BODY if delegated else BORROWED_BODY, targets)
-    return targets, names, delegated
+    matches, failures = [], []
+    for shape, template, overrides in (
+        ("inline", BORROWED_BODY, {}),
+        ("delegated", BORROWED_DELEGATED_BODY,
+         {"display_factory": DISPLAY_CURRENT_VIEW, "transform_bounds": TRANSFORM_BOUNDS,
+          "destructor": UNKNOWN_DESTRUCTOR}),
+        ("inline_tail", BORROWED_INLINE_TAIL_BODY, {"display_factory": DISPLAY_CURRENT_VIEW}),
+    ):
+        count = sum(1 for line in template.strip().splitlines() if not line.startswith("@"))
+        if len(code) != count:
+            continue
+        names = {**BORROWED_TARGETS, **overrides}
+        try:
+            targets = {key: image.exact(name) for key, name in names.items()}
+            targets["map_window_points"] = image.import_slot("user32.dll", "MapWindowPoints")
+            match_instruction_template(code, template, targets)
+            matches.append((targets, names, shape))
+        except EvidenceError as error:
+            failures.append(f"{shape}: {error}")
+    require(len(matches) == 1, "Missing/ambiguous complete borrowed ScreenRect recipe: " +
+            ("; ".join(failures) if failures else f"{len(matches)} matches, {len(code)} instructions"))
+    return matches[0]
 
 
-def stack_argument(ins, destination):
+def stack_argument(ins, destination, alignment=8):
     require(ins.mnemonic == "lea" and len(ins.operands) == 2 and
             ins.operands[0].type == X86_OP_REG and ins.reg_name(ins.operands[0].reg) == destination and
             ins.operands[1].type == X86_OP_MEM, "Caller argument is not an explicit stack wrapper/result")
     memory = ins.operands[1].mem
     base = ins.reg_name(memory.base)
     require(base in ("rsp", "rbp") and memory.index == 0 and memory.segment == 0 and
-            -256 <= memory.disp <= 256 and memory.disp % 8 == 0,
+            -256 <= memory.disp <= 256 and memory.disp % alignment == 0,
             "Caller argument has an unknown stack location")
     return base, memory.disp, ins.op_str.split(", ", 1)[1]
 
@@ -891,7 +1142,7 @@ def borrowed_callers(image, screen_rva, release_rva, logs):
     return result
 
 
-def borrowed_named_cleanup_thunks(image, release_rva, logs, delegated=False):
+def borrowed_named_cleanup_thunks(image, release_rva, logs, delegated=False, inline_tail=False):
     """Corroborate named local cleanup leaves; do not claim C++ EH table proof."""
     destructor_rva, destructor = function_evidence(image, UNKNOWN_DESTRUCTOR, logs)
     require(len(destructor) == 6 and
@@ -905,8 +1156,9 @@ def borrowed_named_cleanup_thunks(image, release_rva, logs, delegated=False):
     decoder = Cs(CS_ARCH_X86, CS_MODE_64)
     decoder.detail = True
     results = []
-    offsets = ((0, 0x20), (1, 0x40), (2, 0x38), (3, 0x20)) if delegated else (
-        (0, 0x48), (1, 0x40), (2, 0x20), (3, 0x20))
+    offsets = ((0, 0x20), (1, 0x40), (2, 0x28), (3, 0x20)) if inline_tail else (
+        ((0, 0x20), (1, 0x40), (2, 0x38), (3, 0x20)) if delegated else
+        ((0, 0x48), (1, 0x40), (2, 0x20), (3, 0x20)))
     for number, offset in offsets:
         name = f"`winrt::SystemTray::implementation::DragDropManager::ScreenRectForElement'::`1'::dtor${number}"
         rva = image.exact(name)
@@ -921,21 +1173,24 @@ def borrowed_named_cleanup_thunks(image, release_rva, logs, delegated=False):
                  "instructions": [instruction_record(ins) for ins in code]}
         logs.append({"module_role": image.role, **proof})
         results.append(proof)
-    require(len({row["rva"] for row in results}) == 3 and results[0 if delegated else 2]["rva"] == results[3]["rva"],
+    require(len({row["rva"] for row in results}) == 3 and
+            results[0 if delegated or inline_tail else 2]["rva"] == results[3]["rva"],
             "Named borrowed-path cleanup thunk aliases changed")
     return results
 
 
 def borrowed_screen(image, code, logs):
-    targets, names, delegated = match_borrowed_body(image, code)
+    targets, names, shape = match_borrowed_body(image, code)
     release_rva = release_leaf(image, logs)
-    if delegated:
+    if shape == "delegated":
         _, transform = function_evidence(image, TRANSFORM_BOUNDS, logs)
         match_instruction_template(transform, TRANSFORM_BOUNDS_BODY, targets)
     callers = borrowed_callers(image, code[0].address, release_rva, logs)
-    thunks = borrowed_named_cleanup_thunks(image, release_rva, logs, delegated)
+    thunks = borrowed_named_cleanup_thunks(image, release_rva, logs, shape == "delegated", shape == "inline_tail")
     return {"recipe": "four_argument_borrowed_screen_rect_v1",
-            "bounded_body_recipe": "delegated_transform_and_local_cleanup_v1" if delegated else "inline_transform_and_local_cleanup_v1",
+            "bounded_body_recipe": {"delegated": "delegated_transform_and_local_cleanup_v1",
+                                    "inline": "inline_transform_and_local_cleanup_v1",
+                                    "inline_tail": "inline_transform_tail_failure_and_local_cleanup_v1"}[shape],
             "function_rva": code[0].address, "function_end_rva": code[-1].address + code[-1].size,
             "parameters": {"rcx": "opaque manager this, unused before overwrite", "rdx": "hidden RECT result",
                            "r8": "borrowed FrameworkElement wrapper", "r9": "HWND"},
@@ -972,32 +1227,217 @@ def coordinate_member(code, role):
     return "rsi_input_rbx_result_v1" if old else "rbx_input_rdi_result_v1"
 
 
+def owned_screen(image, code, logs):
+    find_sequence(code, (("mov", "r15, r8"), ("mov", "rsi, rdx"), ("mov", "r14, rcx")))
+    find_sequence(code, (("movdqu", "xmmword ptr [r14], xmm0"),))
+    find_sequence(code, (("mov", "rax, r14"),))
+    cleanup = owned_cleanup(image, code, logs)
+    complete = cleanup["recipe"] == "delegated_with_transform_temporary_v1"
+    if complete:
+        names = {key: BORROWED_TARGETS[key] for key in
+                 ("transform", "actual_width", "actual_height", "release", "security_check",
+                  "security_cookie", "guard_dispatch", "throw_hresult")}
+        names.update(destructor=UNKNOWN_DESTRUCTOR, transform_bounds=TRANSFORM_BOUNDS)
+        targets = {key: image.exact(name) for key, name in names.items()}
+        targets.update(get_dpi=image.import_slot("user32.dll", "GetDpiForWindow"),
+                       map_window_points=image.import_slot("user32.dll", "MapWindowPoints"),
+                       mul_div=image.import_slot("api-ms-win-core-largeinteger-l1-1-0.dll", "MulDiv"))
+        match_instruction_template(code, OWNED_TRANSFORM_BODY, targets)
+        _, transform = function_evidence(image, TRANSFORM_BOUNDS, logs)
+        match_instruction_template(transform, TRANSFORM_BOUNDS_BODY, targets)
+    return {"recipe": "three_argument_owned_screen_rect_v1", "owned_value_cleanup": cleanup,
+            "bounded_body_recipe": ("owned_transform_and_window_dpi_v1" if complete else
+                                    "owned_arguments_result_and_cleanup_v1"),
+            "complete_instruction_template": complete,
+            "parameters": {"rcx": "hidden RECT result", "rdx": "owned FrameworkElement wrapper", "r8": "HWND"},
+            "return": "RAX is the original result pointer", "owned_input_consumed": True}
+
+
+def owned_caller_window(image, code, index):
+    """A QI-created local is transferred to the consuming helper, then RECT is read."""
+    require(index >= 12 and index + 1 < len(code), "Truncated owned ScreenRect caller window")
+    wrapper_base, wrapper_offset, wrapper = stack_argument(code[index - 2], "rdx", 1)
+    result_base, result_offset, result = stack_argument(code[index - 1], "rcx", 1)
+    if wrapper_base == result_base:
+        require(wrapper_offset + 8 <= result_offset or result_offset + 16 <= wrapper_offset,
+                "Owned caller result overlaps the consumed wrapper")
+    else:
+        # This reviewed frame establishes RSP=entry-0x108 and RBP=entry-0x5f.
+        # Thus RSP+0x20 and RBP+7 are disjoint; different base names alone do not prove that.
+        require((wrapper, result) == ("[rsp + 0x20]", "[rbp + 7]") and
+                [(ins.mnemonic, ins.op_str) for ins in code[:7]] == [
+                    ("mov", "rax, rsp"), ("mov", "qword ptr [rax + 0x10], rbx"),
+                    ("mov", "qword ptr [rax + 0x18], rsi"), ("mov", "qword ptr [rax + 0x20], rdi"),
+                    ("push", "rbp"), ("lea", "rbp, [rax - 0x5f]"), ("sub", "rsp, 0x100")],
+                "Owned caller has an unreviewed relation between stack bases")
+    via_rbx = (code[index - 8].mnemonic, code[index - 8].op_str) == ("mov", "rcx, rbx")
+    query_index = index - (10 if via_rbx else 9)
+    _, _, query_wrapper = stack_argument(code[query_index], "r8", 1)
+    iid_load = code[query_index + 1]
+    require(iid_load.mnemonic == "lea" and len(iid_load.operands) == 2 and
+            iid_load.operands[0].type == X86_OP_REG and iid_load.reg_name(iid_load.operands[0].reg) == "rdx" and
+            iid_load.operands[1].type == X86_OP_MEM and
+            iid_load.reg_name(iid_load.operands[1].mem.base) == "rip" and
+            iid_load.operands[1].mem.index == 0,
+            "Owned caller does not load the exact FrameworkElement IID")
+    iid_rva = iid_load.address + iid_load.size + iid_load.operands[1].mem.disp
+    require(image.bytes(iid_rva, 16, False) == bytes.fromhex("9bd091a3994a7c4b9d8d6fa5d01f6fbf"),
+            "Owned caller queries a different interface")
+    query = code[query_index - 2:index - 5]
+    template = f"""
+and qword ptr {query_wrapper}, 0
+mov rax, qword ptr [{'rbx' if via_rbx else 'rcx'}]
+lea r8, {query_wrapper}
+lea rdx, [$framework_element_iid]
+""" + ("mov rcx, rbx\n" if via_rbx else "") + "mov rax, qword ptr [rax]\ncall [$guard_dispatch]"
+    match_instruction_template(query, template,
+                               {"framework_element_iid": iid_rva, "guard_dispatch": image.exact(GUARD_DISPATCH)})
+    require([(ins.mnemonic, ins.op_str) for ins in code[index - 5:index - 3]] ==
+            [("mov", f"rax, qword ptr {query_wrapper}"), ("mov", f"qword ptr {wrapper}, rax")],
+            "Owned caller does not transfer its queried wrapper")
+    hwnd, returned = code[index - 3], code[index + 1]
+    require((hwnd.mnemonic, hwnd.op_str) in (("mov", "r8, rdi"), ("mov", "r8, rsi")) and
+            returned.mnemonic == "movups" and len(returned.operands) == 2 and
+            returned.operands[1].type == X86_OP_MEM and
+            returned.reg_name(returned.operands[1].mem.base) == "rax" and
+            returned.operands[1].mem.disp == 0 and returned.operands[1].mem.index == 0,
+            "Owned caller changed its HWND argument or returned RECT use")
+    # The RCX variant has a complete local null-or-QI diamond. Every branch is
+    # tied to the actual decoded instruction, not just its mnemonic.
+    if not via_rbx:
+        require(index >= 15 and [(ins.mnemonic, ins.op_str) for ins in
+                (code[index - 15], code[index - 13])] ==
+                [("test", "rcx, rcx"), ("and", f"qword ptr {wrapper}, rcx")],
+                "Owned caller lost its null wrapper initialization")
+        for ins, mnemonic, target in ((code[index - 14], "jne", code[index - 11].address),
+                                      (code[index - 12], "jmp", code[index - 3].address)):
+            require(ins.mnemonic == mnemonic and len(ins.operands) == 1 and
+                    ins.operands[0].type == X86_OP_IMM and ins.operands[0].imm == target,
+                    "Owned caller null branch changed its wrapper initialization")
+    null_jump = code[index - 12].address if not via_rbx else None
+    if via_rbx:
+        diamonds = []
+        for i in range(query_index - 4):
+            test, branch, clear, jump = code[i:i + 4]
+            if ((test.mnemonic, test.op_str), (clear.mnemonic, clear.op_str)) != (
+                    ("test", "rbx, rbx"), ("and", f"qword ptr {wrapper}, rbx")):
+                continue
+            if all(ins.mnemonic == mnemonic and len(ins.operands) == 1 and
+                   ins.operands[0].type == X86_OP_IMM and ins.operands[0].imm == target
+                   for ins, mnemonic, target in ((branch, "jne", query[0].address),
+                                                 (jump, "jmp", code[index - 3].address))):
+                diamonds.append((test.address, jump.address))
+        require(len(diamonds) == 1, "Owned caller lost its exact RBX null-or-QI diamond")
+        null_start, null_jump = diamonds[0]
+        require(not any(ins.mnemonic.startswith("j") and len(ins.operands) == 1 and
+                        ins.operands[0].type == X86_OP_IMM and null_start < ins.operands[0].imm <= null_jump
+                        for ins in code), "Owned caller branch bypasses its RBX null test")
+    start = query[0].address
+    for ins in code:
+        if ins.mnemonic.startswith("j") and len(ins.operands) == 1 and ins.operands[0].type == X86_OP_IMM:
+            target = ins.operands[0].imm
+            if start < target <= code[index].address:
+                require(ins.address == null_jump and target == code[index - 3].address,
+                        "Owned caller branch can bypass queried-wrapper transfer")
+    return {"recipe": "qi_owned_wrapper_to_rect_v1", "owned_wrapper_stack_location": wrapper,
+            "result_stack_location": result, "query_wrapper_stack_location": query_wrapper,
+            "framework_element_iid_rva": iid_rva, "query_interface_slot": 0,
+            "instructions": [instruction_record(ins) for ins in code[query_index - 2:index + 2]]}
+
+
+def owned_callers(image, screen_rva, logs):
+    sites, rejected = image.direct_callers(screen_rva)
+    require(not rejected, "Unresolved direct-call byte hits prevent a complete owned caller audit")
+    require(0 < len(sites) <= len(OWNED_CALLER_PURPOSES), "Missing/unknown owned ScreenRect caller set")
+    bindings = {image.exact(name): (name, purpose) for name, purpose in OWNED_CALLER_PURPOSES.items()
+                if any(s["decorated_name"] == name for s in image.symbols)}
+    require(len(bindings) == len({name for name in OWNED_CALLER_PURPOSES
+                                if any(s["decorated_name"] == name for s in image.symbols)}),
+            "Ambiguous owned caller function aliases")
+    result, purposes, seen = [], set(), set()
+    for site in sites:
+        start = site["function_rva"]
+        require(start in bindings and start not in seen, "Unknown/repeated owned ScreenRect consumer")
+        seen.add(start)
+        name, purpose = bindings[start]
+        proof = owned_caller_window(image, site["code"], site["index"])
+        purposes.add(purpose)
+        result.append({"caller_rva": start, "caller_symbol": name, "call_rva": site["call_rva"], **proof})
+        bounded_evidence(image, start, name, logs)
+    require(len(purposes) == 1, "Owned ScreenRect has mixed unreviewed consumer purposes")
+    return {"purpose": purposes.pop(), "callers": result, "direct_call_audit_complete": True,
+            "indirect_callers_proven_absent": False}
+
+
+def geometry_trait(image, decorated, logs, owned):
+    rva, code = function_evidence(image, decorated, logs)
+    entry = {"role": "screen_rect", "rva": rva, **image.section(rva, 16, True),
+             "prologue": list(image.bytes(rva, 16)), "decorated_symbol": decorated, "register_recipe": None}
+    abi = "system_tray_coordinates_x64_v1" if owned else "system_tray_drag_drop_borrowed_coordinates_x64_v1"
+    result = {"trait_id": "owned_screen_rect" if owned else "drag_drop_borrowed", "status": "unreviewed",
+              "abi_candidate": abi, "entry": entry, "abi_status": "unreviewed", "evidence": None,
+              "usage": {"purpose": "unreviewed" if owned else "drag_drop_hit_testing"}, "analysis_blockers": []}
+    try:
+        result["evidence"] = owned_screen(image, code, logs) if owned else borrowed_screen(image, code, logs)
+        result["abi_status"] = "reviewed"
+    except EvidenceError as error:
+        result["analysis_blockers"].append({"stage": "abi", "error": str(error)})
+    try:
+        if owned:
+            result["usage"] = owned_callers(image, rva, logs)
+            result["trait_id"] = {"copilot_button_geometry": "copilot_button_owned",
+                                  "notification_area_bounds": "notification_area_owned"}[result["usage"]["purpose"]]
+        elif result["evidence"]:
+            result["usage"] = {"purpose": "drag_drop_hit_testing", "callers": result["evidence"]["callers"],
+                               "direct_call_audit_complete": True, "indirect_callers_proven_absent": False}
+    except EvidenceError as error:
+        result["analysis_blockers"].append({"stage": "usage", "error": str(error)})
+    if not result["analysis_blockers"]:
+        result["status"] = "reviewed"
+    return result
+
+
 def tray_layout(image: Image, logs):
     entries = []
-    cleanup = None
-    borrowed = None
     owned_present = any(s["decorated_name"] == TRAY_SYMBOLS[2][1] for s in image.symbols)
     borrowed_present = any(s["decorated_name"] == BORROWED_SCREEN for s in image.symbols)
-    require(owned_present != borrowed_present, "Missing/ambiguous reviewed screen-rectangle ABI entry")
-    selected = TRAY_SYMBOLS if owned_present else (*TRAY_SYMBOLS[:2], ("screen_rect", BORROWED_SCREEN))
-    for role, decorated in selected:
+    require(owned_present or borrowed_present, "Missing reviewed screen-rectangle signatures")
+    present = [(TRAY_SYMBOLS[2][1], True)] if owned_present else []
+    if borrowed_present:
+        present.append((BORROWED_SCREEN, False))
+    # Ambiguous symbol identity is a module-level rejection, not a choice among traits.
+    rvas = [image.exact(name) for name, _ in present]
+    require(len(set(rvas)) == len(rvas), "Distinct geometry signatures alias the same function")
+    ranges = []
+    for rva in rvas:
+        tail = image.function(rva)[-1]
+        ranges.append((rva, tail.address + tail.size))
+    require(all(end <= other or other_end <= start for i, (start, end) in enumerate(ranges)
+                for other, other_end in ranges[i + 1:]), "Geometry function boundaries overlap")
+    for role, decorated in TRAY_SYMBOLS[:2]:
         rva, code = function_evidence(image, decorated, logs)
-        register_recipe = None
-        if role in ("invocation_point", "icon_bounds"):
-            register_recipe = coordinate_member(code, role)
-        elif owned_present:
-            find_sequence(code, (("mov", "r15, r8"), ("mov", "rsi, rdx"), ("mov", "r14, rcx")))
-            find_sequence(code, (("movdqu", "xmmword ptr [r14], xmm0"),))
-            find_sequence(code, (("mov", "rax, r14"),))
-            cleanup = owned_cleanup(image, code, logs)
-        else:
-            borrowed = borrowed_screen(image, code, logs)
         entries.append({"role": role, "rva": rva, **image.section(rva, 16, True),
                         "prologue": list(image.bytes(rva, 16)), "decorated_symbol": decorated,
-                        "register_recipe": register_recipe})
-    return {"abi_candidate": ("system_tray_coordinates_x64_v1" if owned_present else
-                              "system_tray_drag_drop_borrowed_coordinates_x64_v1"), "module_name": image.path.name,
-            "entries": entries, "owned_value_cleanup": cleanup, "borrowed_value_evidence": borrowed,
+                        "register_recipe": coordinate_member(code, role)})
+    traits = [geometry_trait(image, name, logs, owned) for name, owned in present]
+    capabilities = {}
+    for purpose in ("notification_area_bounds", "drag_drop_hit_testing", "copilot_button_geometry"):
+        matches = [trait for trait in traits if trait["usage"]["purpose"] == purpose]
+        require(len(matches) <= 1, "Ambiguous geometry implementations for one consumer")
+        capabilities[purpose] = ({"status": matches[0]["status"], "trait_id": matches[0]["trait_id"]} if matches else
+                                 {"status": "unavailable", "trait_id": None})
+    single = traits[0] if len(traits) == 1 and traits[0]["status"] == "reviewed" else None
+    if single:
+        entries.append(single["entry"])
+    owned_proof = next((trait["evidence"] for trait in traits if trait["abi_candidate"] ==
+                        "system_tray_coordinates_x64_v1"), None)
+    borrowed_proof = next((trait["evidence"] for trait in traits if trait["abi_candidate"] ==
+                           "system_tray_drag_drop_borrowed_coordinates_x64_v1"), None)
+    return {"abi_candidate": single["abi_candidate"] if single else None, "module_name": image.path.name,
+            "entries": entries, "screen_rect_traits": traits, "geometry_capabilities": capabilities,
+            "implementation_selection": "single_reviewed_implementation" if single else "requires_consumer_choice",
+            "owned_value_cleanup": owned_proof["owned_value_cleanup"] if owned_proof else None,
+            "borrowed_value_evidence": borrowed_proof,
             "production_profile_match_checked": False}
 
 

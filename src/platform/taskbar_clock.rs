@@ -65,6 +65,9 @@ impl taskbar_service::Backend for Native {
     }
 }
 impl taskbar_service::Session for Connection {
+    fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
+    }
     fn environment_matches(&self) -> bool {
         self.verify_endpoint().is_ok()
             && self.environment.as_ref().is_some_and(|original| {
@@ -92,20 +95,23 @@ pub struct Preflight {
     source: Option<Route>,
     clocks: bool,
     mirror_icons: bool,
+    notice: Option<String>,
     environment: Option<super::taskbar_environment::Environment>,
 }
 pub fn preflight(config: &Config) -> Result<Preflight, String> {
     let system = std::env::var_os("SystemRoot")
         .map(std::path::PathBuf::from)
         .ok_or("SystemRoot 不可用")?;
-    // Known builds carry complete layouts; startup has no PDB/network dependency.
-    let layout = crate::compatibility::preflight(
+    // Recognition is per module; unsupported tray capabilities do not disable
+    // a requested, independently recognized clock. No startup PDB download.
+    let (layout, capabilities) = crate::compatibility::negotiate(
         &system,
         config.tray.clock_enabled,
         config.tray.enabled && config.tray.show_icons,
     )?;
     let mut tray = config.tray.clone();
-    tray.enabled = tray.enabled && tray.show_icons;
+    tray.enabled = capabilities.tray;
+    tray.clock_enabled = capabilities.clocks;
     tray.show_control_center = false;
     tray.copied_taskbars_only = true;
     let snapshot = diagnostics::collect_for(&tray);
@@ -124,8 +130,9 @@ pub fn preflight(config: &Config) -> Result<Preflight, String> {
         volume_scroll: config.clock.volume_scroll,
         volume_mute: config.clock.volume_mute,
         source: plan.source,
-        clocks: config.tray.clock_enabled,
-        mirror_icons: config.tray.enabled && config.tray.show_icons,
+        clocks: capabilities.clocks,
+        mirror_icons: capabilities.tray,
+        notice: capabilities.notice,
         environment,
     })
 }
@@ -148,6 +155,7 @@ pub struct Connection {
     last: RefCell<Option<Frame>>,
     busy: Cell<bool>,
     failure: RefCell<Option<String>>,
+    notice: Option<String>,
     environment: Option<super::taskbar_environment::Environment>,
 }
 struct Call<'a>(&'a Cell<bool>);
@@ -216,6 +224,7 @@ impl Connection {
                 last: RefCell::new(None),
                 busy: Cell::new(false),
                 failure: RefCell::new(None),
+                notice: preflight.notice,
                 environment: preflight.environment,
             };
             let class = wide(RECEIVER_CLASS);
@@ -679,6 +688,7 @@ mod activation_checks {
                 busy: Cell::new(false),
                 failure: RefCell::new(None),
                 environment: None,
+                notice: None,
             };
             let accepted = connection.take_activation();
             CloseHandle(connection.process);

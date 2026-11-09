@@ -243,7 +243,7 @@
     "factory_vtable_rva": 7094288
   },
   "topology": "system_tray_frame_v1",
-  "tray_abi": "system_tray_coordinates_x64_v1",
+  "tray_abi": "system_tray_drag_drop_borrowed_coordinates_x64_v1",
   "tray_entries": [
     {
       "role": "invocation_point",
@@ -297,28 +297,29 @@
     },
     {
       "role": "screen_rect",
-      "rva": 4585720,
+      "rva": 314992,
       "section_start": 4096,
       "section_size": 7437260,
       "executable": true,
       "prologue": [
-        72,
-        137,
-        92,
-        36,
-        8,
-        72,
-        137,
-        116,
-        36,
-        32,
+        64,
         85,
+        83,
+        86,
         87,
         65,
-        84,
-        65,
-        86
+        86,
+        72,
+        139,
+        236,
+        72,
+        131,
+        236,
+        112,
+        15,
+        41
       ]
     }
-  ]
+  ],
+  "tray_geometry": "drag_drop_hit_testing"
 }

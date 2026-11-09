@@ -1,0 +1,135 @@
+{
+  "algorithm": "litetray-execution-equivalence-v1",
+  "entries": [
+    {
+      "fingerprint": null,
+      "profile_id": "windows11-26300.9711-x64",
+      "role": "taskbar",
+      "sha256": "ca1e335ac1fae5ff57519035302a2f365c4620d3a230f31f1231af7331760741",
+      "unavailable_reason": "Original PE bytes were not retained; exact-image recognition only."
+    },
+    {
+      "fingerprint": null,
+      "profile_id": "windows11-26300.9711-x64",
+      "role": "shell",
+      "sha256": "8ba440eded430a2417692a98b34695a12ad0ee000333dfed07e0c2723e17111c",
+      "unavailable_reason": "Original PE bytes were not retained; exact-image recognition only."
+    },
+    {
+      "fingerprint": null,
+      "profile_id": "windows11-26300.9711-x64",
+      "role": "tray",
+      "sha256": "c5f5260a2a56c4d7b0ee25978aa06c387b5ddffc57c5fe412be429d1289913ce",
+      "unavailable_reason": "Original PE bytes were not retained; exact-image recognition only."
+    },
+    {
+      "fingerprint": "b7e25d90e5c9c581586aba5245c062b6ea1c5f618a951d22636f4d440a550e54",
+      "profile_id": "windows11-26300.9818-x64",
+      "role": "taskbar",
+      "sha256": "a52f99f7be8cc1ee360025d1c06c1480a489b1d309bef230c05eb21a106ccf34"
+    },
+    {
+      "fingerprint": "32cdc1b85f3da4e89c8c12e11ece6d0489e1025977c9f1090d4b94d1a791ac08",
+      "profile_id": "windows11-26300.9818-x64",
+      "role": "shell",
+      "sha256": "1894863a224d22bd8d3ef0e1ba382b4d3d3079e0fa9a1fdeee82f3ebace003b6"
+    },
+    {
+      "fingerprint": "74ba31447ec6cb6edd5dcf0829342d7bde0c1a4940af3a58fa51525c56bcd928",
+      "profile_id": "windows11-26300.9818-x64",
+      "role": "tray",
+      "sha256": "9772d19ec44f22ab2fcb976941d6ba6d1e66aabfb9d66367723bb9154ce7769f"
+    },
+    {
+      "fingerprint": "f43648be4d0842456a250a464e08a5421091099b7de5f1d61c519ff4bc39d8ea",
+      "profile_id": "windows11-26200.8457-x64",
+      "role": "taskbar",
+      "sha256": "41326fffd57a2c6e08d1884a698bd9e9dfe90de0614de98733edaebacb5f5403"
+    },
+    {
+      "fingerprint": "46cf2099f3db234718a7eacce12a7260dcaf066bdb59bc513f2dd1a65a7d7052",
+      "profile_id": "windows11-26200.8457-x64",
+      "role": "shell",
+      "sha256": "bc5e4daaace00d2eaff630f0f27078c29a0a56ae77b5cf51d3cfd5a766581f59"
+    },
+    {
+      "fingerprint": "0343c9c576aee303baaa8e7791d93daf15e2b5ba71f3c6cd9635ce55d0faf634",
+      "profile_id": "windows11-26200.8457-x64",
+      "role": "tray",
+      "sha256": "a920c97ace9f336855ebfea221101eb03739398c8b75ac6dcf28d82ed645aed5"
+    },
+    {
+      "fingerprint": "76c6f959c09a63f8e3c4bea7f591e2c7c66ae29bdd565da6ca945836543db19e",
+      "profile_id": "windows11-26200.8037-x64",
+      "role": "taskbar",
+      "sha256": "9312c39df6be503f54a3e9bee1a7b32a249375daba0e0a8d5941f941d6e09481"
+    },
+    {
+      "fingerprint": "2174921bcf05ccb5de279efdbe4528c38fc2ea3d3ce868a7bfb7c0676683d27e",
+      "profile_id": "windows11-26200.8037-x64",
+      "role": "shell",
+      "sha256": "d56742e631ab34b07b0b908eddbdfd1811e8f0ad760641ba57125922f1ce1dc0"
+    },
+    {
+      "fingerprint": "d35e82e62d921fbd0cdc4f687a100f9b756c8c16784553cb5c0c0444a493c7b9",
+      "profile_id": "windows11-26200.8037-x64",
+      "role": "tray",
+      "sha256": "662d4cbfcbe2547ee2c66f68245acaaceb10c4280e6568b35c95aff295e20030"
+    },
+    {
+      "fingerprint": "d4a746f900129593767b71c743178b4a13b4c82532407c2e75d4d6241a52e38e",
+      "profile_id": "windows11-26100.1742-x64",
+      "role": "taskbar",
+      "sha256": "b3be279bcb5a7fb63dbdc24cc1c55442a3965b68702a98fbdb6496d91cb40de5"
+    },
+    {
+      "fingerprint": "f4ad4738db9768f60c2c43e0a5d4acf28ad9aea7cc7cfff650de0f2db435f01a",
+      "profile_id": "windows11-26100.1742-x64",
+      "role": "shell",
+      "sha256": "3ef119746b60885b8923c49de95860caca0639aec1e2e7aa0a4113356b2cedb9"
+    },
+    {
+      "fingerprint": "b163fa03580cc59adf80f988fb1d804a29196c27b31b0734366ca5b6b4bdab75",
+      "profile_id": "windows11-26100.1742-x64",
+      "role": "tray",
+      "sha256": "734e19a7e749f4112acc1e072ab35a11fdd3ffc04d8fcf54f603593758702d5b"
+    },
+    {
+      "fingerprint": "d907ad656f14c50a20a3aca4b1cfb1fcfbe349e4da51dabd2072b9d23029bbce",
+      "profile_id": "windows11-22631.2861-x64",
+      "role": "taskbar",
+      "sha256": "11f795ade465af0658e2168add113e48f439e412dc869fc0d5c5758fd3c339ef"
+    },
+    {
+      "fingerprint": "f0305e1d186821d2d6e3228a1b14f1c99c002dec16bd1205aece743b8089d777",
+      "profile_id": "windows11-22631.2861-x64",
+      "role": "shell",
+      "sha256": "2def9450cf84247eb31a802de9c72fbec58a2b1a7318ec200cb68ee8816393df"
+    },
+    {
+      "fingerprint": "da4dc2eaa1757dd729c249e3306949ec3a311dc563084ea934dd86990ad25f50",
+      "profile_id": "windows11-22631.2861-x64",
+      "role": "tray",
+      "sha256": "40b885be70c8ea0212bd2f995607753f86be8464588e2fb695be4d27ee364014"
+    },
+    {
+      "fingerprint": "97c53a6bb30d16d7a2cac22888f3764ced16552e3ad978eca326fd7cad57c0d7",
+      "profile_id": "windows11-22621.1702-x64",
+      "role": "taskbar",
+      "sha256": "d39046dd6d75f693e770cfb14c50aebce7bfbe704d362735c42e0ab499b19472"
+    },
+    {
+      "fingerprint": "27e9025ed86b0f837a53213d46307ad4bd71283d9d9f193430aa1593aff17a17",
+      "profile_id": "windows11-22621.1702-x64",
+      "role": "shell",
+      "sha256": "14a91ac45b016694988f68f17eef84fab2d46196d11c1ee5bde95763ae008a03"
+    },
+    {
+      "fingerprint": "114fb2082c50a5d489e87434c52faa5f6dfe760b6f31ae7f8512a9ed6b86c10d",
+      "profile_id": "windows11-22621.1702-x64",
+      "role": "tray",
+      "sha256": "1e5fe48b6418b4587544c4dbcbb526c8d0a1a9a2fbd81d2917b8c69e6b81d4be"
+    }
+  ],
+  "schema": 1
+}

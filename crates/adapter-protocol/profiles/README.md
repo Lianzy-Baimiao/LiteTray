@@ -5,8 +5,7 @@ profiles. `windows11-22621.1702-x64.json` (22H2 Pro) and
 `windows11-22631.2861-x64.json` (23H2 Pro) were promoted after independently
 installed guests passed six scoped checks and independent evidence review.
 Both use the separately implemented four-argument borrowed-element
-`system_tray_drag_drop_borrowed_coordinates_x64_v1` ABI; the other five retain
-the three-argument owned-element ABI. Exact modules/layout, primary-clock
+`system_tray_drag_drop_borrowed_coordinates_x64_v1` ABI. In 5.15.0 LTSC also uses this borrowed ABI after caller analysis found its previous owned entry only served Copilot. The remaining four retain the owned-element ABI, with consumer purpose explicitly recorded in `tray_geometry`. Exact modules/layout, primary-clock
 updates/restoration and tray preparation/stop have recorded acceptance.
 Input, replication, multiple monitors and mixed DPI remain unvalidated.
 See [22H2 / 23H2 evidence](../../../docs/compatibility-22h2-23h2.md) for package
@@ -34,11 +33,7 @@ failed attempts and tested binary hashes. Input, tray replication, multiple-moni
 and mixed-DPI acceptance remain pending.
 
 The JSON files are compiled into both host and adapter with `include_bytes!`.
-`compatibility::profiles()` validates the registry once. Selection uses the
-complete taskbar image identity and additionally requires its disk SHA-256;
-the selected profile supplies all required shell and tray evidence. Unknown
-or ambiguous taskbar identities do not fall back to another profile, and
-modules from different profiles cannot be combined. The production path does not
+`compatibility::profiles()` validates the registry once. Since 5.15.0, each module is recognized independently by exact identity/hash or the strict execution-equivalence fingerprint. Host/source fields remain owned by their respective modules; compatible interface contracts may compose. The injected adapter independently repeats recognition and checks actual loaded identities and object ownership. Exact-only historical acceptance is never inherited by an equivalent image or a composed set. See [module recognition](../../../docs/module-recognition.md). The production path does not
 accept external JSON overrides. Recipe and ABI enums name Rust implementations;
 data cannot add a new calling convention or arbitrary memory operation.
 

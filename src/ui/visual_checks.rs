@@ -1430,8 +1430,8 @@ fn compatibility_results_update_controls_without_rebuilding_or_switching_pages()
         app.receive();
         assert_eq!(app.field(960), clock);
         assert_eq!(window_text(clock), "模块匹配 · 运行时仍需验证");
-        assert!(window_text(app.field(962)).contains("暂不支持接管"));
-        assert!(window_text(app.field(954)).contains("适用功能见下方"));
+        assert!(window_text(app.field(962)).contains("此功能暂不可用"));
+        assert!(window_text(app.field(954)).contains("已识别模块： 2/3"));
         assert!(window_text(app.field(970)).contains("不能套用"));
 
         app.command(NAV + 7);
@@ -3095,6 +3095,11 @@ fn compatibility_snapshot_for_check() -> compatibility::Snapshot {
                 pdb_age: module.identity.pdb_age,
             }),
             reason: None,
+            recognition: Some(litetray::compatibility::RecognitionReport {
+                basis: litetray_adapter_protocol::compatibility::MatchBasis::ExactImage,
+                evidence_profile: profile.profile_id.clone(),
+                implementation: "Synthetic display fixture; not live evidence".into(),
+            }),
         })
         .collect();
     let features = [
@@ -3155,6 +3160,7 @@ fn compatibility_snapshot_for_check() -> compatibility::Snapshot {
             profile_id: Some(profile.profile_id.clone()),
             profile_selection_reason: None,
             all_profile_images_matched: true,
+            implementation: None,
             modules,
             other_images: vec![],
             features,

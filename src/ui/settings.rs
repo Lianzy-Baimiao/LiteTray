@@ -105,14 +105,19 @@ impl App {
             }
             use litetray::taskbar_service::Status;
             let enabled = self.saved.tray.clock_enabled;
-            let state = self
-                .taskbar
-                .as_ref()
-                .map(|service| service.snapshot().status);
+            let snapshot = self.taskbar.as_ref().map(|service| service.snapshot());
+            let state = snapshot.as_ref().map(|value| value.status);
             let status = match state {
                 Some(Status::RestoreBlocked) => "系统时钟恢复未完成，请点击“重试恢复”。",
                 Some(Status::Restoring) => "正在恢复系统时钟；可在时钟设置中查看进度或重试。",
                 _ if !enabled => "当前使用系统时钟。启用后，可在任务栏显示自定义时间和天气。",
+                Some(Status::Running)
+                    if snapshot
+                        .as_ref()
+                        .is_some_and(|value| value.reason.is_some()) =>
+                {
+                    "时钟托管正在运行；部分托盘功能待适配，详情见兼容性页签。"
+                }
                 Some(Status::Running) => "时钟托管正在运行，可随时恢复系统时钟。",
                 Some(Status::Preparing | Status::Busy) => {
                     "正在连接任务栏时钟，完成后将显示自定义时间和天气。"
