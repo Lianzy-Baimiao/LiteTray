@@ -35,6 +35,34 @@ pub(super) const OPEN_WEATHER_FORMAT: u16 = 226;
 pub(super) const VOLUME_SCROLL: u16 = 227;
 pub(super) const VOLUME_MUTE: u16 = 228;
 pub(super) const COMPACT_LAYOUT: u16 = 229;
+pub(super) const HOME_CLOCK_ACTION: u16 = 230;
+pub(super) const HOME_CLOCK_SETTINGS: u16 = 231;
+pub(super) const HOME_CLOCK_STATUS: u16 = 232;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HomeClockAction {
+    Enable,
+    Restore,
+    RetryRestore,
+    Wait,
+}
+pub(super) fn home_clock_action(
+    enabled: bool,
+    status: Option<litetray::taskbar_service::Status>,
+) -> HomeClockAction {
+    use litetray::taskbar_service::Status;
+    if status == Some(Status::RestoreBlocked) {
+        HomeClockAction::RetryRestore
+    } else if enabled {
+        HomeClockAction::Restore
+    } else if matches!(
+        status,
+        Some(Status::Preparing | Status::Busy | Status::Restoring)
+    ) {
+        HomeClockAction::Wait
+    } else {
+        HomeClockAction::Enable
+    }
+}
 pub(super) const LANGUAGE: u16 = 505;
 pub(super) const PRESETS: [(&str, &str, &str); 4] = [
     ("Windows 简洁", "%time%", "%date%"),
@@ -43,6 +71,101 @@ pub(super) const PRESETS: [(&str, &str, &str); 4] = [
     ("紧凑年月日", "%time%", "%date%"),
 ];
 impl App {
+    pub(super) unsafe fn home_clock_controls(&mut self, width: i32) {
+        unsafe {
+            let total = width - 260;
+            self.section("任务栏时钟", 224, 88, total - 398);
+            self.button(
+                "启用任务栏时钟",
+                HOME_CLOCK_ACTION,
+                224 + total - 382,
+                84,
+                214,
+            );
+            self.button("时钟设置", HOME_CLOCK_SETTINGS, 224 + total - 156, 84, 156);
+            self.control(
+                "STATIC",
+                "",
+                HOME_CLOCK_STATUS,
+                SS_LEFT as u32,
+                224,
+                128,
+                total,
+                24,
+            );
+            self.divider(224, 164, total);
+            self.update_home_clock_controls();
+        }
+    }
+
+    pub(super) unsafe fn update_home_clock_controls(&self) {
+        unsafe {
+            if self.page != 0 {
+                return;
+            }
+            use litetray::taskbar_service::Status;
+            let enabled = self.saved.tray.clock_enabled;
+            let state = self
+                .taskbar
+                .as_ref()
+                .map(|service| service.snapshot().status);
+            let status = match state {
+                Some(Status::RestoreBlocked) => "系统时钟恢复未完成，请点击“重试恢复”。",
+                Some(Status::Restoring) => "正在恢复系统时钟；可在时钟设置中查看进度或重试。",
+                _ if !enabled => "当前使用系统时钟。启用后，可在任务栏显示自定义时间和天气。",
+                Some(Status::Running) => "时钟托管正在运行，可随时恢复系统时钟。",
+                Some(Status::Preparing | Status::Busy) => {
+                    "正在连接任务栏时钟，完成后将显示自定义时间和天气。"
+                }
+                Some(Status::Waiting | Status::Suspended) => {
+                    "任务栏时钟尚未连接；请在时钟设置中查看原因或重试。"
+                }
+                _ => "已启用时钟托管，可在时钟设置中查看连接状态。",
+            };
+            set_text(self.field(HOME_CLOCK_STATUS), status);
+            set_text(
+                self.field(HOME_CLOCK_ACTION),
+                match home_clock_action(enabled, state) {
+                    HomeClockAction::RetryRestore => "重试恢复",
+                    HomeClockAction::Restore => "恢复系统时钟",
+                    HomeClockAction::Enable | HomeClockAction::Wait => "启用任务栏时钟",
+                },
+            );
+            // A requested stop remains available while connection work is in
+            // flight. Enabling waits for any preceding restoration to finish.
+            EnableWindow(
+                self.field(HOME_CLOCK_ACTION),
+                i32::from(home_clock_action(enabled, state) != HomeClockAction::Wait),
+            );
+        }
+    }
+
+    pub(super) unsafe fn enable_home_clock(&mut self) {
+        unsafe {
+            // The home action changes only the saved enable preference. Draft
+            // edits from another page must not become live as a side effect.
+            let mut config = self.saved.clone();
+            config.tray.clock_enabled = true;
+            if let Err(error) = config::save(&config::data_dir().join("config.json"), &config) {
+                self.set_status(error);
+                return;
+            }
+            self.saved = config;
+            self.draft.tray.clock_enabled = true;
+            let result = self
+                .taskbar
+                .as_ref()
+                .map(|service| service.configure(self.saved.clone(), taskbar_now()))
+                .transpose();
+            self.set_status(match result {
+                Ok(_) => tr("已启用任务栏时钟").into(),
+                Err(error) => error,
+            });
+            self.update_views();
+            self.schedule_tick();
+        }
+    }
+
     pub(super) unsafe fn tray_settings(&mut self, c: &Config, width: i32) {
         unsafe {
             let total = width - 260;

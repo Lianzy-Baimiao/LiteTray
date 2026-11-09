@@ -259,11 +259,7 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         Some("--check-updates") => {
-            let result = update::check(
-                &http::Client::new(15),
-                &config.updates,
-                env!("CARGO_PKG_VERSION"),
-            )?;
+            let result = update::check_current(&http::Client::new(15), &config.updates)?;
             println!("{}", result.text());
             Ok(())
         }

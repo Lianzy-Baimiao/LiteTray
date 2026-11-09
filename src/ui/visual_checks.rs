@@ -2721,6 +2721,249 @@ fn closing_settings_saves_valid_edits_and_keeps_failed_saves_open() {
     });
 }
 #[test]
+fn home_clock_restore_retry_never_requires_reenabling_the_clock() {
+    use litetray::taskbar_service::Status;
+    use settings::{HomeClockAction, home_clock_action};
+    for enabled in [false, true] {
+        assert_eq!(
+            home_clock_action(enabled, Some(Status::RestoreBlocked)),
+            HomeClockAction::RetryRestore,
+            "restoration retry must remain distinct from enabling the clock"
+        );
+    }
+    for status in [Status::Preparing, Status::Busy, Status::Restoring] {
+        assert_eq!(
+            home_clock_action(false, Some(status)),
+            HomeClockAction::Wait
+        );
+        assert_eq!(
+            home_clock_action(true, Some(status)),
+            HomeClockAction::Restore
+        );
+    }
+    assert_eq!(home_clock_action(false, None), HomeClockAction::Enable);
+}
+
+#[test]
+fn home_clock_actions_are_visible_and_only_save_the_enable_preference() {
+    on_isolated_desktop(|| unsafe {
+        struct ProfileGuard {
+            directory: std::path::PathBuf,
+            parent: std::path::PathBuf,
+            previous: Option<std::ffi::OsString>,
+        }
+        impl Drop for ProfileGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    if let Some(previous) = &self.previous {
+                        std::env::set_var("LITETRAY_DATA_DIR", previous);
+                    } else {
+                        std::env::remove_var("LITETRAY_DATA_DIR");
+                    }
+                }
+                if let Ok(resolved) = std::fs::canonicalize(&self.directory)
+                    && resolved == self.directory
+                    && resolved.parent() == Some(self.parent.as_path())
+                {
+                    let _ = std::fs::remove_dir_all(resolved);
+                }
+            }
+        }
+        assert!(std::env::var_os("LITETRAY_ISOLATED_SETTINGS_TEST").is_some());
+        let parent = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        let directory = parent.join(format!(
+            "litetray-home-clock-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let profile = ProfileGuard {
+            directory: std::fs::canonicalize(directory).unwrap(),
+            parent,
+            previous: std::env::var_os("LITETRAY_DATA_DIR"),
+        };
+        std::env::set_var("LITETRAY_DATA_DIR", &profile.directory);
+        let config_path = profile.directory.join("config.json");
+        let mut app = app_for_check(false, 96, &profile.directory.join("agenda.json"));
+        let saved = app.saved.clone();
+        // A shortcut on Home must not apply or reject unrelated draft edits.
+        app.draft.clock.width = u32::MAX;
+        app.draft.clock.top_line = "unsaved clock template".into();
+        SetWindowPos(
+            app.hwnd,
+            null_mut(),
+            0,
+            0,
+            app.scale(1060),
+            app.scale(820),
+            SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
+        );
+        app.render();
+        let mut failures = vec![];
+        audit_native_layout(app.hwnd, "Home clock controls", &mut failures);
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        for id in [settings::HOME_CLOCK_ACTION, settings::HOME_CLOCK_SETTINGS] {
+            assert!(!app.field(id).is_null());
+            assert_ne!(
+                GetWindowLongW(app.field(id), GWL_STYLE) as u32 & WS_TABSTOP,
+                0
+            );
+            assert_ne!(IsWindowEnabled(app.field(id)), 0);
+        }
+        assert_eq!(
+            window_text(app.field(settings::HOME_CLOCK_ACTION)),
+            "启用任务栏时钟"
+        );
+        assert!(window_text(app.field(settings::HOME_CLOCK_STATUS)).contains("当前使用系统时钟"));
+        assert!(!app.saved.tray.clock_enabled && !config_path.exists());
+        let hwnd = app.hwnd;
+        let action = app.field(settings::HOME_CLOCK_ACTION);
+        let settings = app.field(settings::HOME_CLOCK_SETTINGS);
+        STATE.with(|state| *state.borrow_mut() = Some(app));
+
+        // The real save failure must not enable a connection or alter drafts.
+        std::fs::create_dir(&config_path).unwrap();
+        SendMessageW(action, BM_CLICK, 0, 0);
+        STATE.with(|state| {
+            let state = state.borrow();
+            let app = state.as_ref().unwrap();
+            assert!(!app.saved.tray.clock_enabled && !app.draft.tray.clock_enabled);
+            assert!(app.taskbar.is_none());
+        });
+        std::fs::remove_dir(&config_path).unwrap();
+
+        SendMessageW(action, BM_CLICK, 0, 0);
+        let mut expected = saved.clone();
+        expected.tray.clock_enabled = true;
+        assert_eq!(
+            serde_json::to_value(config::load(&config_path).unwrap()).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
+        STATE.with(|state| {
+            let state = state.borrow();
+            let app = state.as_ref().unwrap();
+            assert!(app.saved.tray.clock_enabled && app.draft.tray.clock_enabled);
+            assert_eq!(app.draft.clock.width, u32::MAX);
+            assert_eq!(app.draft.clock.top_line, "unsaved clock template");
+            assert!(
+                app.taskbar.is_none(),
+                "fixture must not connect to Explorer"
+            );
+            assert_eq!(window_text(action), "恢复系统时钟");
+            assert!(window_text(app.field(settings::HOME_CLOCK_STATUS)).contains("查看连接状态"));
+        });
+
+        SendMessageW(action, BM_CLICK, 0, 0);
+        assert_eq!(
+            serde_json::to_value(config::load(&config_path).unwrap()).unwrap(),
+            serde_json::to_value(&saved).unwrap(),
+            "restoring Windows clock must persist the user's disabled choice"
+        );
+        assert_eq!(window_text(action), "启用任务栏时钟");
+        SendMessageW(settings, BM_CLICK, 0, 0);
+        STATE.with(|state| {
+            let mut app = state.borrow_mut().take().unwrap();
+            assert_eq!(
+                app.page, 1,
+                "Home shortcut must open Clock content on one click"
+            );
+            assert!(!app.field(212).is_null() && !app.field(213).is_null());
+            assert!(!app.saved.tray.clock_enabled);
+            assert_eq!(app.draft.clock.width, u32::MAX);
+            assert_eq!(app.text(201), "unsaved clock template");
+            DestroyWindow(hwnd);
+            app.release_resources();
+        });
+    });
+}
+
+#[test]
+fn home_clock_labels_follow_language_and_saved_disabled_choice() {
+    on_isolated_desktop(|| unsafe {
+        for dark in [false, true] {
+            let mut app = app_for_check(
+                dark,
+                96,
+                &std::env::temp_dir().join("litetray-home-clock-labels-unused.json"),
+            );
+            app.saved.language = Language::En;
+            app.draft.language = Language::En;
+            app.recreate_resources();
+            app.render();
+            assert_eq!(
+                window_text(app.field(settings::HOME_CLOCK_ACTION)),
+                "Enable taskbar clock"
+            );
+            assert_eq!(
+                window_text(app.field(settings::HOME_CLOCK_SETTINGS)),
+                "Clock settings"
+            );
+            assert!(
+                window_text(app.field(settings::HOME_CLOCK_STATUS))
+                    .starts_with("Using Windows clock.")
+            );
+            app.saved.tray.clock_enabled = true;
+            app.update_views();
+            assert_eq!(
+                window_text(app.field(settings::HOME_CLOCK_ACTION)),
+                "Restore Windows clock"
+            );
+            assert!(
+                window_text(app.field(settings::HOME_CLOCK_STATUS))
+                    .starts_with("Taskbar clock enabled.")
+            );
+            app.saved.tray.clock_enabled = false;
+            app.render();
+            assert_eq!(
+                window_text(app.field(settings::HOME_CLOCK_ACTION)),
+                "Enable taskbar clock"
+            );
+            assert!(
+                !app.saved.tray.clock_enabled,
+                "opening Home must not enable a saved-disabled clock"
+            );
+            if let Some(directory) = std::env::var_os("LITETRAY_HOME_CLOCK_RENDER_DIR") {
+                let directory = std::path::PathBuf::from(directory);
+                std::fs::create_dir_all(&directory).unwrap();
+                write_window(
+                    app.hwnd,
+                    &directory.join(if dark {
+                        "home-clock-en-dark.bmp"
+                    } else {
+                        "home-clock-en-light.bmp"
+                    }),
+                );
+            }
+            app.saved.language = Language::ZhCn;
+            app.draft.language = Language::ZhCn;
+            app.recreate_resources();
+            app.render();
+            assert_eq!(
+                window_text(app.field(settings::HOME_CLOCK_ACTION)),
+                "启用任务栏时钟"
+            );
+            assert_eq!(
+                window_text(app.field(settings::HOME_CLOCK_SETTINGS)),
+                "时钟设置"
+            );
+            if let Some(directory) = std::env::var_os("LITETRAY_HOME_CLOCK_RENDER_DIR") {
+                let directory = std::path::PathBuf::from(directory);
+                write_window(
+                    app.hwnd,
+                    &directory.join(if dark {
+                        "home-clock-zh-dark.bmp"
+                    } else {
+                        "home-clock-zh-light.bmp"
+                    }),
+                );
+            }
+            DestroyWindow(app.hwnd);
+            app.release_resources();
+        }
+    });
+}
+
+#[test]
 fn settings_browsing_does_not_create_unsaved_changes() {
     on_isolated_desktop(|| unsafe {
         let mut profiles = vec![];

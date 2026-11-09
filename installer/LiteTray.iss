@@ -76,7 +76,7 @@ Name: "{group}\{cm:UninstallProgram,LiteTray}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\LiteTray"; Filename: "{#AppExe}"; Parameters: "--settings"; WorkingDir: "{app}\versions\{#BuildId}"; Tasks: desktopicon
 
 [Run]
-Filename: "{#AppExe}"; Parameters: "--background"; Description: "{cm:LaunchProgram,LiteTray}"; Flags: nowait postinstall skipifsilent
+Filename: "{#AppExe}"; Parameters: "--settings"; Description: "{cm:LaunchProgram,LiteTray}"; Flags: nowait postinstall skipifsilent
 
 [CustomMessages]
 zhcn.CloseFailed=LiteTray 未能正常退出。请从 LiteTray 托盘菜单退出后重试，安装程序不会强制结束 Explorer。

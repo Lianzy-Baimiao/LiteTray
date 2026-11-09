@@ -23,13 +23,20 @@ if (-not $CompilerPath -or -not (Test-Path -LiteralPath $CompilerPath)) {
 if (-not $SkipBuild) {
     & (Join-Path $PSScriptRoot 'Invoke-Cargo.ps1') -CargoArguments @('build','--workspace','--release','--locked')
 }
-$source = [IO.File]::ReadAllText((Join-Path $projectRoot 'src\ui.rs'))
-$match = [regex]::Match($source, 'const UI_REVISION: &str = "开发版 ([0-9]+\.[0-9]+(?:\.[0-9]+)?)";')
-if (-not $match.Success) { throw 'Cannot determine the UI release version.' }
-$version = $match.Groups[1].Value
-if ($version.Split('.').Count -eq 2) { $version += '.0' }
+$metadataText = & cargo metadata --format-version 1 --no-deps --locked --manifest-path (Join-Path $projectRoot 'Cargo.toml')
+if ($LASTEXITCODE -ne 0) { throw 'Cannot read the Cargo release version.' }
+$metadata = ($metadataText -join "`n") | ConvertFrom-Json
+$package = @($metadata.packages | Where-Object { $_.name -eq 'litetray' })
+if ($package.Count -ne 1 -or $package[0].version -notmatch '^\d+\.\d+\.\d+$') {
+    throw 'The LiteTray package must have one numeric major.minor.patch release version.'
+}
+$version = $package[0].version
 $payload = Join-Path $projectRoot 'build\installer-payload'
 & (Join-Path $PSScriptRoot 'Package.ps1') -BinaryPath $BinaryPath -OutputDirectory $payload | Out-Null
+$executableVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $payload 'LiteTray.exe'))
+if ($executableVersion.ProductVersion -ne $version -or $executableVersion.FileVersion -ne $version) {
+    throw "The packaged executable version ($($executableVersion.ProductVersion)) does not match Cargo ($version). Rebuild before packaging."
+}
 $names = @('LiteTray.exe','litetray_taskbar_adapter.dll','litetray_popup_hook.dll')
 $hashes = @($names | ForEach-Object { (Get-FileHash -LiteralPath (Join-Path $payload $_) -Algorithm SHA256).Hash.ToLowerInvariant() })
 $sha = [Security.Cryptography.SHA256]::Create()

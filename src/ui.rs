@@ -14,6 +14,8 @@ mod settings;
 mod settings_open;
 mod typography;
 #[cfg(test)]
+mod update_checks;
+#[cfg(test)]
 mod visual_checks;
 mod volume_tip;
 mod weather_icons;
@@ -53,7 +55,7 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LiteTray.Settings.1";
-const UI_REVISION: &str = "开发版 5.14.2";
+const UI_REVISION: &str = concat!("开发版 ", env!("CARGO_PKG_VERSION"));
 const SS_LEFT: i32 = 0;
 const PANEL_CLASS: &str = "LiteTray.Calendar.1";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -337,7 +339,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             calendar: None,
             saved: config.clone(),
             draft: config,
-            status: "开发版 · 在“时钟显示”中启用任务栏时钟".into(),
+            status: String::new(),
             taskbar_status: None,
             weather: None,
             location: Default::default(),
@@ -969,9 +971,11 @@ impl App {
             if !reused {
                 match self.page {
                     0 => {
+                        self.home_clock_controls(width);
                         let mut bounds: RECT = std::mem::zeroed();
                         GetClientRect(self.page_host, &mut bounds);
                         InflateRect(&mut bounds, -self.scale(8), -self.scale(8));
+                        bounds.top += self.scale(104);
                         // The calendar keeps the flyout's proportions. Center
                         // that surface in a wider settings viewport.
                         let width = (bounds.right - bounds.left)
@@ -1358,6 +1362,7 @@ impl App {
                     })
                 });
             if self.page == 0 {
+                self.update_home_clock_controls();
                 dashboard::update(
                     self.field(dashboard::ID),
                     &self.saved,
@@ -1456,8 +1461,7 @@ impl App {
             let sender = self.tx.clone();
             let window = self.hwnd as usize;
             thread::spawn(move || {
-                let result =
-                    update::check(&http::Client::new(15), &config, env!("CARGO_PKG_VERSION"));
+                let result = update::check_current(&http::Client::new(15), &config);
                 let _ = sender.send(Event::Update(result));
                 PostMessageW(window as HWND, WM_RESULT, 0, 0);
             });
@@ -1868,6 +1872,34 @@ impl App {
                 return false;
             }
             match id {
+                settings::HOME_CLOCK_ACTION if self.page == 0 => {
+                    let state = self
+                        .taskbar
+                        .as_ref()
+                        .map(|service| service.snapshot().status);
+                    match settings::home_clock_action(self.saved.tray.clock_enabled, state) {
+                        settings::HomeClockAction::Enable => self.enable_home_clock(),
+                        settings::HomeClockAction::Restore => {
+                            self.command(213);
+                        }
+                        settings::HomeClockAction::RetryRestore => {
+                            self.command(213);
+                            // Tray replication may keep the service enabled;
+                            // unchanged config alone does not retry a blocked restore.
+                            if let Some(service) = &self.taskbar
+                                && let Err(error) = service.retry(taskbar_now())
+                            {
+                                self.set_status(error);
+                            }
+                            self.update_views();
+                            self.schedule_tick();
+                        }
+                        settings::HomeClockAction::Wait => {}
+                    }
+                }
+                settings::HOME_CLOCK_SETTINGS if self.page == 0 => {
+                    self.command(NAV + 1);
+                }
                 compatibility::CHECK if self.page == compatibility::PAGE => {
                     self.start_compatibility_check();
                 }

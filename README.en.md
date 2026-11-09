@@ -27,7 +27,7 @@ A useful clock, tray and calendar on every monitor. A native Windows desktop app
 
 Download `LiteTray-<version>-Setup-x64.exe` from Releases. Installation is per user and needs no administrator privileges. Settings, schedules and weather cache live in `%LOCALAPPDATA%\LiteTray`; upgrades and uninstall preserve user data.
 
-**Compatibility:** 5.14.2 includes **seven exact x64 module sets from Windows 11 22H2 22621.1702, 23H2 22631.2861, Enterprise LTSC 2024 Evaluation 26100.1742, 25H2 26200.8037 / 26200.8457, and 26300.9711 / 26300.9818** in the default build. Selection uses full module identity. The added 22H2 and 23H2 systems have each passed primary-clock text/width updates, restoration and tray preparation/stop checks in independently installed VMs; see the [22H2 / 23H2 record](docs/compatibility-22h2-23h2.md) for tested binaries and scope. Earlier evidence remains in the [9818](docs/compatibility-9818.md), [25H2 8457](docs/compatibility-8457.md), and [8037 / LTSC](docs/compatibility-next-versions.md) records; 9711 retains historical evidence. These exact profiles do not cover every cumulative update. Actual input, menus, tray replication, multiple monitors and mixed DPI still need separate acceptance. LiteTray is still in development and the installer is not digitally signed.
+**Compatibility:** Since 5.14.2, the default build includes **seven exact x64 module sets from Windows 11 22H2 22621.1702, 23H2 22631.2861, Enterprise LTSC 2024 Evaluation 26100.1742, 25H2 26200.8037 / 26200.8457, and 26300.9711 / 26300.9818** in the default build. Selection uses full module identity. The added 22H2 and 23H2 systems have each passed primary-clock text/width updates, restoration and tray preparation/stop checks in independently installed VMs; see the [22H2 / 23H2 record](docs/compatibility-22h2-23h2.md) for tested binaries and scope. Earlier evidence remains in the [9818](docs/compatibility-9818.md), [25H2 8457](docs/compatibility-8457.md), and [8037 / LTSC](docs/compatibility-next-versions.md) records; 9711 retains historical evidence. These exact profiles do not cover every cumulative update. Actual input, menus, tray replication, multiple monitors and mixed DPI still need separate acceptance. LiteTray is still in development and the installer is not digitally signed.
 
 ## Features
 
@@ -41,7 +41,7 @@ Download `LiteTray-<version>-Setup-x64.exe` from Releases. Installation is per u
 
 ## Getting started
 
-Open settings, choose your displays in the tray page, then enable the taskbar clock. Click the clock to open the calendar. An attached panel closes when you click outside it; a detached panel stays open. Closing settings keeps LiteTray running; use the tray menu to exit.
+Choose to launch LiteTray when installation finishes to open settings. The home page's Taskbar clock card lets you enable the custom clock or restore the system clock directly. Use Clock settings to customize it, and Multiple monitors to choose your displays. Click the taskbar clock to open the calendar. An attached panel closes when you click outside it; a detached panel stays open. Closing settings keeps LiteTray running; use the tray menu to exit.
 
 Open **Settings → Compatibility** to see local module matches, built-in profiles and the recorded scope of acceptance checks. Inspection runs in the background without changing the system, and you can export the displayed report. A disk match still requires runtime checks; it does not confirm every click, menu or multiple-monitor scenario.
 

@@ -1,6 +1,6 @@
 # Built-in taskbar compatibility evidence
 
-The 5.14.2 default and explicit `compatibility-lab` registries contain seven
+Since 5.14.2, the default and explicit `compatibility-lab` registries contain seven
 profiles. `windows11-22621.1702-x64.json` (22H2 Pro) and
 `windows11-22631.2861-x64.json` (23H2 Pro) were promoted after independently
 installed guests passed six scoped checks and independent evidence review.

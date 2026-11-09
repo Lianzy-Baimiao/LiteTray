@@ -42,7 +42,10 @@ impl UpdateStatus {
         }
     }
 }
-pub fn check(
+pub fn check_current(http: &dyn JsonHttp, config: &UpdateConfig) -> Result<UpdateStatus, String> {
+    check(http, config, env!("CARGO_PKG_VERSION"))
+}
+fn check(
     http: &dyn JsonHttp,
     config: &UpdateConfig,
     current: &str,
@@ -274,6 +277,33 @@ mod tests {
             panic!()
         };
         assert_eq!(r.version, "v1.10.0");
+    }
+    #[test]
+    fn same_or_older_release_never_prompts_an_update() {
+        for tag in ["v5.14.2", "5.14.2", "v5.14.1", "v5.13.0"] {
+            let result = select_release(
+                &json!([release(tag, false)]),
+                &UpdateConfig::default(),
+                "5.14.2",
+            )
+            .unwrap();
+            assert!(
+                matches!(result, UpdateStatus::UpToDate { .. }),
+                "{tag}: {result:?}"
+            );
+        }
+    }
+    #[test]
+    fn newer_patch_release_prompts_an_update() {
+        let result = select_release(
+            &json!([release("v5.14.3", false), release("v5.14.2", false)]),
+            &UpdateConfig::default(),
+            "5.14.2",
+        )
+        .unwrap();
+        assert!(
+            matches!(result, UpdateStatus::Available(ref release) if release.version == "v5.14.3")
+        );
     }
     #[test]
     fn rejects_foreign_download_links() {
