@@ -38,7 +38,11 @@
 
 主程序状态机也先复现“三次 Stop 失败、适配器后来 Closed，但仍然停留在 RestoreBlocked”的失败，再验证修复通过。17 项服务检查包括延迟确认、五秒节流、未知结果保留、停用后不重启、四次连续换路由以及丢弃过期准备结果。六项任务栏 transport/报告检查通过，其中新增三项使用本进程的真实消息窗口和独立子进程，验证 Closed、Busy、Restoring、无效端点、重入、保留进程句柄和确认后的析构行为。
 
-证据目录 `local/hotplug-recovery-5.15.0/` 保存 `native-red.log`、`host-recovery-red.log`、`host-recovery-green.log`、`native-restoration-green.log` 和命令说明 `host-verification.md`。完整发布包的隔离 XAML 与虚拟机结果在最终冻结后另行登记。
+证据目录 `local/hotplug-recovery-5.15.0/` 保存 `native-red.log`、`host-recovery-red.log`、`host-recovery-green.log`、`native-restoration-green.log` 和命令说明 `host-verification.md`。
+
+最终 r3 发布二进制的隔离 XAML 检查共 168 项，全部通过，其中四项恢复回归分别验证几何失效、source 关闭、内容替换，以及仍存活窗口的身份冲突必须阻止恢复、标记还原后才可完成。使用真实隐藏 XAML island、ItemsSource 绑定与 Session/Watchdog；未安装产品输入钩子，也未访问宿主 Explorer。最终代码还在可能引发 COM 重入的 HWND getter 返回后，再次核对原窗口身份标记，避免使用调用前已经失效的身份结论。
+
+同一 r3 二进制另做独立 Windows 客体回归；精确文件哈希、运行编号、原始归档哈希、实际时钟恢复读回和客体清理结果见[最终候选验证](compatibility-traits-5.15.0.md#最终候选-r3-的身份与验证)。这些检查覆盖已复现的清理阻断和会话恢复路径，物理多屏插拔仍未实测。
 
 ## 从已卡住的旧版本升级
 
