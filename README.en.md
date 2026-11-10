@@ -31,6 +31,8 @@ Download `LiteTray-<version>-Setup-x64.exe` from Releases. Installation is per u
 
 5.15.0 also fixes a restoration path that could leave old taskbar sessions blocked after display changes and repeatedly reject clock commands. See the [recovery fix](docs/hotplug-recovery-5.15.0.md) for the cause, isolated regressions and upgrade guidance, and the [5.15.0 verification record](docs/compatibility-traits-5.15.0.md) for the exact package, guest results and retained failures. These checks do not constitute physical multi-monitor hotplug acceptance.
 
+5.15.2 adds published-package verification records for ordinary **Pro 24H2 26100.1742** and **Pro 25H2 26200.8037**. Both independently installed VMs passed primary-clock and tray preparation/Stop checks, plus automatic recovery after actual resolution changes. Ordinary Pro 24H2 has the same taskbar module bytes as LTSC and reuses the existing implementation. See the [additional verification record](docs/compatibility-completion-5.15.1.md) for tested packages and precise scope.
+
 ## Features
 
 - **Taskbar clocks:** templates, individual weather fields, fonts, colors, alignment and presets. Width follows content; compact taskbars can use one or two lines.

@@ -358,15 +358,12 @@ fn support_catalog_keeps_recorded_scope_separate_from_built_in_support() {
                     | "windows11-26100.1742-x64"
                     | "windows11-22621.1702-x64"
                     | "windows11-22631.2861-x64"
-            ) && (profile.id != "windows11-26100.1742-x64"
-                || evidence.scenario == ValidationScenario::ClockUpdateRestore)
-                && matches!(
-                    evidence.scenario,
-                    ValidationScenario::ModuleLayout
-                        | ValidationScenario::ClockUpdateRestore
-                        | ValidationScenario::TrayPrepareStop
-                )
-            {
+            ) && matches!(
+                evidence.scenario,
+                ValidationScenario::ModuleLayout
+                    | ValidationScenario::ClockUpdateRestore
+                    | ValidationScenario::TrayPrepareStop
+            ) {
                 ValidationStatus::Tested
             } else {
                 ValidationStatus::NotRun

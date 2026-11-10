@@ -935,11 +935,7 @@ mod tests {
             .collect();
         assert_eq!(tested_ids.len(), 6);
         for id in tested_ids {
-            let tested = if id == "windows11-26100.1742-x64" {
-                1
-            } else {
-                3
-            };
+            let tested = 3;
             value.report.profile_id = Some(id);
             value.report.all_profile_images_matched = false;
             assert!(selected_profile(&value).is_none());
@@ -954,6 +950,13 @@ mod tests {
                 tested
             );
             assert_eq!(evidence.matches("Not validated").count(), 7 - tested);
+        }
+        for id in ["windows11-26100.1742-x64", "windows11-26200.8037-x64"] {
+            value.report.profile_id = Some(id.into());
+            let details = details_text(&value);
+            assert!(details.contains("5.15.1"));
+            assert!(details.contains("WHPX"));
+            assert!(details.contains("not a live check"));
         }
         for (id, system) in [
             ("windows11-22621.1702-x64", "22H2 22621.1702"),

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "id": "windows11-26100.1742-x64",
-  "system_label": "Windows 11 Enterprise LTSC 2024 Evaluation 26100.1742 x64",
+  "system_label": "Windows 11 24H2 / LTSC 2024 26100.1742 x64",
   "taskbar": {
     "name": "taskbar.dll",
     "relative_path": "System32/taskbar.dll",

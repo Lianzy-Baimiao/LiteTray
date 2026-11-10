@@ -2,7 +2,7 @@
 //! None of these descriptions or historical results authorize activation.
 use super::{FeatureReport, ModuleStatus, Report};
 use litetray_adapter_protocol::compatibility::{
-    Module, Profile, SourceRecipe, Topology, TrayAbi, profiles,
+    Module, Profile, SourceRecipe, Topology, TrayAbi, TrayGeometry, profiles,
 };
 use serde::Serialize;
 
@@ -57,6 +57,10 @@ pub struct SupportProfile {
     /// Exact required modules. No OS build interval is a matching rule.
     pub modules: Vec<Module>,
     pub evidence: Vec<ValidationEvidence>,
+    /// Original per-scenario records, before applying a newer reviewed run.
+    pub historical_evidence: Vec<ValidationEvidence>,
+    /// Exact tested package/run for this recipe; never current-session proof.
+    pub recorded_acceptance: Option<&'static RecordedAcceptance>,
 }
 
 /// A compact projection of a disk report, deliberately excluding acceptance
@@ -221,14 +225,31 @@ fn recorded_profile(profile: &Profile) -> Option<RecordedProfile> {
     }
 }
 
-fn evidence(profile: &Profile) -> Vec<ValidationEvidence> {
+fn historical_evidence(profile: &Profile) -> Vec<ValidationEvidence> {
     let record = recorded_profile(profile);
     let digests = recipe_digests(profile);
     let previous = historical_recipes()
         .ok()
         .and_then(|entries| entries.iter().find(|entry| entry.profile_id == profile.id));
     let host_matches = previous.is_some_and(|entry| entry.host_source_digest == digests.0);
-    let full_matches = host_matches && previous.is_some_and(|entry| entry.tray_digest == digests.1);
+    // The old digest predates purpose classification. Bind that independently
+    // without rewriting its saved source commit or any of the seven digests.
+    // Old LTSC used Copilot-only geometry, which no supported enum represents.
+    let historical_geometry = match record {
+        Some(RecordedProfile::Previous9711) => Some(TrayGeometry::LegacyUnclassified),
+        Some(
+            RecordedProfile::Sandbox9818
+            | RecordedProfile::VirtualMachine8457
+            | RecordedProfile::VirtualMachine8037,
+        ) => Some(TrayGeometry::NotificationAreaBounds),
+        Some(RecordedProfile::VirtualMachine22H21702 | RecordedProfile::VirtualMachine23H22861) => {
+            Some(TrayGeometry::DragDropHitTesting)
+        }
+        Some(RecordedProfile::VirtualMachineLtsc1742) | None => None,
+    };
+    let full_matches = host_matches
+        && historical_geometry == Some(profile.tray_geometry)
+        && previous.is_some_and(|entry| entry.tray_digest == digests.1);
     SCENARIOS
         .into_iter()
         .map(|(scenario, scope)| {
@@ -494,6 +515,146 @@ fn evidence(profile: &Profile) -> Vec<ValidationEvidence> {
         .collect()
 }
 
+/// One reviewed run, tied to its tested package and exact implementation.
+/// This describes retained evidence; it never authorizes the current process.
+#[derive(Debug, Serialize)]
+pub struct RecordedAcceptance {
+    pub profile_id: &'static str,
+    pub recipe_sha256: &'static str,
+    pub package_version: &'static str,
+    pub package_build_id: &'static str,
+    pub published_commit: &'static str,
+    pub package_manifest_sha256: &'static str,
+    pub executable_sha256: &'static str,
+    pub adapter_sha256: &'static str,
+    pub popup_sha256: &'static str,
+    pub run_id: &'static str,
+    pub nonce: &'static str,
+    pub archive_sha256: &'static str,
+    pub environment_scope: &'static str,
+    pub recorded_on: &'static str,
+    pub reference: &'static str,
+    pub scenarios: &'static [AcceptedScenario],
+}
+
+#[derive(Debug, Serialize)]
+pub struct AcceptedScenario {
+    pub scenario: ValidationScenario,
+    pub detail: &'static str,
+}
+
+// Only independently reviewed completed runs belong here. This is an evidence
+// table, not an OS-version support list. Each scope names its observed edition.
+const RECORDED_ACCEPTANCES: &[RecordedAcceptance] = &[
+    RecordedAcceptance {
+        profile_id: "windows11-26200.8037-x64",
+        recipe_sha256: "c550f7cc9f60f1d6d32897de0402a122c6449325b88380bf471921c24c3223bb",
+        package_version: "5.15.1",
+        package_build_id: "5.15.1-8e688e0f1c01",
+        published_commit: "1417f38b8d031ded3db2734fd11e82517f419d38",
+        package_manifest_sha256: "7de3103f1f05859ecf6806e4f8dd192c9189a51f049480f0c02a5a705859a1f1",
+        executable_sha256: "837ebebd89c192dff94397565c1498c1007c3a5ae814eb23164a25dcf652e62a",
+        adapter_sha256: "ac68fa6dbb6c9cdc0d3a4691aaf30033109a2178ad0e92603c16b84fd0db5b62",
+        popup_sha256: "f6171c7f4164965a50b56a985198367691703150037c714d8f9336f83992d659",
+        run_id: "sandbox-20261109-202125-52113436",
+        nonce: "6d6528a03d864927811e5083c49dba60",
+        archive_sha256: "7f8e1323704e2131c95ac57287b919961cc1eb4641db5f986a159cdd2dd1702b",
+        environment_scope: "已发布 LiteTray 5.15.1 指定哈希包；独立 Windows 11 Pro 25H2 26200.8037 单屏 WHPX 虚拟机，Medium 普通权限。该记录不是当前程序或其他 edition 的现场复测。",
+        recorded_on: "2026-11-09",
+        reference: "docs/compatibility-completion-5.15.1.md",
+        scenarios: &[
+            AcceptedScenario {
+                scenario: ValidationScenario::ModuleLayout,
+                detail: "六项原生命令和五项仅磁盘副本识别检查通过；实际加载模块匹配、XAML 168 项、私有宿主六项通过。磁盘实现等价与拒绝场景不替代未知模块的现场运行验收。",
+            },
+            AcceptedScenario {
+                scenario: ValidationScenario::ClockUpdateRestore,
+                detail: "三次真实文字及宽度 55→240→320→320→55 读回通过；停止和最终清理恢复全部原始时钟字段，原 Explorer、线程与窗口不变。未验收像素、字体、颜色、绑定或持续原生刷新。",
+            },
+            AcceptedScenario {
+                scenario: ValidationScenario::TrayPrepareStop,
+                detail: "五类必需托盘区域、当前三个坐标入口的准备与停止通过；未激活托盘复制、菜单或悬停。此前同包 TCG 启动通信失败仍单独保留，WHPX 通过不证明其根因已修复。",
+            },
+        ],
+    },
+    RecordedAcceptance {
+        profile_id: "windows11-26100.1742-x64",
+        recipe_sha256: "28ca9cfd9ba1f805cc3dd1e7c116a81770d497c1c424a742cc856c3739a76e1d",
+        package_version: "5.15.1",
+        package_build_id: "5.15.1-8e688e0f1c01",
+        published_commit: "1417f38b8d031ded3db2734fd11e82517f419d38",
+        package_manifest_sha256: "7de3103f1f05859ecf6806e4f8dd192c9189a51f049480f0c02a5a705859a1f1",
+        executable_sha256: "837ebebd89c192dff94397565c1498c1007c3a5ae814eb23164a25dcf652e62a",
+        adapter_sha256: "ac68fa6dbb6c9cdc0d3a4691aaf30033109a2178ad0e92603c16b84fd0db5b62",
+        popup_sha256: "f6171c7f4164965a50b56a985198367691703150037c714d8f9336f83992d659",
+        run_id: "sandbox-20261109-205423-3b6aa4b5",
+        nonce: "912941652b7f4bcfac0cb32a1389a07f",
+        archive_sha256: "ad82c8b3d0bb2d0a9575d7a55490184187a60f8818e372df42b5ed07497a82ba",
+        environment_scope: "已发布 LiteTray 5.15.1 指定哈希包；独立 Windows 11 Pro 24H2 26100.1742 单屏 WHPX 虚拟机，Medium 普通权限。实测 edition 为 Professional；LTSC 保留独立旧记录，此结果不是其他 edition 或当前程序的现场复测。",
+        recorded_on: "2026-11-09",
+        reference: "docs/compatibility-completion-5.15.1.md",
+        scenarios: &[
+            AcceptedScenario {
+                scenario: ValidationScenario::ModuleLayout,
+                detail: "六项原生命令和五项仅磁盘副本识别检查通过；实际加载模块匹配、XAML 168 项、私有宿主六项通过。磁盘实现等价与拒绝场景不替代未知模块的现场运行验收。",
+            },
+            AcceptedScenario {
+                scenario: ValidationScenario::ClockUpdateRestore,
+                detail: "三次真实文字及宽度 56→240→320→320→56 读回通过；停止和最终清理恢复全部原始时钟字段，原 Explorer、线程与窗口不变。未验收像素、字体、颜色、绑定或持续原生刷新。",
+            },
+            AcceptedScenario {
+                scenario: ValidationScenario::TrayPrepareStop,
+                detail: "普通 Pro 24H2 的五类必需托盘区域、当前借用拖放坐标入口准备与停止通过；未激活托盘复制、菜单或悬停。这是新包在 Professional 客体的结果，不沿用旧 LTSC 的传值 Copilot 入口验收。",
+            },
+        ],
+    },
+];
+
+fn recorded_recipe_digest(profile: &Profile) -> String {
+    use sha2::{Digest, Sha256};
+    let mut value = serde_json::to_value(profile).expect("finite profile fields");
+    // The module label is presentation only. Every other serialized field,
+    // including ID, schema, tray geometry and complete modules/entries, binds.
+    value
+        .as_object_mut()
+        .expect("profile is an object")
+        .remove("system_label");
+    let mut digest = Sha256::new();
+    digest.update(b"litetray-recorded-recipe-v1\0");
+    digest.update(serde_json::to_vec(&value).expect("finite profile fields"));
+    format!("{:x}", digest.finalize())
+}
+
+fn recorded_acceptance(profile: &Profile) -> Option<&'static RecordedAcceptance> {
+    let digest = recorded_recipe_digest(profile);
+    RECORDED_ACCEPTANCES
+        .iter()
+        .find(|record| record.profile_id == profile.id && record.recipe_sha256 == digest)
+}
+
+fn evidence(profile: &Profile) -> Vec<ValidationEvidence> {
+    let mut results = historical_evidence(profile);
+    if let Some(record) = recorded_acceptance(profile) {
+        for result in &mut results {
+            if let Some(accepted) = record
+                .scenarios
+                .iter()
+                .find(|item| item.scenario == result.scenario)
+            {
+                *result = ValidationEvidence {
+                    scenario: accepted.scenario,
+                    status: ValidationStatus::Tested,
+                    scope: record.environment_scope,
+                    detail: accepted.detail,
+                    recorded_on: Some(record.recorded_on),
+                    reference: Some(record.reference),
+                };
+            }
+        }
+    }
+    results
+}
+
 fn support_profile(profile: &Profile) -> SupportProfile {
     SupportProfile {
         profile_id: profile.id.clone(),
@@ -512,6 +673,8 @@ fn support_profile(profile: &Profile) -> SupportProfile {
         },
         modules: profile.modules().into_iter().cloned().collect(),
         evidence: evidence(profile),
+        historical_evidence: historical_evidence(profile),
+        recorded_acceptance: recorded_acceptance(profile),
     }
 }
 
@@ -628,7 +791,7 @@ mod tests {
             .iter()
             .find(|profile| profile.id == "windows11-26100.1742-x64")
             .unwrap();
-        let records = evidence(ltsc);
+        let records = historical_evidence(ltsc);
         assert_eq!(
             records
                 .iter()
@@ -724,6 +887,159 @@ mod tests {
                     "change {change} {:?}",
                     item.scenario
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn published_acceptance_preserves_history_and_unrun_scenarios() {
+        let profile = profiles()
+            .unwrap()
+            .iter()
+            .find(|profile| profile.id == "windows11-26200.8037-x64")
+            .unwrap();
+        let catalog = support_profile(profile);
+        let record = catalog.recorded_acceptance.unwrap();
+        assert_eq!(record.package_version, "5.15.1");
+        assert_eq!(
+            record.package_manifest_sha256,
+            "7de3103f1f05859ecf6806e4f8dd192c9189a51f049480f0c02a5a705859a1f1"
+        );
+        assert_eq!(record.run_id, "sandbox-20261109-202125-52113436");
+        assert_eq!(record.scenarios.len(), 3);
+        assert_eq!(
+            serde_json::to_value(&catalog.historical_evidence).unwrap(),
+            serde_json::to_value(historical_evidence(profile)).unwrap()
+        );
+        for item in &catalog.evidence {
+            let accepted = record
+                .scenarios
+                .iter()
+                .any(|entry| entry.scenario == item.scenario);
+            assert_eq!(
+                item.status,
+                if accepted {
+                    ValidationStatus::Tested
+                } else {
+                    ValidationStatus::NotRun
+                }
+            );
+            if accepted {
+                assert_eq!(item.scope, record.environment_scope);
+                assert_eq!(item.reference, Some(record.reference));
+            }
+        }
+        let export = serde_json::to_value(&catalog).unwrap();
+        assert_eq!(
+            export["recorded_acceptance"]["executable_sha256"],
+            record.executable_sha256
+        );
+        let ltsc = profiles()
+            .unwrap()
+            .iter()
+            .find(|profile| profile.id == "windows11-26100.1742-x64")
+            .unwrap();
+        let pro = support_profile(ltsc);
+        let pro_record = pro.recorded_acceptance.unwrap();
+        assert_eq!(pro_record.run_id, "sandbox-20261109-205423-3b6aa4b5");
+        assert!(pro_record.environment_scope.contains("Professional"));
+        assert_eq!(pro_record.scenarios.len(), 3);
+        assert_eq!(
+            pro.historical_evidence
+                .iter()
+                .filter(|item| item.status == ValidationStatus::Tested)
+                .count(),
+            1
+        );
+        assert_eq!(
+            pro.evidence
+                .iter()
+                .filter(|item| item.status == ValidationStatus::Tested)
+                .count(),
+            3
+        );
+        for item in &pro.evidence {
+            if pro_record
+                .scenarios
+                .iter()
+                .any(|entry| entry.scenario == item.scenario)
+            {
+                assert_eq!(item.scope, pro_record.environment_scope);
+            } else {
+                assert_eq!(item.status, ValidationStatus::NotRun);
+                assert!(item.recorded_on.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn published_acceptance_binds_entire_recipe_except_label() {
+        let original = profiles()
+            .unwrap()
+            .iter()
+            .find(|profile| profile.id == "windows11-26200.8037-x64")
+            .unwrap();
+        let mut renamed = original.clone();
+        renamed.system_label = "same module implementation, clearer label".into();
+        assert!(recorded_acceptance(&renamed).is_some());
+        for change in 0..10 {
+            let mut profile = original.clone();
+            match change {
+                0 => profile.schema += 1,
+                1 => profile.id = "new-profile-with-existing-layout".into(),
+                2 => profile.taskbar.sha256 = "0".repeat(64),
+                3 => profile.shell.identity.timestamp ^= 1,
+                4 => profile.tray.sha256 = "0".repeat(64),
+                5 => profile.host.element_offset += 8,
+                6 => profile.source.child_vtable_rva += 8,
+                7 => profile.tray_abi = TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1,
+                8 => {
+                    profile.tray_geometry =
+                        litetray_adapter_protocol::compatibility::TrayGeometry::DragDropHitTesting
+                }
+                _ => profile.tray_entries[0].prologue[0] ^= 1,
+            }
+            assert!(recorded_acceptance(&profile).is_none(), "change {change}");
+        }
+    }
+
+    #[test]
+    fn changed_geometry_cannot_reenter_through_historical_acceptance() {
+        for original in profiles().unwrap() {
+            let previous_clock = historical_evidence(original)
+                .into_iter()
+                .find(|item| item.scenario == ValidationScenario::ClockUpdateRestore)
+                .unwrap()
+                .status;
+            for geometry in [
+                TrayGeometry::NotificationAreaBounds,
+                TrayGeometry::DragDropHitTesting,
+                TrayGeometry::LegacyUnclassified,
+            ] {
+                if geometry == original.tray_geometry {
+                    continue;
+                }
+                let mut changed = original.clone();
+                changed.tray_geometry = geometry;
+                assert!(recorded_acceptance(&changed).is_none());
+                for results in [historical_evidence(&changed), evidence(&changed)] {
+                    for item in results {
+                        assert_eq!(
+                            item.status,
+                            if item.scenario == ValidationScenario::ClockUpdateRestore {
+                                previous_clock
+                            } else {
+                                ValidationStatus::NotRun
+                            },
+                            "{} {geometry:?} {:?}",
+                            original.id,
+                            item.scenario
+                        );
+                        if item.scenario != ValidationScenario::ClockUpdateRestore {
+                            assert!(item.recorded_on.is_none());
+                        }
+                    }
+                }
             }
         }
     }
