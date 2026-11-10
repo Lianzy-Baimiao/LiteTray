@@ -23,9 +23,15 @@ MAX_IMAGE = 128 * 1024 * 1024
 MAX_PDB = 512 * 1024 * 1024
 MASKS = {
     "taskbar": ("*TaskbarHost*", "*TaskBand*", "*Decref*", "*XamlExplorerHostChildWindow*",
+                "*TrayUI*", "*CSecondaryTray*", "__guard_xfg_dispatch_icall_fptr",
+                "__security_cookie", "__security_check_cookie", "?throw_hresult@winrt@@YAXUhresult@1@@Z",
                 "?Width@?$consume_Windows_UI_Xaml_IFrameworkElement@UIFrameworkElement@Xaml@UI@Windows@winrt@@@impl@winrt@@QEBA@XZ",
                 "?Height@?$consume_Windows_UI_Xaml_IFrameworkElement@UIFrameworkElement@Xaml@UI@Windows@winrt@@@impl@winrt@@QEBA@XZ"),
-    "shell": ("*XamlExplorerHost*", "*IDesktopWindowXamlSource*", "_guard_dispatch_icall"),
+    "shell": ("*XamlExplorerHost*", "*IDesktopWindowXamlSource*", "_guard_dispatch_icall",
+              "__guard_xfg_dispatch_icall_fptr", "winrt::Windows::Foundation::operator==",
+              "?Throw_Hr@in1diag3@details@wil@@YAXPEAXIPEBDJ@Z",
+              "?throw_hresult@winrt@@YAXUhresult@1@@Z",
+              "?unconditional_release_ref@IUnknown@Foundation@Windows@winrt@@AEAAXXZ"),
     "tray": ("*GetInvocationPointRelativeToScreen*", "*GetIconBoundsRelativeToScreen*",
              "*GetScreenRectFromXamlElement*", "*SystemTrayFrame*", "*NotificationAreaIconsDataModel*",
              "??1IUnknown@Foundation@Windows@winrt@@QEAA@XZ",

@@ -20,11 +20,11 @@ pub enum Role {
 }
 impl Role {
     pub const ALL: [Self; 3] = [Self::Taskbar, Self::Shell, Self::Tray];
-    pub fn module(self, profile: &Profile) -> &Module {
+    pub fn module(self, profile: &Profile) -> Option<&Module> {
         match self {
-            Self::Taskbar => &profile.taskbar,
-            Self::Shell => &profile.shell,
-            Self::Tray => &profile.tray,
+            Self::Taskbar => Some(&profile.taskbar),
+            Self::Shell => Some(&profile.shell),
+            Self::Tray => profile.tray.as_ref(),
         }
     }
 }
@@ -89,22 +89,38 @@ fn fingerprints() -> Result<&'static [FingerprintEntry], String> {
                 "../../profiles/execution-fingerprints.json"
             ))
             .map_err(|e| format!("实现指纹清单无效：{e}"))?;
+            #[cfg(feature = "compatibility-lab")]
+            let data = {
+                let laboratory: Fingerprints = serde_json::from_slice(include_bytes!(
+                    "../../profiles/lab/execution-fingerprints.json"
+                ))
+                .map_err(|e| format!("实验实现指纹清单无效：{e}"))?;
+                if laboratory.schema != data.schema || laboratory.algorithm != data.algorithm {
+                    return Err("实验实现指纹清单版本不一致".into());
+                }
+                let mut combined = data;
+                combined.entries.extend(laboratory.entries);
+                combined
+            };
             let registry = profiles()?;
             if data.schema != 1
                 || data.algorithm != fingerprint::ALGORITHM
-                || data.entries.len() != registry.len() * Role::ALL.len()
+                || data.entries.len() != registry.iter().map(|p| p.modules().len()).sum::<usize>()
             {
                 return Err("实现指纹清单版本或数量无效".into());
             }
             for profile in registry {
                 for role in Role::ALL {
+                    let Some(module) = role.module(profile) else {
+                        continue;
+                    };
                     let entries = data
                         .entries
                         .iter()
                         .filter(|e| e.profile_id == profile.id && e.role == role)
                         .collect::<Vec<_>>();
                     if entries.len() != 1
-                        || entries[0].sha256 != role.module(profile).sha256
+                        || entries[0].sha256 != module.sha256
                         || match &entries[0].fingerprint {
                             Some(value) => {
                                 value.len() != 64
@@ -146,6 +162,7 @@ fn same_recipe(role: Role, a: &Profile, b: &Profile) -> bool {
                 && a.source.child_source_offset == b.source.child_source_offset
                 && a.source.child_vtable_rva == b.source.child_vtable_rva
                 && a.source.factory_vtable_rva == b.source.factory_vtable_rva
+                && a.source.child_vtable_entries == b.source.child_vtable_entries
         }
         Role::Tray => {
             a.tray_abi == b.tray_abi
@@ -177,8 +194,7 @@ pub fn recognize(
         .iter()
         .filter(|profile| {
             role.module(profile)
-                .relative_path
-                .eq_ignore_ascii_case(&path)
+                .is_some_and(|module| module.relative_path.eq_ignore_ascii_case(&path))
         })
         .collect::<Vec<_>>();
     if candidates.is_empty() {
@@ -187,7 +203,10 @@ pub fn recognize(
     let mut matches = candidates
         .iter()
         .copied()
-        .filter(|profile| role.module(profile).matches(&image.sha256, &identity))
+        .filter(|profile| {
+            role.module(profile)
+                .is_some_and(|module| module.matches(&image.sha256, &identity))
+        })
         .collect::<Vec<_>>();
     let basis = if matches.is_empty() {
         let digest = execution_fingerprint(bytes)?;
@@ -215,7 +234,7 @@ pub fn recognize(
     {
         return Err("相同模块特征对应冲突的解析方案".into());
     }
-    let reference = role.module(evidence);
+    let reference = role.module(evidence).ok_or("该资料不包含所需模块角色")?;
     Ok(Recognized {
         role,
         module: Module {
@@ -247,10 +266,14 @@ pub fn assemble(
         return Err("模块角色或 XAML 宿主接口契约不一致".into());
     }
     for recognized in [Some(taskbar), Some(shell), tray].into_iter().flatten() {
+        recognized.evidence.validate()?;
         recognized.module.validate()?;
-        if recognized.module.name != recognized.role.module(recognized.evidence).name
-            || recognized.module.relative_path
-                != recognized.role.module(recognized.evidence).relative_path
+        let reference = recognized
+            .role
+            .module(recognized.evidence)
+            .ok_or("该资料不包含所需模块角色")?;
+        if recognized.module.name != reference.name
+            || recognized.module.relative_path != reference.relative_path
         {
             return Err("模块角色与解析证据路径不一致".into());
         }
@@ -264,6 +287,7 @@ pub fn assemble(
         child_source_offset: shell.evidence.source.child_source_offset,
         child_vtable_rva: shell.evidence.source.child_vtable_rva,
         factory_vtable_rva: shell.evidence.source.factory_vtable_rva,
+        child_vtable_entries: shell.evidence.source.child_vtable_entries.clone(),
     };
     let mut key = Sha256::new();
     key.update(b"litetray-module-combination-v1\0");
@@ -275,16 +299,25 @@ pub fn assemble(
         );
         key.update([0]);
     }
+    let tray = tray
+        .map(|recognized| {
+            let evidence = recognized
+                .evidence
+                .tray_evidence()?
+                .ok_or("时钟资料不包含可调用的托盘方案")?;
+            Ok::<_, String>(ResolvedTray {
+                module: recognized.module.clone(),
+                abi: evidence.abi,
+                geometry: evidence.geometry,
+                entries: evidence.entries.clone(),
+            })
+        })
+        .transpose()?;
     Ok(Resolved {
         id: format!("modules-{:x}", key.finalize()),
         taskbar: taskbar.module.clone(),
         shell: shell.module.clone(),
-        tray: tray.map(|v| ResolvedTray {
-            module: v.module.clone(),
-            abi: v.evidence.tray_abi,
-            geometry: v.evidence.tray_geometry,
-            entries: v.evidence.tray_entries.clone(),
-        }),
+        tray,
         host,
         source,
         topology: taskbar.evidence.topology,
@@ -298,19 +331,54 @@ mod tests {
     fn known(role: Role, profile: &Profile) -> Recognized<'_> {
         Recognized {
             role,
-            module: role.module(profile).clone(),
+            module: role.module(profile).unwrap().clone(),
             evidence: profile,
             basis: MatchBasis::ExactImage,
         }
     }
 
     #[test]
+    fn clock_only_recipe_cannot_be_promoted_into_tray_support() {
+        let original = &profiles().unwrap()[0];
+        let mut clock = original.clone();
+        clock.tray = None;
+        clock.tray_abi = None;
+        clock.tray_geometry = None;
+        clock.tray_entries = None;
+        clock.validate().unwrap();
+        assert!(Role::Tray.module(&clock).is_none());
+        let host = known(Role::Taskbar, &clock);
+        let shell = known(Role::Shell, &clock);
+        let resolved = assemble(&host, &shell, None).unwrap();
+        assert_eq!(resolved.host, clock.host);
+        assert!(resolved.tray.is_none());
+        let fabricated = Recognized {
+            role: Role::Tray,
+            module: original.tray.as_ref().unwrap().clone(),
+            evidence: &clock,
+            basis: MatchBasis::ExactImage,
+        };
+        assert!(assemble(&host, &shell, Some(&fabricated)).is_err());
+    }
+
+    #[test]
     fn every_registered_module_has_an_explicit_fingerprint_or_exact_only_reason() {
         let entries = fingerprints().unwrap();
-        assert_eq!(entries.len(), profiles().unwrap().len() * 3);
+        assert_eq!(
+            entries.len(),
+            profiles()
+                .unwrap()
+                .iter()
+                .map(|p| p.modules().len())
+                .sum::<usize>()
+        );
         assert_eq!(
             entries.iter().filter(|e| e.fingerprint.is_some()).count(),
-            18
+            18 + if cfg!(feature = "compatibility-lab") {
+                2
+            } else {
+                0
+            }
         );
         assert!(entries.iter().filter(|e| e.fingerprint.is_none()).all(|e| {
             e.profile_id == "windows11-26300.9711-x64"
@@ -350,7 +418,7 @@ mod tests {
             resolved.source.factory_vtable_rva,
             old.source.factory_vtable_rva
         );
-        assert_eq!(resolved.tray.as_ref().unwrap().abi, old.tray_abi);
+        assert_eq!(Some(resolved.tray.as_ref().unwrap().abi), old.tray_abi);
         assert_ne!(resolved.id, new.id);
         assert_ne!(resolved.id, old.id);
         let clock_only = assemble(&taskbar, &shell, None).unwrap();

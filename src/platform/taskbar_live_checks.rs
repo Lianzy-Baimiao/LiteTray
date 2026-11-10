@@ -143,11 +143,22 @@ fn stop_test_connection(connection: &Option<Connection>) -> Result<(), String> {
 /// normal startup or `--self-test-clock`, and must run in a disposable guest.
 /// A single monitor can validate tray preparation/ABI only, never replication.
 pub fn check_compatibility(config: &Config) -> Value {
+    check_compatibility_scope(config, true)
+}
+/// Explicit clock-only acceptance for implementations without a reviewed tray
+/// recipe. Its report cannot stand in for the full compatibility check.
+pub fn check_clock_compatibility(config: &Config) -> Value {
+    check_compatibility_scope(config, false)
+}
+fn check_compatibility_scope(config: &Config, include_tray: bool) -> Value {
     let mut report = json!({
-        "schema":1,"passed":false,"status":"running","scope":"primary_taskbar_live",
+        "schema":1,"passed":false,"status":"running",
+        "scope":if include_tray {"primary_taskbar_live"} else {"primary_clock_live"},
+        "requested":{"clock_update_restore":true,"tray_prepare_stop":include_tray},
         "explorer_accessed":false,"writes_requested":false,"input_injected":false,
         "started_at":chrono::Utc::now().to_rfc3339(),"clock":{"passed":false},
-        "tray":{"preparation_passed":false,"activated":false,"replication":"not_run"},
+        "tray":{"requested":include_tray,"preparation_passed":false,"activated":false,
+            "status":if include_tray {"not_run"} else {"not_requested"},"replication":"not_run"},
         "interaction":{"calendar_click":"not_run","volume_scroll":"not_run","tooltip_hover":"not_run"},
         "property_observation":"effective layout width/height and visibility; font/color/tooltip values and original bindings are not independently exported by this probe",
         "native_refresh_observation":"samples are taken after 1100 ms message-pump intervals; this probe does not independently count Shell refresh callbacks",
@@ -174,7 +185,9 @@ pub fn check_compatibility(config: &Config) -> Value {
         identity = Some((pid, tid, hwnd));
         report["explorer_before"] = json!({"process_id":pid,"thread_id":tid,"taskbar":hwnd});
         report["monitor_count"] = json!(desktop.monitors.len());
-        report["tray"]["replication"] = json!(if desktop.monitors.len() < 2 {
+        report["tray"]["replication"] = json!(if !include_tray {
+            "not_requested"
+        } else if desktop.monitors.len() < 2 {
             "not_applicable_single_monitor"
         } else {
             "not_run_primary_only_check"
@@ -264,6 +277,10 @@ pub fn check_compatibility(config: &Config) -> Value {
         report["checks"].as_array_mut().unwrap().push(json!("native text and 240 -> 320 width updates were observed after message-pump intervals; Stop restored original text, dimensions and visibility"));
         connection.take();
 
+        if !include_tray {
+            return Ok(());
+        }
+
         // Primary-only + copied_taskbars_only produces no model-sharing target.
         // mirror_icons still validates and prepares the native tray runtime and
         // its five known surfaces. Keep it Prepared; never claim replication.
@@ -313,6 +330,7 @@ pub fn check_compatibility(config: &Config) -> Value {
             json!("not_run: no second XamlRoot or replica target in this primary-only check");
         stop_test_connection(&connection)?;
         report["tray"]["preparation_passed"] = json!(true);
+        report["tray"]["status"] = json!("completed");
         report["tray"]["stop_acknowledged"] = json!(true);
         report["checks"].as_array_mut().unwrap().push(json!("tray native entry points and five surfaces prepared; no replica or active tray runtime was created"));
         Ok(())

@@ -32,7 +32,11 @@ fn main() -> Result<(), String> {
     }
     let paths = registry
         .iter()
-        .flat_map(|p| Role::ALL.map(|role| role.module(p).relative_path.clone()))
+        .flat_map(|p| {
+            p.modules()
+                .into_iter()
+                .map(|module| module.relative_path.clone())
+        })
         .collect::<std::collections::BTreeSet<_>>();
     let mut images = BTreeMap::new();
     for root in roots {
@@ -52,7 +56,9 @@ fn main() -> Result<(), String> {
     let mut changed_sections = 0;
     for profile in registry {
         for role in Role::ALL {
-            let module = role.module(profile);
+            let Some(module) = role.module(profile) else {
+                continue;
+            };
             let Some((path, identity, bytes)) = images.get(&module.sha256) else {
                 if !exact_only.contains(&profile.id) {
                     return Err(format!(

@@ -191,14 +191,31 @@ fn verify_layout(profile: &Profile, module: &Module, bytes: &[u8]) -> Result<(),
             }
         }
     } else if module.name == profile.shell.name {
-        for rva in [
-            profile.source.child_vtable_rva,
-            profile.source.factory_vtable_rva,
-        ] {
+        if let Some(entries) = &profile.source.child_vtable_entries {
+            let (table, area) =
+                pe::rva_bytes(bytes, profile.source.child_vtable_rva, entries.len() * 8)?;
+            if area.characteristics & 0xe0000000 != 0xc0000000 {
+                return Err("早期子宿主虚表必须位于已核对的可写数据节区".into());
+            }
+            profile
+                .source
+                .verify_child_vtable(pe::preferred_image_base(bytes)?, table)?;
+            for entry in entries {
+                if section(bytes, entry.rva, 16, true)? != entry.prologue {
+                    return Err("子宿主虚表入口与系统模块不匹配".into());
+                }
+            }
+        } else {
+            section(bytes, profile.source.child_vtable_rva, 6 * 8, false)?;
+        }
+        if let Some(rva) = profile.source.factory_vtable_rva {
             section(bytes, rva, 6 * 8, false)?;
         }
-    } else if module.name == profile.tray.name {
-        for entry in &profile.tray_entries {
+    } else if let Some(tray) = profile
+        .tray_evidence()?
+        .filter(|tray| module.name == tray.module.name)
+    {
+        for entry in tray.entries {
             if section(bytes, entry.rva, 16, true)? != entry.prologue {
                 return Err("内置托盘入口与系统模块不匹配".into());
             }
@@ -225,7 +242,13 @@ impl DiskImage {
                             Some("模块识别结果未绑定本次读取的完整身份和哈希".into());
                         return (self.report, None);
                     }
-                    match verify_layout(recognized.evidence, &recognized.module, &self.bytes) {
+                    let validation = recognized.evidence.validate().and_then(|()| {
+                        if role.module(recognized.evidence).is_none() {
+                            return Err("该资料不包含所需模块角色".into());
+                        }
+                        verify_layout(recognized.evidence, &recognized.module, &self.bytes)
+                    });
+                    match validation {
                         Ok(()) => {
                             self.report.status = ModuleStatus::Matched;
                             self.report.recognition = Some(RecognitionReport {
@@ -233,8 +256,11 @@ impl DiskImage {
                                 evidence_profile: recognized.evidence.id.clone(),
                                 implementation: match role {
                                     Role::Taskbar => format!(
-                                        "XAML 宿主；元素偏移 {:#x}，子宿主偏移 {:#x}",
-                                        recognized.evidence.host.element_offset,
+                                        "XAML 宿主；元素偏移 {}，子宿主偏移 {:#x}",
+                                        recognized.evidence.host.element_offset.map_or_else(
+                                            || "不使用；通过子宿主解析".into(),
+                                            |offset| format!("{offset:#x}"),
+                                        ),
                                         recognized.evidence.source.host_child_offset
                                     ),
                                     Role::Shell => format!(
@@ -242,12 +268,13 @@ impl DiskImage {
                                         recognized.evidence.source.child_source_offset
                                     ),
                                     Role::Tray => match recognized.evidence.tray_abi {
-                                        TrayAbi::SystemTrayCoordinatesX64V1 => {
+                                        Some(TrayAbi::SystemTrayCoordinatesX64V1) => {
                                             "托盘坐标：三参数、传值对象".into()
                                         }
-                                        TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1 => {
-                                            "托盘坐标：四参数、借用对象".into()
-                                        }
+                                        Some(
+                                            TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1,
+                                        ) => "托盘坐标：四参数、借用对象".into(),
+                                        None => "没有托盘适配资料".into(),
                                     },
                                 },
                             });
@@ -451,6 +478,14 @@ fn collect_selected<'a>(
         {
             Some(host.evidence.id.clone())
         }
+        (Some(host), Some(shell), None)
+            if host.evidence.tray.is_none()
+                && [host, shell].iter().all(|item| {
+                    item.basis == MatchBasis::ExactImage && item.evidence.id == host.evidence.id
+                }) =>
+        {
+            Some(host.evidence.id.clone())
+        }
         _ => None,
     };
     let implementation = resolved.as_ref().map(|plan| ImplementationReport {
@@ -481,8 +516,7 @@ fn collect_selected<'a>(
         network_accessed: false,
         loaded_modules_checked: false,
         runtime_topology_checked: false,
-        all_profile_images_matched: profile_id.is_some()
-            && modules.iter().all(|m| m.status == ModuleStatus::Matched),
+        all_profile_images_matched: profile_id.is_some(),
         profile_id,
         profile_selection_reason: selection_reason,
         implementation,

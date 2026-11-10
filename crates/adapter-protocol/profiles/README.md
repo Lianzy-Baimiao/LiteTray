@@ -78,3 +78,13 @@ The 8457 validation record remains bound to its own tested lab and default
 release binaries; it does not validate the new candidates. Offline candidate
 artifacts are not automatically registered or activated, and neither runtime
 settings nor external JSON can override the compiled module identities.
+
+The `compatibility-lab` feature additionally includes
+`lab/windows11-22000.318-x64-clock.json`. This early host/source candidate has
+five real host roles, no FrameHeight field or factory vtable, and thirteen
+individually verified child-vtable entries. Its tray module, ABI, purpose and
+entries are all absent. These four fields must either all exist or all be
+absent; incomplete tray evidence is rejected. The two-module clock candidate
+does not authorize tray calls and has no live acceptance record. Its source
+recognition does not prove that the actual taskbar clock is in that XAML root.
+See [the 21H2 investigation](../../../docs/compatibility-21h2.md).

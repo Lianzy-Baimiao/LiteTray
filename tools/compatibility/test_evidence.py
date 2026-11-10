@@ -15,6 +15,7 @@ from layouts import (GUARD_DISPATCH, GUARD_DISPATCH_FUNCTION, TRANSFORM_TO_VISUA
                      FACTORY_IMPLEMENTATION, BORROWED_TARGETS, BORROWED_CALLERS, BORROWED_SCREEN,
                      AS_FRAMEWORK_ELEMENT, DISPLAY_CURRENT_VIEW, TRANSFORM_BOUNDS,
                      ICON_QUERY_INTERFACE, ICON_QUERY_INNER, TRAY_SYMBOLS, tray_layout,
+                     XFG_DISPATCH, RAW_UNKNOWN_EQUAL, THROW_HR_DIAGNOSTIC,
                      aligned_offset, anchored_symbol, anchored_source_functions, borrowed_caller_window,
                      borrowed_returned_caller_window, borrowed_named_cleanup_thunks, coordinate_member,
                      find_sequence, implementation_source_field, match_borrowed_body, owned_cleanup, owned_caller_window,
@@ -123,6 +124,37 @@ def source_alias_fixture():
         (RAW_IMPL_CONTENT, 0x3000), (RAW_IMPL_CONTENT, 0x4000), (FACTORY_IMPLEMENTATION, 0x5000))]
     image.pointer = {0x6000 + 64: 0x1000, 0x7000 + 48: 0x2000}.__getitem__
     image.function = lambda rva: list(decoder.disasm(bodies[rva], rva))
+    return image, bodies, decoder
+
+
+def source_xfg_fixture():
+    """Reviewed bounded 22000 getter/helper bodies; no Windows image access."""
+    decoder = Cs(CS_ARCH_X86, CS_MODE_64)
+    decoder.detail = True
+    bodies = {
+        0xdcd50: bytes.fromhex("""
+            488bc4 48895810 48897018 57 4883ec20 488bda 488b7c2428 4883600800
+            488d7120 488d5008 488bce e8cb000000 84c0 0f854f0e1a00 488364243000
+            488b0e 488b01 49ba70f3555029ae158b 488d542430 488b4030 ff151ed35800
+            85c0 781c 488b442430 488903 488bc3 488b5c2438 488b742440 4883c420
+            5f c3 cc 8bc8 e87b4e2400 cc
+        """),
+        0xdce48: bytes.fromhex("""
+            48895c2420 57 4883ec20 488b09 488bfa 483b0a 741d 4885c9 740a
+            48833a00 0f85840d1a00 32c0 488b5c2448 4883c420 5f c3 cc b001 ebf0
+        """),
+        0x27dbd4: bytes.fromhex("41b99f130780 4c8d051f404100 ba45000000 488bcf e8c6bbe6ff cc"),
+    }
+    image = Image.__new__(Image)
+    image.role = "shell"
+    image.symbols = [{"decorated_name": name, "rva": rva} for name, rva in (
+        (RAW_UNKNOWN_EQUAL, 0xdce48), (XFG_DISPATCH, 0x66a0c8),
+        (THROW_HR_DIAGNOSTIC, 0xe97b4), ("?throw_hresult@winrt@@YAXUhresult@1@@Z", 0x321c4c))]
+    image.function = lambda rva: list(decoder.disasm(bodies[rva], rva))
+    def section(rva, count, executable):
+        if (rva, count, executable) not in ((0x691c00, 1, False), (0x66a0c8, 8, False)):
+            raise EvidenceError("Unknown fixture read-only evidence")
+    image.section = section
     return image, bodies, decoder
 
 
@@ -785,6 +817,82 @@ class Rejections(unittest.TestCase):
         for inline, recipe in ((False, "rdi_content_helper_v1"), (True, "rsi_inline_content_v1")):
             code, _, image = source_field_fixture(inline)
             self.assertEqual(implementation_source_field(image, code, []), (0x20, recipe))
+
+    def test_xfg_source_field_requires_complete_getter_and_null_helper(self):
+        image, bodies, decoder = source_xfg_fixture()
+        logs = []
+        self.assertEqual(implementation_source_field(image, image.function(0xdcd50), logs),
+                         (0x20, "rsi_xfg_inline_content_v1"))
+        self.assertEqual({entry["rva"] for entry in logs}, {0xdce48, 0x27dbd4})
+        # A raw public name may be shared by overloads. The exact call and the
+        # entire helper body select this one, without picking the first alias.
+        image.symbols.append({"decorated_name": RAW_UNKNOWN_EQUAL, "rva": 0x5000})
+        self.assertEqual(implementation_source_field(image, image.function(0xdcd50), []),
+                         (0x20, "rsi_xfg_inline_content_v1"))
+
+    def test_xfg_source_rejects_changed_field_zero_wrapper_abi_and_return(self):
+        mutations = (
+            ("488d7120", "488d7128"),  # unrelated source member
+            ("4883600800", "4883600801"),  # equality helper no longer receives null
+            ("488d5008", "488d5010"),  # comparison points to another local
+            ("488bce", "488bcf"),
+            ("488b0e", "488b0f"),
+            ("49ba70f3555029ae158b", "49ba71f3555029ae158b"),  # wrong XFG type
+            ("488b4030", "488b4038"),  # wrong COM slot
+            ("488d542430", "488d542438"),  # wrong ABI result local
+            ("488903", "488907"),  # result written through another object
+            ("488bc3", "488bc7"),  # result wrapper not returned
+            ("781c", "781b"),  # HRESULT failure jumps inside an instruction
+            ("ff151ed35800", "ff151fd35800"),  # another dispatch slot
+        )
+        for before, after in mutations:
+            with self.subTest(before=before):
+                image, bodies, decoder = source_xfg_fixture()
+                raw = bodies[0xdcd50].replace(bytes.fromhex(before), bytes.fromhex(after), 1)
+                self.assertNotEqual(raw, bodies[0xdcd50])
+                with self.assertRaises(EvidenceError):
+                    implementation_source_field(image, list(decoder.disasm(raw, 0xdcd50)), [])
+
+    def test_xfg_source_rejects_changed_equality_control_flow_and_cold_throw(self):
+        mutations = (
+            (0xdce48, "483b0a", "483b0b"),
+            (0xdce48, "741d", "741c"),
+            (0xdce48, "48833a00", "48833a01"),
+            (0xdce48, "32c0", "b001"),
+            (0xdce48, "b001", "b000"),
+            (0x27dbd4, "41b99f130780", "41b99e130780"),
+            (0x27dbd4, "e8c6bbe6ff", "e8c7bbe6ff"),
+            (0x27dbd4, "4c8d051f404100", "4c8d051e404100"),
+        )
+        for address, before, after in mutations:
+            with self.subTest(address=address, before=before):
+                image, bodies, decoder = source_xfg_fixture()
+                bodies[address] = bodies[address].replace(bytes.fromhex(before), bytes.fromhex(after), 1)
+                with self.assertRaises(EvidenceError):
+                    implementation_source_field(image, image.function(0xdcd50), [])
+
+    def test_xfg_source_rejects_missing_or_conflicting_exact_bindings(self):
+        for name in (RAW_UNKNOWN_EQUAL, XFG_DISPATCH, THROW_HR_DIAGNOSTIC,
+                     "?throw_hresult@winrt@@YAXUhresult@1@@Z"):
+            with self.subTest(name=name):
+                image, bodies, decoder = source_xfg_fixture()
+                image.symbols = [s for s in image.symbols if s["decorated_name"] != name]
+                with self.assertRaises(EvidenceError):
+                    implementation_source_field(image, image.function(0xdcd50), [])
+        image, bodies, decoder = source_xfg_fixture()
+        image.symbols.append({"decorated_name": XFG_DISPATCH, "rva": 0x5000})
+        with self.assertRaises(EvidenceError):
+            implementation_source_field(image, image.function(0xdcd50), [])
+
+    def test_xfg_source_rejects_added_instructions_and_nonreadonly_targets(self):
+        image, bodies, decoder = source_xfg_fixture()
+        with self.assertRaises(EvidenceError):
+            implementation_source_field(image, list(decoder.disasm(bodies[0xdcd50] + b"\x90", 0xdcd50)), [])
+        def bad_section(*_args):
+            raise EvidenceError("Writable evidence")
+        image.section = bad_section
+        with self.assertRaisesRegex(EvidenceError, "Writable evidence"):
+            implementation_source_field(image, image.function(0xdcd50), [])
 
     def test_source_field_cannot_flow_through_a_different_object(self):
         code, decoder, image = source_field_fixture(True)

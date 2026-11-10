@@ -217,7 +217,7 @@ pub fn host_layout(
             pdb_age: identity.pdb_age,
         },
         symbols,
-        element_offset,
+        element_offset: Some(element_offset),
     };
     layout.validate()?;
     Ok(layout)
@@ -298,7 +298,7 @@ mod tests {
     fn requires_a_complete_identity_matched_layout() {
         let (bytes, mut map) = fixture();
         let layout = host_layout(&map, &bytes).unwrap();
-        assert_eq!(layout.element_offset, 0x48);
+        assert_eq!(layout.element_offset, Some(0x48));
         assert_eq!(layout.symbols.len(), 6);
         map.image.pdb_age += 1;
         assert!(host_layout(&map, &bytes).is_err());

@@ -72,6 +72,30 @@ fn u32_at(b: &[u8], offset: usize) -> Result<u32, String> {
         .ok_or("PE 头被截断")?;
     Ok(u32::from_le_bytes([x[0], x[1], x[2], x[3]]))
 }
+/// Preferred base for validating exact image-backed pointer tables without
+/// loading the image. Native x64 PE32+ is required by the calling recipe.
+pub fn preferred_image_base(bytes: &[u8]) -> Result<u64, String> {
+    if bytes.get(..2) != Some(b"MZ") {
+        return Err("不是 Windows PE 文件".into());
+    }
+    let pe = u32_at(bytes, 0x3c)? as usize;
+    if bytes.get(pe..pe.checked_add(4).ok_or("地址溢出")?) != Some(b"PE\0\0")
+        || u16_at(bytes, pe + 4)? != 0x8664
+        || u16_at(bytes, pe + 20)? < 32
+        || u16_at(bytes, pe + 24)? != 0x20b
+    {
+        return Err("虚表证据要求 x64 PE32+ 映像".into());
+    }
+    let start = pe.checked_add(48).ok_or("地址溢出")?;
+    let value = bytes
+        .get(start..start.checked_add(8).ok_or("地址溢出")?)
+        .ok_or("PE 映像基址被截断")?;
+    let base = u64::from_le_bytes(value.try_into().map_err(|_| "PE 映像基址无效")?);
+    if base == 0 || !base.is_multiple_of(65536) {
+        return Err("PE 映像基址无效".into());
+    }
+    Ok(base)
+}
 pub fn identity(bytes: &[u8]) -> Result<ImageIdentity, String> {
     if bytes.get(..2) != Some(b"MZ") {
         return Err("不是 Windows PE 文件".into());
@@ -215,6 +239,26 @@ pub(crate) fn fixture() -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn image_base_requires_a_complete_native_header_and_aligned_address() {
+        let mut bytes = fixture();
+        assert!(preferred_image_base(&bytes).is_err());
+        bytes[0xb0..0xb8].copy_from_slice(&0x180000000u64.to_le_bytes());
+        assert_eq!(preferred_image_base(&bytes).unwrap(), 0x180000000);
+        for offset in [0, 0x80, 0x84, 0x94, 0x98, 0xb0] {
+            let mut invalid = bytes.clone();
+            invalid[offset] ^= 1;
+            // Optional-header size remains sufficient when incremented; test
+            // a genuine truncation instead of assuming every bit is invalid.
+            if offset == 0x94 {
+                invalid[0x94..0x96].copy_from_slice(&16u16.to_le_bytes());
+            }
+            assert!(preferred_image_base(&invalid).is_err(), "offset {offset:x}");
+        }
+        for length in [0, 64, 0x98, 0xb7] {
+            assert!(preferred_image_base(&bytes[..length]).is_err());
+        }
+    }
     #[test]
     fn rejects_truncated_and_invalid_images_without_panicking() {
         for bytes in [vec![], b"MZ".to_vec(), vec![0; 512], {

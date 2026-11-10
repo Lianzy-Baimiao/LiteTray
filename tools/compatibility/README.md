@@ -28,7 +28,7 @@ python tools/compatibility/inspect_modules.py `
   --offline
 ```
 
-Repeat `--module ROLE=relative/path.dll` for `taskbar`, `shell`, and `tray` if their file locations differ. The reported module keeps its actual filename: `Taskbar.View.dll` is never relabeled `SystemTray.dll`. Production support requires an exact built-in profile matching the complete module set and independent live evidence for the claimed scenarios. A filename alone cannot establish or rule out that match. This tool does not check the production registry; recognizing a reviewed module variant in the parser does not add it to that registry.
+Repeat `--module ROLE=relative/path.dll` for `taskbar`, `shell`, and `tray` if their file locations differ. The reported module keeps its actual filename: `Taskbar.View.dll` is never relabeled `SystemTray.dll`. Production support requires built-in evidence for every module needed by the requested feature and independent live evidence for the claimed scenarios. Clock evidence can contain only the host and shell; it never supplies a placeholder tray module, ABI, purpose or entry. A filename alone cannot establish or rule out a match. This tool does not check the production registry; recognizing a reviewed module variant in the parser does not add it to that registry.
 
 By default, exact PDBs are downloaded into `OUTPUT/symbols/`. `--symbol-cache` reuses a cache; `--offline` forbids new downloads. Existing wrong-identity PDBs are rejected and preserved. Downloads become cache entries only after GUID and DBI-age checks. DbgHelp enumeration is serial, uses a separate noninvading session token, and verifies the image/PDB identity with `SYMOPT_EXACT_SYMBOLS` and `SymGetModuleInfo64`.
 

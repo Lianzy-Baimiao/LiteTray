@@ -1,0 +1,18 @@
+{
+  "algorithm": "litetray-execution-equivalence-v1",
+  "entries": [
+    {
+      "fingerprint": "edfbb5f89dc5aeea9b1c742439d981d9c264c3f361cf6ce92351a1125dc13f4a",
+      "profile_id": "windows11-22000.318-x64-clock",
+      "role": "taskbar",
+      "sha256": "21e122d5561ee827534ae6ff3cf2838336d66fa9e533f13e15f94076342f6b00"
+    },
+    {
+      "fingerprint": "58a349612b9af9f5f1cc9b5074379332c8af0052561ea334e88745d17e818139",
+      "profile_id": "windows11-22000.318-x64-clock",
+      "role": "shell",
+      "sha256": "dc24a218229828455be50ddd5af8a0c88399b74df81c9b6d563a2f78e3e66eb8"
+    }
+  ],
+  "schema": 1
+}

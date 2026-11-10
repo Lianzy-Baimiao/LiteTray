@@ -24,16 +24,20 @@ impl Fixture {
         let mut profile = compatibility::profiles().unwrap()[0].clone();
         profile.id = format!("synthetic-{version}");
         profile.system_label = format!("Synthetic compatibility test {version}");
-        for (module, bytes) in [&mut profile.taskbar, &mut profile.shell, &mut profile.tray]
-            .into_iter()
-            .zip(&images)
+        for (module, bytes) in [
+            &mut profile.taskbar,
+            &mut profile.shell,
+            profile.tray.as_mut().unwrap(),
+        ]
+        .into_iter()
+        .zip(&images)
         {
             let image = pe::identity(bytes).unwrap();
             module.identity = identity(&image);
             module.sha256 = image.sha256;
         }
         profile.host.module = profile.taskbar.identity.clone();
-        profile.host.element_offset = 0x48;
+        profile.host.element_offset = Some(0x48);
         profile.host.symbols = SymbolRole::ALL
             .into_iter()
             .zip([0x2020, 0x2030, 0x1100, 0x1120, 0x1140, 0x1160])
@@ -54,9 +58,11 @@ impl Fixture {
             })
             .collect();
         profile.source.child_vtable_rva = 0x2040;
-        profile.source.factory_vtable_rva = 0x2080;
+        profile.source.factory_vtable_rva = Some(0x2080);
         for (entry, rva) in profile
             .tray_entries
+            .as_mut()
+            .unwrap()
             .iter_mut()
             .zip([0x1100, 0x1120, 0x1160])
         {
@@ -115,14 +121,10 @@ fn recognize_from<'a>(
 ) -> Result<Recognized<'a>, String> {
     let image = pe::identity(bytes)?;
     let identity = identity(&image);
-    let index = match role {
-        Role::Taskbar => 0,
-        Role::Shell => 1,
-        Role::Tray => 2,
-    };
     let mut matching = profiles.iter().filter(|profile| {
-        let module = profile.modules()[index];
-        module.relative_path == path && module.matches(&image.sha256, &identity)
+        role.module(profile).is_some_and(|module| {
+            module.relative_path == path && module.matches(&image.sha256, &identity)
+        })
     });
     let evidence = *matching.next().ok_or("unrecognized fixture")?;
     if matching.next().is_some() {
@@ -130,7 +132,7 @@ fn recognize_from<'a>(
     }
     Ok(Recognized {
         role,
-        module: evidence.modules()[index].clone(),
+        module: role.module(evidence).unwrap().clone(),
         evidence,
         basis: MatchBasis::ExactImage,
     })
@@ -163,6 +165,90 @@ fn disk_preflight_binds_each_module_to_its_own_bytes_and_layout() {
                 .is_some()
         );
     }
+}
+
+#[test]
+fn clock_only_disk_evidence_enables_clock_and_leaves_tray_unavailable() {
+    let mut fixture = Fixture::new(31);
+    fixture.profile.tray = None;
+    fixture.profile.tray_abi = None;
+    fixture.profile.tray_geometry = None;
+    fixture.profile.tray_entries = None;
+    fixture.profile.validate().unwrap();
+    let root = SystemRoot::new(fixture.images.each_ref().map(Vec::as_slice));
+    let result = collect_selected(&root.0, Some(22000), |role, path, bytes| {
+        recognize_from(&[&fixture.profile], role, path, bytes)
+    });
+    assert_eq!(
+        result.report.profile_id.as_deref(),
+        Some(fixture.profile.id.as_str())
+    );
+    assert!(result.report.all_profile_images_matched);
+    assert_eq!(
+        result.host_layout(true, false).unwrap(),
+        fixture.profile.host
+    );
+    assert!(result.host_layout(true, true).is_err());
+    let enabled = result.report.negotiate(true, true).unwrap();
+    assert!(enabled.clocks && !enabled.tray);
+    assert!(result.resolved.unwrap().tray.is_none());
+    assert_ne!(result.report.modules[2].status, ModuleStatus::Matched);
+    // An existing but unreviewed tray DLL cannot acquire support from its
+    // neighbors' recognized clock evidence or from the OS build label.
+    assert!(result.report.implementation.unwrap().tray_abi.is_none());
+}
+
+#[test]
+fn early_source_verifies_writable_table_slots_and_immutable_code_separately() {
+    use litetray_adapter_protocol::compatibility::{SourceRecipe, SourceVtableEntry};
+    let mut fixture = Fixture::new(32);
+    fixture.profile.host.element_offset = None;
+    fixture
+        .profile
+        .host
+        .symbols
+        .retain(|symbol| symbol.role != SymbolRole::FrameHeight);
+    fixture.profile.source.recipe = SourceRecipe::XamlExplorerHostChildXfgV1;
+    fixture.profile.source.factory_vtable_rva = None;
+    fixture.profile.tray = None;
+    fixture.profile.tray_abi = None;
+    fixture.profile.tray_geometry = None;
+    fixture.profile.tray_entries = None;
+    let bytes = &mut fixture.images[1];
+    let base = 0x180000000u64;
+    bytes[0xb0..0xb8].copy_from_slice(&base.to_le_bytes());
+    bytes[0x1d4..0x1d8].copy_from_slice(&0xc0000040u32.to_le_bytes());
+    let entries = std::array::from_fn(|slot| {
+        let rva = 0x1100 + slot as u32 * 16;
+        let prologue = pe::rva_bytes(bytes, rva, 16).unwrap().0.try_into().unwrap();
+        let offset = 0x840 + slot * 8;
+        bytes[offset..offset + 8].copy_from_slice(&(base + u64::from(rva)).to_le_bytes());
+        SourceVtableEntry { rva, prologue }
+    });
+    fixture.profile.source.child_vtable_entries = Some(entries);
+    let image = pe::identity(bytes).unwrap();
+    fixture.profile.shell.identity = identity(&image);
+    fixture.profile.shell.sha256 = image.sha256;
+    fixture.profile.validate().unwrap();
+    verify_layout(&fixture.profile, &fixture.profile.shell, bytes).unwrap();
+    for slot in 0..13 {
+        let mut replaced = bytes.clone();
+        replaced[0x840 + slot * 8] ^= 1;
+        assert!(verify_layout(&fixture.profile, &fixture.profile.shell, &replaced).is_err());
+        let mut patched = bytes.clone();
+        patched[0x300 + slot * 16] ^= 1;
+        assert!(verify_layout(&fixture.profile, &fixture.profile.shell, &patched).is_err());
+    }
+    for permissions in [0x40000040u32, 0xe0000040] {
+        let mut wrong = bytes.clone();
+        wrong[0x1d4..0x1d8].copy_from_slice(&permissions.to_le_bytes());
+        assert!(verify_layout(&fixture.profile, &fixture.profile.shell, &wrong).is_err());
+    }
+    let mut wrong = bytes.clone();
+    wrong[0x1ac..0x1b0].copy_from_slice(&0xe0000020u32.to_le_bytes());
+    assert!(verify_layout(&fixture.profile, &fixture.profile.shell, &wrong).is_err());
+    fixture.profile.source.recipe = SourceRecipe::XamlExplorerHostChildV1;
+    assert!(fixture.profile.validate().is_err());
 }
 
 #[test]
@@ -265,7 +351,10 @@ fn compatible_module_contracts_combine_only_their_own_fields_without_inheriting_
     assert_eq!(plan.source.child_source_offset, 0x20);
     assert_eq!(plan.source.child_vtable_rva, 0x20c0);
     assert_eq!(plan.shell.sha256, new.profile.shell.sha256);
-    assert_eq!(plan.tray.unwrap().module.sha256, old.profile.tray.sha256);
+    assert_eq!(
+        plan.tray.unwrap().module.sha256,
+        old.profile.tray.as_ref().unwrap().sha256
+    );
 }
 
 #[test]

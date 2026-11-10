@@ -93,7 +93,11 @@ pub struct HostLayout {
     pub schema: u32,
     pub module: ModuleIdentity,
     pub symbols: Vec<SymbolAddress>,
-    pub element_offset: u32,
+    /// Legacy inspection can use a separately proved FrameHeight field. Early
+    /// source-only recipes have no such method; their profile must authorize
+    /// the five-symbol layout and resolve content through the source contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element_offset: Option<u32>,
 }
 impl HostLayout {
     pub fn validate(&self) -> Result<(), String> {
@@ -101,11 +105,15 @@ impl HostLayout {
             return Err("任务栏适配协议版本不兼容".into());
         }
         self.module.validate()?;
-        if self.symbols.len() != SymbolRole::ALL.len() {
+        let expected = SymbolRole::ALL.len() - usize::from(self.element_offset.is_none());
+        if self.symbols.len() != expected {
             return Err("缺少任务栏接口符号".into());
         }
         let mut seen = std::collections::BTreeSet::new();
         for symbol in &self.symbols {
+            if self.element_offset.is_none() && symbol.role == SymbolRole::FrameHeight {
+                return Err("没有元素字段的宿主不能包含 FrameHeight 符号".into());
+            }
             if !seen.insert(symbol.role) {
                 return Err("任务栏接口符号重复".into());
             }
@@ -130,9 +138,11 @@ impl HostLayout {
                 return Err("函数入口校验数据无效".into());
             }
         }
-        let offset = frame_element_offset(&self.symbol(SymbolRole::FrameHeight).prologue)?;
-        if offset != self.element_offset {
-            return Err("任务栏宿主字段偏移不一致".into());
+        if let Some(expected) = self.element_offset {
+            let offset = frame_element_offset(&self.symbol(SymbolRole::FrameHeight).prologue)?;
+            if offset != expected {
+                return Err("任务栏宿主字段偏移不一致".into());
+            }
         }
         Ok(())
     }
@@ -263,7 +273,7 @@ mod tests {
                 pdb_guid: [1; 16],
                 pdb_age: 1,
             },
-            element_offset: 0x48,
+            element_offset: Some(0x48),
             symbols: SymbolRole::ALL
                 .into_iter()
                 .enumerate()
@@ -292,6 +302,42 @@ mod tests {
         layout().validate().unwrap();
     }
     #[test]
+    fn source_only_host_requires_exactly_the_five_real_roles() {
+        let mut source = layout();
+        source.element_offset = None;
+        assert!(source.validate().is_err());
+        source
+            .symbols
+            .retain(|entry| entry.role != SymbolRole::FrameHeight);
+        source.validate().unwrap();
+        let mut missing = source.clone();
+        missing.symbols.pop();
+        assert!(missing.validate().is_err());
+        let mut misplaced = source.clone();
+        misplaced.symbols[2].role = SymbolRole::FrameHeight;
+        assert!(misplaced.validate().is_err());
+        source.element_offset = Some(0x48);
+        assert!(source.validate().is_err());
+    }
+    #[test]
+    fn optional_field_preserves_modern_wire_shape_and_has_no_fake_offset() {
+        let modern = layout();
+        let value = serde_json::to_value(&modern).unwrap();
+        assert_eq!(value["element_offset"], 0x48);
+        let roundtrip: HostLayout = serde_json::from_value(value).unwrap();
+        assert_eq!(roundtrip, modern);
+        let mut source = modern;
+        source.element_offset = None;
+        source
+            .symbols
+            .retain(|entry| entry.role != SymbolRole::FrameHeight);
+        let value = serde_json::to_value(&source).unwrap();
+        assert!(value.get("element_offset").is_none());
+        let roundtrip: HostLayout = serde_json::from_value(value).unwrap();
+        assert_eq!(roundtrip, source);
+        roundtrip.validate().unwrap();
+    }
+    #[test]
     fn rejects_missing_duplicate_and_nonexecutable_targets() {
         let mut l = layout();
         l.symbols.pop();
@@ -306,7 +352,7 @@ mod tests {
     #[test]
     fn rejects_cross_version_and_out_of_range_offsets() {
         let mut l = layout();
-        l.element_offset = 0x10;
+        l.element_offset = Some(0x10);
         assert!(l.validate().is_err());
         let mut l = layout();
         l.symbols[2].rva = u32::MAX;

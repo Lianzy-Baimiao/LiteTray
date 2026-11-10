@@ -26,7 +26,9 @@ use windows_sys::Win32::{
 pub const WM_ACTIVATED: u32 = WM_APP + 12;
 #[path = "taskbar_live_checks.rs"]
 mod live_checks;
-pub use live_checks::{check_compatibility, check_secondary, check_secondary_tray};
+pub use live_checks::{
+    check_clock_compatibility, check_compatibility, check_secondary, check_secondary_tray,
+};
 pub struct Native {
     main: HWND,
 }
@@ -734,7 +736,7 @@ mod restoration_checks {
                                         pdb_age: 1,
                                     },
                                     symbols: vec![],
-                                    element_offset: 0,
+                                    element_offset: Some(0),
                                 },
                                 routes: vec![],
                                 custom_calendar: false,
@@ -974,7 +976,7 @@ mod activation_checks {
                             pdb_age: 1,
                         },
                         symbols: vec![],
-                        element_offset: 0,
+                        element_offset: Some(0),
                     },
                     routes: vec![],
                     custom_calendar: true,

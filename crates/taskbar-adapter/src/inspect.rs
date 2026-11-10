@@ -154,33 +154,6 @@ pub(crate) unsafe fn host(
         Ok(shared)
     }
 }
-unsafe fn content(
-    hwnd: HWND,
-    secondary: bool,
-    module: usize,
-    layout: &HostLayout,
-) -> Result<xaml::Object, String> {
-    unsafe {
-        let shared = host(hwnd, secondary, module, layout)?;
-        let element = pointer(
-            shared.value[0]
-                .checked_add(layout.element_offset as usize)
-                .ok_or("宿主字段地址溢出")?,
-        )?;
-        check_region(element, size_of::<usize>(), 0, false)?;
-        let vtable = pointer(element)?;
-        check_region(vtable, 3 * size_of::<usize>(), 0, false)?;
-        let qi = pointer(vtable)?;
-        check_region(qi, 1, 0, true)?;
-        let element = xaml::Object::query_borrowed(
-            element as *mut _,
-            &crate::xaml_abi::IID_IFrameworkElement,
-        )?;
-        let root = xaml::root_content(&element)?;
-        drop(shared);
-        Ok(root)
-    }
-}
 pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
     unsafe {
         let mut response = InspectResponse {
@@ -200,13 +173,10 @@ pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
                 return response;
             }
         };
-        let module = match validate_resolved(&implementation) {
-            Ok(module) => module,
-            Err(error) => {
-                response.error = Some(error);
-                return response;
-            }
-        };
+        if let Err(error) = validate_resolved(&implementation) {
+            response.error = Some(error);
+            return response;
+        }
         let windows = match crate::taskbar_windows::current_thread() {
             Ok(windows) => windows,
             Err(error) => {
@@ -234,7 +204,10 @@ pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
                 geometry: vec![],
                 geometry_error: None,
             };
-            match content(hwnd, secondary, module, layout).and_then(|root| {
+            match crate::taskbar_source::resolve(hwnd, &implementation).and_then(|source| {
+                // Keep the host, child and source alive for the whole walk.
+                // Inspection and activation use the same verified source path.
+                let root = source.root.clone();
                 report.topology = Some(
                     match crate::discovery::View::discover(&root, implementation.topology) {
                         Ok(view) => view.report,
@@ -245,10 +218,7 @@ pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
                         },
                     },
                 );
-                let binding =
-                    crate::taskbar_source::resolve(hwnd, &implementation).and_then(|source| {
-                        crate::island::Binding::capture(hwnd, &source.source, &root)
-                    });
+                let binding = crate::island::Binding::capture(hwnd, &source.source, &root);
                 if let Err(error) = &binding {
                     report.geometry_error = Some(error.clone());
                 }

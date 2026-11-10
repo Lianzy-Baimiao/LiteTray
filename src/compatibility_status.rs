@@ -43,8 +43,8 @@ pub struct ValidationEvidence {
 pub struct ImplementationFamily {
     pub source_recipe: SourceRecipe,
     pub topology: Topology,
-    pub tray_abi: TrayAbi,
-    pub tray_geometry: litetray_adapter_protocol::compatibility::TrayGeometry,
+    pub tray_abi: Option<TrayAbi>,
+    pub tray_geometry: Option<litetray_adapter_protocol::compatibility::TrayGeometry>,
     pub description: &'static str,
 }
 
@@ -94,7 +94,11 @@ impl Report {
                 .iter()
                 .filter(|module| module.status == ModuleStatus::Matched)
                 .count(),
-            required_module_count: self.modules.len(),
+            required_module_count: self
+                .profile_id
+                .as_ref()
+                .and_then(|id| profiles().ok()?.iter().find(|profile| &profile.id == id))
+                .map_or(self.modules.len(), |profile| profile.modules().len()),
             loaded_modules_checked: self.loaded_modules_checked,
             runtime_topology_checked: self.runtime_topology_checked,
             features: &self.features,
@@ -248,7 +252,7 @@ fn historical_evidence(profile: &Profile) -> Vec<ValidationEvidence> {
         Some(RecordedProfile::VirtualMachineLtsc1742) | None => None,
     };
     let full_matches = host_matches
-        && historical_geometry == Some(profile.tray_geometry)
+        && historical_geometry == profile.tray_geometry
         && previous.is_some_and(|entry| entry.tray_digest == digests.1);
     SCENARIOS
         .into_iter()
@@ -669,7 +673,11 @@ fn support_profile(profile: &Profile) -> SupportProfile {
             topology: profile.topology,
             tray_abi: profile.tray_abi,
             tray_geometry: profile.tray_geometry,
-            description: "逐模块核验完整图像或严格实现等价；按宿主、XAML 容器与托盘的接口和调用用途组合。启用时独立核对当前模块和控件归属。",
+            description: if profile.tray.is_some() {
+                "分别检查时钟和托盘所需的系统模块；启用前再次确认当前任务栏。"
+            } else {
+                "这份适配资料提供时钟功能，尚未包含托盘复制。启用前会再次确认当前任务栏。"
+            },
         },
         modules: profile.modules().into_iter().cloned().collect(),
         evidence: evidence(profile),
@@ -700,12 +708,12 @@ mod tests {
                         && item.recorded_on.is_none()
                         && item.reference.is_none())
             );
-            for module_index in 0..3 {
+            for module_index in 0..original.modules().len() {
                 let mut profile = original.clone();
                 let module = match module_index {
                     0 => &mut profile.taskbar,
                     1 => &mut profile.shell,
-                    _ => &mut profile.tray,
+                    _ => profile.tray.as_mut().unwrap(),
                 };
                 module.sha256 = "0".repeat(64);
                 assert!(evidence(&profile).iter().all(|item| {
@@ -768,10 +776,11 @@ mod tests {
     #[test]
     fn historical_recipe_digests_match_retained_profiles_except_replaced_ltsc_tray() {
         let retained = historical_recipes().unwrap();
-        for profile in profiles().unwrap() {
-            let previous = retained
+        for previous in retained {
+            let profile = profiles()
+                .unwrap()
                 .iter()
-                .find(|entry| entry.profile_id == profile.id)
+                .find(|profile| profile.id == previous.profile_id)
                 .unwrap();
             let current = recipe_digests(profile);
             assert_eq!(
@@ -845,7 +854,9 @@ mod tests {
         for change in 0..5 {
             let mut profile = original.clone();
             match change {
-                0 => profile.host.element_offset += 8,
+                0 => {
+                    profile.host.element_offset = profile.host.element_offset.map(|value| value + 8)
+                }
                 1 => profile.source.host_child_offset += 8,
                 2 => profile.source.child_source_offset += 8,
                 3 => profile.source.child_vtable_rva += 8,
@@ -871,10 +882,10 @@ mod tests {
         for change in 0..4 {
             let mut profile = original.clone();
             match change {
-                0 => profile.tray_abi = TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1,
-                1 => profile.tray_entries[0].rva += 8,
-                2 => profile.tray_entries[1].prologue[0] ^= 1,
-                _ => profile.tray_entries[2].rva += 8,
+                0 => profile.tray_abi = Some(TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1),
+                1 => profile.tray_entries.as_mut().unwrap()[0].rva += 8,
+                2 => profile.tray_entries.as_mut().unwrap()[1].prologue[0] ^= 1,
+                _ => profile.tray_entries.as_mut().unwrap()[2].rva += 8,
             }
             for item in evidence(&profile) {
                 assert_eq!(
@@ -989,15 +1000,18 @@ mod tests {
                 1 => profile.id = "new-profile-with-existing-layout".into(),
                 2 => profile.taskbar.sha256 = "0".repeat(64),
                 3 => profile.shell.identity.timestamp ^= 1,
-                4 => profile.tray.sha256 = "0".repeat(64),
-                5 => profile.host.element_offset += 8,
-                6 => profile.source.child_vtable_rva += 8,
-                7 => profile.tray_abi = TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1,
-                8 => {
-                    profile.tray_geometry =
-                        litetray_adapter_protocol::compatibility::TrayGeometry::DragDropHitTesting
+                4 => profile.tray.as_mut().unwrap().sha256 = "0".repeat(64),
+                5 => {
+                    profile.host.element_offset = profile.host.element_offset.map(|value| value + 8)
                 }
-                _ => profile.tray_entries[0].prologue[0] ^= 1,
+                6 => profile.source.child_vtable_rva += 8,
+                7 => profile.tray_abi = Some(TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1),
+                8 => {
+                    profile.tray_geometry = Some(
+                        litetray_adapter_protocol::compatibility::TrayGeometry::DragDropHitTesting,
+                    )
+                }
+                _ => profile.tray_entries.as_mut().unwrap()[0].prologue[0] ^= 1,
             }
             assert!(recorded_acceptance(&profile).is_none(), "change {change}");
         }
@@ -1016,11 +1030,11 @@ mod tests {
                 TrayGeometry::DragDropHitTesting,
                 TrayGeometry::LegacyUnclassified,
             ] {
-                if geometry == original.tray_geometry {
+                if Some(geometry) == original.tray_geometry {
                     continue;
                 }
                 let mut changed = original.clone();
-                changed.tray_geometry = geometry;
+                changed.tray_geometry = Some(geometry);
                 assert!(recorded_acceptance(&changed).is_none());
                 for results in [historical_evidence(&changed), evidence(&changed)] {
                     for item in results {

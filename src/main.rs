@@ -112,8 +112,9 @@ fn run() -> Result<(), String> {
     let config = config::load(&config::data_dir().join("config.json"))?;
     match arguments.first().map(String::as_str) {
         Some("--test-taskbar-compatibility") => {
-            if arguments.len() != 2 {
-                return Err("用法：--test-taskbar-compatibility <新报告.json>（显式接管主屏后恢复，仅在隔离测试系统运行）".into());
+            let clock_only = arguments.len() == 3 && arguments[2] == "--clock-only";
+            if arguments.len() != 2 && !clock_only {
+                return Err("用法：--test-taskbar-compatibility <新报告.json> [--clock-only]（显式接管主屏后恢复，仅在隔离测试系统运行）".into());
             }
             // Create the report first: an invalid/existing output must not
             // initiate a live Explorer transaction without preserving evidence.
@@ -124,13 +125,21 @@ fn run() -> Result<(), String> {
                 .create_new(true)
                 .open(output)
                 .map_err(|e| format!("实机检查报告无法创建，未接管任务栏：{e}"))?;
-            file.write_all(
-                b"{\"passed\":false,\"status\":\"started\",\"scope\":\"primary_taskbar_live\"}\n",
-            )
-            .and_then(|_| file.sync_all())
+            let started = serde_json::to_vec(&serde_json::json!({
+                "passed":false,"status":"started",
+                "scope":if clock_only {"primary_clock_live"} else {"primary_taskbar_live"},
+                "requested":{"clock_update_restore":true,"tray_prepare_stop":!clock_only}
+            }))
             .map_err(|e| e.to_string())?;
+            file.write_all(&started)
+                .and_then(|_| file.sync_all())
+                .map_err(|e| e.to_string())?;
             drop(file);
-            let result = platform::taskbar_clock::check_compatibility(&config);
+            let result = if clock_only {
+                platform::taskbar_clock::check_clock_compatibility(&config)
+            } else {
+                platform::taskbar_clock::check_compatibility(&config)
+            };
             let text = serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?;
             config::atomic_write(output, text.as_bytes())?;
             println!("{text}");
@@ -265,7 +274,7 @@ fn run() -> Result<(), String> {
         }
         Some("--help") => {
             println!(
-                "LiteTray [--settings | --calendar | --clock-preview | --background | --show-secondary [calendar|agenda|timers|clock|weather-format|appearance] | --diagnose [file] | --compatibility-report <new-report.json> [--system-root <Windows-directory>] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-app-icon | --self-test-clock | --self-test-shell-source | --self-test-preview-recovery | --test-secondary-clock <report.json> | --test-secondary-tray <report.json> | --test-taskbar-compatibility <new-report.json> (LIVE primary takeover and restore; isolated test systems only) | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
+                "LiteTray [--settings | --calendar | --clock-preview | --background | --show-secondary [calendar|agenda|timers|clock|weather-format|appearance] | --diagnose [file] | --compatibility-report <new-report.json> [--system-root <Windows-directory>] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-app-icon | --self-test-clock | --self-test-shell-source | --self-test-preview-recovery | --test-secondary-clock <report.json> | --test-secondary-tray <report.json> | --test-taskbar-compatibility <new-report.json> [--clock-only] (LIVE primary takeover and restore; isolated test systems only) | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
             );
             Ok(())
         }

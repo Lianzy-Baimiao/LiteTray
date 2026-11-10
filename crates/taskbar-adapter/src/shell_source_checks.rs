@@ -103,6 +103,9 @@ fn inspected_module() -> Result<Module, String> {
         "only inspected x64 ABI is supported",
     )?;
     let profile = crate::compatibility::recognize_system(false)?;
+    if profile.source.factory_vtable_rva.is_none() {
+        return Err("当前宿主实现未提供已验证的私有工厂夹具；请在隔离系统中验证实际时钟".into());
+    }
     let path = crate::compatibility::verified_file(&profile.shell)?;
     let module = Module {
         handle: unsafe {
@@ -380,10 +383,14 @@ pub(crate) fn run() -> Result<serde_json::Value, String> {
     }
     let _apartment = Apartment;
     let module = inspected_module()?;
+    let factory_rva = module
+        .profile
+        .source
+        .factory_vtable_rva
+        .ok_or("缺少已验证的私有工厂夹具")?;
     let factory = factory(CLASS, &IID_FACTORY)?;
     require(
-        pointer(factory.raw() as usize)?
-            == module.handle as usize + module.profile.source.factory_vtable_rva as usize,
+        pointer(factory.raw() as usize)? == module.handle as usize + factory_rva as usize,
         "inspected concrete factory vtable",
     )?;
     let first = Host::create(&module, &factory)?;

@@ -17,6 +17,8 @@ const PROFILE_BYTES: &[&[u8]] = &[
     include_bytes!("../profiles/windows11-26100.1742-x64.json"),
     include_bytes!("../profiles/windows11-22631.2861-x64.json"),
     include_bytes!("../profiles/windows11-22621.1702-x64.json"),
+    #[cfg(feature = "compatibility-lab")]
+    include_bytes!("../profiles/lab/windows11-22000.318-x64-clock.json"),
 ];
 const MAX_PROFILE: usize = 64 * 1024;
 
@@ -72,6 +74,9 @@ impl Module {
 #[serde(rename_all = "snake_case")]
 pub enum SourceRecipe {
     XamlExplorerHostChildV1,
+    /// Earlier child implementation with an XFG getter and an image-backed
+    /// writable vtable. Every callable slot is checked before querying it.
+    XamlExplorerHostChildXfgV1,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -105,7 +110,38 @@ pub struct SourceLayout {
     pub host_child_offset: u32,
     pub child_source_offset: u32,
     pub child_vtable_rva: u32,
-    pub factory_vtable_rva: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factory_vtable_rva: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_vtable_entries: Option<[SourceVtableEntry; 13]>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceVtableEntry {
+    pub rva: u32,
+    pub prologue: [u8; 16],
+}
+impl SourceLayout {
+    /// The same bounded equality is used for preferred-base disk pointers and
+    /// ASLR-relocated live pointers. No pointer supplied by the table is called.
+    pub fn verify_child_vtable(&self, image_base: u64, table: &[u8]) -> Result<(), String> {
+        let entries = self
+            .child_vtable_entries
+            .as_ref()
+            .ok_or("该 source 方案没有逐项虚表证据")?;
+        if self.recipe != SourceRecipe::XamlExplorerHostChildXfgV1
+            || table.len() != entries.len() * 8
+        {
+            return Err("子宿主虚表方案或长度不一致".into());
+        }
+        for (slot, expected) in table.as_chunks::<8>().0.iter().zip(entries) {
+            let actual = u64::from_le_bytes(*slot);
+            if image_base.checked_add(u64::from(expected.rva)) != Some(actual) {
+                return Err("子宿主虚表入口已变化或不属于已核对的模块".into());
+            }
+        }
+        Ok(())
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -135,13 +171,25 @@ pub struct Profile {
     pub system_label: String,
     pub taskbar: Module,
     pub shell: Module,
-    pub tray: Module,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tray: Option<Module>,
     pub host: HostLayout,
     pub source: SourceLayout,
     pub topology: Topology,
-    pub tray_abi: TrayAbi,
-    pub tray_geometry: TrayGeometry,
-    pub tray_entries: [TrayEntry; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tray_abi: Option<TrayAbi>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tray_geometry: Option<TrayGeometry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tray_entries: Option<[TrayEntry; 3]>,
+}
+/// A callable tray recipe exists only when all four evidence fields exist.
+/// Clock evidence cannot supply a placeholder ABI or function address.
+pub struct TrayEvidence<'a> {
+    pub module: &'a Module,
+    pub abi: TrayAbi,
+    pub geometry: TrayGeometry,
+    pub entries: &'a [TrayEntry; 3],
 }
 impl Profile {
     pub fn decode(bytes: &[u8]) -> Result<Self, String> {
@@ -153,8 +201,28 @@ impl Profile {
         profile.validate()?;
         Ok(profile)
     }
-    pub fn modules(&self) -> [&Module; 3] {
-        [&self.taskbar, &self.shell, &self.tray]
+    pub fn modules(&self) -> Vec<&Module> {
+        [&self.taskbar, &self.shell]
+            .into_iter()
+            .chain(self.tray.as_ref())
+            .collect()
+    }
+    pub fn tray_evidence(&self) -> Result<Option<TrayEvidence<'_>>, String> {
+        match (
+            &self.tray,
+            self.tray_abi,
+            self.tray_geometry,
+            &self.tray_entries,
+        ) {
+            (None, None, None, None) => Ok(None),
+            (Some(module), Some(abi), Some(geometry), Some(entries)) => Ok(Some(TrayEvidence {
+                module,
+                abi,
+                geometry,
+                entries,
+            })),
+            _ => Err("托盘资料必须同时包含模块、ABI、用途和全部入口".into()),
+        }
     }
     pub fn validate(&self) -> Result<(), String> {
         if self.schema != 1
@@ -172,32 +240,40 @@ impl Profile {
         for module in self.modules() {
             module.validate()?;
         }
-        if !matches!(
-            (self.tray_abi, self.tray_geometry),
-            (
-                TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1,
-                TrayGeometry::DragDropHitTesting
-            ) | (
-                TrayAbi::SystemTrayCoordinatesX64V1,
-                TrayGeometry::NotificationAreaBounds | TrayGeometry::LegacyUnclassified
+        let tray = self.tray_evidence()?;
+        if tray.as_ref().is_some_and(|tray| {
+            !matches!(
+                (tray.abi, tray.geometry),
+                (
+                    TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1,
+                    TrayGeometry::DragDropHitTesting
+                ) | (
+                    TrayAbi::SystemTrayCoordinatesX64V1,
+                    TrayGeometry::NotificationAreaBounds | TrayGeometry::LegacyUnclassified
+                )
             )
-        ) {
+        }) {
             return Err("托盘坐标入口的 ABI 与已验证用途不一致".into());
         }
         if self.taskbar.name != "taskbar.dll"
             || self.taskbar.relative_path != "System32/taskbar.dll"
             || self.shell.name != "twinui.pcshell.dll"
             || self.shell.relative_path != "System32/twinui.pcshell.dll"
-            || !matches!(
-                (self.tray.name.as_str(), self.tray.relative_path.as_str()),
-                (
-                    "SystemTray.dll",
-                    "SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy/SystemTray.dll"
-                ) | (
-                    "Taskbar.View.dll",
-                    "SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy/Taskbar.View.dll"
+            || tray.as_ref().is_some_and(|tray| {
+                !matches!(
+                    (
+                        tray.module.name.as_str(),
+                        tray.module.relative_path.as_str()
+                    ),
+                    (
+                        "SystemTray.dll",
+                        "SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy/SystemTray.dll"
+                    ) | (
+                        "Taskbar.View.dll",
+                        "SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy/Taskbar.View.dll"
+                    )
                 )
-            )
+            })
         {
             return Err("当前解析方案不支持该模块角色或系统路径".into());
         }
@@ -213,17 +289,57 @@ impl Profile {
                 return Err("宿主字段超出已实现解析范围".into());
             }
         }
-        for rva in [self.source.child_vtable_rva, self.source.factory_vtable_rva] {
+        match self.source.recipe {
+            SourceRecipe::XamlExplorerHostChildV1 => {
+                if self.host.element_offset.is_none()
+                    || self.source.factory_vtable_rva.is_none()
+                    || self.source.child_vtable_entries.is_some()
+                {
+                    return Err("现代子宿主必须包含已验证的工厂虚表".into());
+                }
+            }
+            SourceRecipe::XamlExplorerHostChildXfgV1 => {
+                if self.host.element_offset.is_some()
+                    || self.source.factory_vtable_rva.is_some()
+                    || self.source.child_vtable_entries.is_none()
+                {
+                    return Err("早期子宿主必须包含完整虚表入口且不能猜测工厂".into());
+                }
+            }
+        }
+        let child_slots = if self.source.child_vtable_entries.is_some() {
+            13
+        } else {
+            6
+        };
+        for (rva, slots) in std::iter::once((self.source.child_vtable_rva, child_slots))
+            .chain(self.source.factory_vtable_rva.map(|rva| (rva, 6)))
+        {
             if rva < 4096
                 || !rva.is_multiple_of(8)
                 || rva
-                    .checked_add(6 * 8)
+                    .checked_add(slots * 8)
                     .is_none_or(|end| end > self.shell.identity.image_size)
             {
                 return Err("宿主虚表超出模块范围".into());
             }
         }
-        for (index, entry) in self.tray_entries.iter().enumerate() {
+        for entry in self.source.child_vtable_entries.iter().flatten() {
+            if entry.rva < 4096
+                || entry
+                    .rva
+                    .checked_add(16)
+                    .is_none_or(|end| end > self.shell.identity.image_size)
+            {
+                return Err("子宿主虚表函数超出模块范围".into());
+            }
+        }
+        for (module, index, entry) in tray.iter().flat_map(|tray| {
+            tray.entries
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| (tray.module, index, entry))
+        }) {
             let end = entry
                 .section_start
                 .checked_add(entry.section_size)
@@ -231,7 +347,7 @@ impl Profile {
             if entry.role != TrayRole::ALL[index]
                 || !entry.executable
                 || entry.section_size == 0
-                || end > self.tray.identity.image_size
+                || end > module.identity.image_size
                 || entry.rva < entry.section_start
                 || entry.rva.checked_add(16).is_none_or(|v| v > end)
             {
@@ -259,8 +375,8 @@ fn decode_profiles(sources: &[&[u8]]) -> Result<Vec<Profile>, String> {
 
 /// Validated, embedded evidence only. Registry order is not a compatibility
 /// preference: callers must select an exact module identity, never a default.
-/// `compatibility-lab` is reserved for candidates pending isolated validation;
-/// it currently adds none. Default builds include seven reviewed profiles.
+/// Default builds include seven reviewed profiles. `compatibility-lab` also
+/// includes the early XFG clock candidate pending isolated live acceptance.
 pub fn profiles() -> Result<&'static [Profile], String> {
     static PROFILES: OnceLock<Result<Vec<Profile>, String>> = OnceLock::new();
     PROFILES
@@ -298,6 +414,70 @@ pub fn profile_for_taskbar(identity: &ModuleIdentity) -> Result<&'static Profile
 mod tests {
     use super::*;
 
+    #[test]
+    fn clock_only_evidence_needs_no_fabricated_tray_entry() {
+        let original = serde_json::to_value(&profiles().unwrap()[0]).unwrap();
+        let fields = ["tray", "tray_abi", "tray_geometry", "tray_entries"];
+        let mut clock = original.clone();
+        for field in fields {
+            clock.as_object_mut().unwrap().remove(field);
+        }
+        let profile = Profile::decode(&serde_json::to_vec(&clock).unwrap()).unwrap();
+        assert_eq!(profile.modules().len(), 2);
+        assert_eq!(profile.host, profiles().unwrap()[0].host);
+        // Partial evidence must never become a callable tray recipe.
+        for mask in 1..15 {
+            let mut partial = clock.clone();
+            for (index, field) in fields.iter().enumerate() {
+                if mask & (1 << index) != 0 {
+                    partial[*field] = original[*field].clone();
+                }
+            }
+            assert!(Profile::decode(&serde_json::to_vec(&partial).unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn early_child_table_requires_every_reviewed_relocated_slot() {
+        let mut source = profiles().unwrap()[0].source.clone();
+        source.recipe = SourceRecipe::XamlExplorerHostChildXfgV1;
+        source.factory_vtable_rva = None;
+        let entries = std::array::from_fn(|slot| SourceVtableEntry {
+            rva: 0x2000 + slot as u32 * 32,
+            prologue: [slot as u8; 16],
+        });
+        source.child_vtable_entries = Some(entries.clone());
+        for base in [0x180000000u64, 0x7ff700000000] {
+            let table = entries
+                .iter()
+                .flat_map(|entry| (base + u64::from(entry.rva)).to_le_bytes())
+                .collect::<Vec<_>>();
+            source.verify_child_vtable(base, &table).unwrap();
+            for slot in 0..entries.len() {
+                let mut replaced = table.clone();
+                replaced[slot * 8] ^= 1;
+                assert!(
+                    source.verify_child_vtable(base, &replaced).is_err(),
+                    "slot {slot}"
+                );
+            }
+            assert!(source.verify_child_vtable(base + 65536, &table).is_err());
+            assert!(
+                source
+                    .verify_child_vtable(base, &table[..table.len() - 1])
+                    .is_err()
+            );
+            let mut extended = table.clone();
+            extended.extend_from_slice(&0u64.to_le_bytes());
+            assert!(source.verify_child_vtable(base, &extended).is_err());
+            assert!(source.verify_child_vtable(u64::MAX, &table).is_err());
+        }
+        source.recipe = SourceRecipe::XamlExplorerHostChildV1;
+        assert!(source.verify_child_vtable(0x180000000, &[0; 104]).is_err());
+        source.child_vtable_entries = None;
+        assert!(source.verify_child_vtable(0x180000000, &[0; 104]).is_err());
+    }
+
     fn changed_identities(original: &ModuleIdentity) -> Vec<ModuleIdentity> {
         let mut changed = vec![original.clone(); 5];
         changed[0].machine = 0xaa64;
@@ -331,13 +511,15 @@ mod tests {
             "windows11-26100.1742-x64",
             "windows11-22631.2861-x64",
             "windows11-22621.1702-x64",
+            #[cfg(feature = "compatibility-lab")]
+            "windows11-22000.318-x64-clock",
         ];
         assert_eq!(profiles.len(), expected_ids.len());
         for id in expected_ids {
             let profile = profiles.iter().find(|profile| profile.id == id).unwrap();
             let encoded = serde_json::to_vec(profile).unwrap();
             assert_eq!(Profile::decode(&encoded).unwrap().host, profile.host);
-            assert_eq!(profile.tray_entries.len(), 3);
+            assert_eq!(profile.tray.is_some(), profile.tray_entries.is_some());
             assert_eq!(
                 profile_for_taskbar(&profile.taskbar.identity).unwrap().id,
                 id
@@ -370,7 +552,7 @@ mod tests {
         .map(|(id, bytes)| {
             let profile = Profile::decode(bytes).unwrap();
             assert_eq!(profile.id, id);
-            assert_eq!(profile.tray.name, "Taskbar.View.dll");
+            assert_eq!(profile.tray.as_ref().unwrap().name, "Taskbar.View.dll");
             profile
         });
         let registry = profiles().unwrap();
@@ -388,6 +570,8 @@ mod tests {
                 "windows11-26100.1742-x64",
                 "windows11-22631.2861-x64",
                 "windows11-22621.1702-x64",
+                #[cfg(feature = "compatibility-lab")]
+                "windows11-22000.318-x64-clock",
             ]
         );
         for candidate in &candidates {
@@ -476,8 +660,8 @@ mod tests {
             ),
         ] {
             let mut profile = source.clone();
-            profile.tray.name = name.into();
-            profile.tray.relative_path = path.into();
+            profile.tray.as_mut().unwrap().name = name.into();
+            profile.tray.as_mut().unwrap().relative_path = path.into();
             assert_eq!(profile.validate().is_ok(), accepted, "{name}: {path}");
         }
         for taskbar in [true, false] {
@@ -551,20 +735,20 @@ mod tests {
                 "system_tray_drag_drop_borrowed_coordinates_x64_v1",
             ),
         ] {
-            profile.tray_abi = abi;
-            profile.tray_geometry = match abi {
+            profile.tray_abi = Some(abi);
+            profile.tray_geometry = Some(match abi {
                 TrayAbi::SystemTrayCoordinatesX64V1 => TrayGeometry::NotificationAreaBounds,
                 TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1 => {
                     TrayGeometry::DragDropHitTesting
                 }
-            };
+            });
             let mut encoded = serde_json::to_value(&profile).unwrap();
             assert_eq!(encoded["tray_abi"], name);
             assert_eq!(
                 Profile::decode(&serde_json::to_vec(&encoded).unwrap())
                     .unwrap()
                     .tray_abi,
-                abi
+                Some(abi)
             );
             // The new calling convention still requires all three reviewed
             // roles; it cannot turn missing screen-rectangle evidence into a
@@ -591,8 +775,8 @@ mod tests {
                 TrayGeometry::LegacyUnclassified,
             ] {
                 let mut profile = original.clone();
-                profile.tray_abi = abi;
-                profile.tray_geometry = geometry;
+                profile.tray_abi = Some(abi);
+                profile.tray_geometry = Some(geometry);
                 let expected = matches!(
                     (abi, geometry),
                     (

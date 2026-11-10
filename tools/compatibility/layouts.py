@@ -1,5 +1,6 @@
 """Reviewed, narrow x64 recipes. Unknown instruction shapes stay blocked."""
 from __future__ import annotations
+import struct
 
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 from capstone.x86_const import X86_OP_IMM, X86_OP_MEM, X86_OP_REG
@@ -35,6 +36,9 @@ UNKNOWN_DESTRUCTOR = "??1IUnknown@Foundation@Windows@winrt@@QEAA@XZ"
 UNKNOWN_RELEASE = "?unconditional_release_ref@IUnknown@Foundation@Windows@winrt@@AEAAXXZ"
 GUARD_DISPATCH = "__guard_dispatch_icall_fptr"
 GUARD_DISPATCH_FUNCTION = "_guard_dispatch_icall"
+XFG_DISPATCH = "__guard_xfg_dispatch_icall_fptr"
+RAW_UNKNOWN_EQUAL = "winrt::Windows::Foundation::operator=="
+THROW_HR_DIAGNOSTIC = "?Throw_Hr@in1diag3@details@wil@@YAXPEAXIPEBDJ@Z"
 TRANSFORM_TO_VISUAL = "?TransformToVisual@?$consume_Windows_UI_Xaml_IUIElement@UFrameworkElement@Xaml@UI@Windows@winrt@@@impl@winrt@@QEBA@AEBUUIElement@Xaml@UI@Windows@3@@Z"
 BORROWED_SCREEN = "?ScreenRectForElement@DragDropManager@implementation@SystemTray@winrt@@AEAA?AUtagRECT@@AEBUFrameworkElement@Xaml@UI@Windows@4@PEAUHWND__@@@Z"
 BORROWED_TARGETS = {
@@ -814,8 +818,119 @@ def owned_cleanup(image, code, logs):
     return {"recipe": recipe, "release_rva": release_rva, "cleanup_call_rva": code[cleanup].address}
 
 
+def xfg_implementation_source_field(image, implementation, logs):
+    """Complete early XFG Content getter; no vtable/path authorization here.
+
+    Its equality helper receives a zero wrapper, so the helper's nonnull-pair
+    branch is unreachable. The only reachable outcomes are source-null (cold
+    throw) and source-nonnull (ABI Content slot 6). Every instruction in both
+    hot bodies is constrained; external calls retain exact symbolic anchors.
+    """
+    require(len(implementation) == 35, "Unknown XFG Content getter instruction count")
+    equality = implementation[11]
+    null_branch = implementation[13]
+    require(equality.mnemonic == "call" and len(equality.operands) == 1 and
+            equality.operands[0].type == X86_OP_IMM and
+            null_branch.mnemonic == "jne" and len(null_branch.operands) == 1 and
+            null_branch.operands[0].type == X86_OP_IMM,
+            "Unknown XFG Content null-check targets")
+    equal_rva, null_rva = equality.operands[0].imm, null_branch.operands[0].imm
+    # This public name is undecorated and shared by overloads. Bind it at the
+    # independently decoded call target, then prove that entire helper body.
+    require(any(s["rva"] == equal_rva and s["decorated_name"] == RAW_UNKNOWN_EQUAL
+                for s in image.symbols), "Source null comparison lacks its exact raw-name anchor")
+    _, equal = bounded_evidence(image, equal_rva, RAW_UNKNOWN_EQUAL, logs)
+    require(len(equal) == 19, "Unknown source equality helper instruction count")
+    nonnull_branch = equal[10]
+    require(nonnull_branch.mnemonic == "jne" and len(nonnull_branch.operands) == 1 and
+            nonnull_branch.operands[0].type == X86_OP_IMM,
+            "Unknown equality helper nonnull branch")
+    match_instruction_template(equal, """
+mov qword ptr [rsp + 0x20], rbx
+push rdi
+sub rsp, 0x20
+mov rcx, qword ptr [rcx]
+mov rdi, rdx
+cmp rcx, qword ptr [rdx]
+je @equal
+test rcx, rcx
+je @different
+cmp qword ptr [rdx], 0
+jne $nonnull_pair
+@different
+xor al, al
+@return
+mov rbx, qword ptr [rsp + 0x48]
+add rsp, 0x20
+pop rdi
+ret
+int3
+@equal
+mov al, 1
+jmp @return
+""", {"nonnull_pair": nonnull_branch.operands[0].imm})
+    _, cold = bounded_evidence(image, null_rva, "XFG Content null-source throw", logs)
+    require(len(cold) == 6 and cold[1].mnemonic == "lea" and len(cold[1].operands) == 2 and
+            cold[1].operands[1].type == X86_OP_MEM,
+            "Unknown XFG Content null-source failure body")
+    diagnostic = cold[1].address + cold[1].size + cold[1].operands[1].mem.disp
+    image.section(diagnostic, 1, False)
+    match_instruction_template(cold, """
+mov r9d, 0x8007139f
+lea r8, [$diagnostic]
+mov edx, 0x45
+mov rcx, rdi
+call $throw
+int3
+""", {"diagnostic": diagnostic, "throw": image.exact(THROW_HR_DIAGNOSTIC)})
+    guard = image.exact(XFG_DISPATCH)
+    image.section(guard, 8, False)
+    match_instruction_template(implementation, """
+mov rax, rsp
+mov qword ptr [rax + 0x10], rbx
+mov qword ptr [rax + 0x18], rsi
+push rdi
+sub rsp, 0x20
+mov rbx, rdx
+mov rdi, qword ptr [rsp + 0x28]
+and qword ptr [rax + 8], 0
+lea rsi, [rcx + 0x20]
+lea rdx, [rax + 8]
+mov rcx, rsi
+call $equal
+test al, al
+jne $null
+and qword ptr [rsp + 0x30], 0
+mov rcx, qword ptr [rsi]
+mov rax, qword ptr [rcx]
+movabs r10, 0x8b15ae295055f370
+lea rdx, [rsp + 0x30]
+mov rax, qword ptr [rax + 0x30]
+call [$guard]
+test eax, eax
+js @failed
+mov rax, qword ptr [rsp + 0x30]
+mov qword ptr [rbx], rax
+mov rax, rbx
+mov rbx, qword ptr [rsp + 0x38]
+mov rsi, qword ptr [rsp + 0x40]
+add rsp, 0x20
+pop rdi
+ret
+int3
+@failed
+mov ecx, eax
+call $throw_hresult
+int3
+""", {"equal": equal_rva, "null": null_rva, "guard": guard,
+        "throw_hresult": image.exact("?throw_hresult@winrt@@YAXUhresult@1@@Z")})
+    return 0x20, "rsi_xfg_inline_content_v1"
+
+
 def implementation_source_field(image, implementation, logs):
-    """Two observed register allocations, with direct field use in each."""
+    """Observed register/dispatch forms, with direct field use in each."""
+    if any(ins.mnemonic == "movabs" and ins.op_str.startswith("r10,") for ins in implementation):
+        return xfg_implementation_source_field(image, implementation, logs)
     fields = [(i, ins, register) for i, ins in enumerate(implementation)
               for register in ("rdi", "rsi")
               if ins.mnemonic == "lea" and ins.op_str.startswith(f"{register}, [rcx")]
@@ -878,7 +993,241 @@ def implementation_source_field(image, implementation, logs):
     return offset, "rdi_content_helper_v1"
 
 
+def xfg_host_layout(image, logs):
+    """Five real host roles with exact shared_ptr/XFG ABI, no FrameHeight."""
+    entries, bodies = [], {}
+    for role, name in HOST_SYMBOLS:
+        if role == "frame_height":
+            continue
+        rva = image.exact(name)
+        executable = role not in ("primary_site", "secondary_site")
+        entries.append({"role": role, "rva": rva,
+                        **image.section(rva, 16 if executable else 8, executable),
+                        "prologue": list(image.bytes(rva, 16)) if executable else []})
+        if executable:
+            _, bodies[role] = function_evidence(image, name, logs)
+    guard = image.exact(XFG_DISPATCH)
+    image.section(guard, 8, False)
+    for role, field, slot, tag in (
+        ("primary_host", "0x270", "0x3f0", "0xd769b6855ad33a70"),
+        ("secondary_host", "0x38", "0x118", "0x984d0757145d2170"),
+    ):
+        match_instruction_template(bodies[role], f"""
+push rbx
+sub rsp, 0x20
+mov rcx, qword ptr [rcx + {field}]
+mov rbx, rdx
+mov rax, qword ptr [rcx]
+movabs r10, {tag}
+mov rax, qword ptr [rax + {slot}]
+call [$guard]
+mov rax, rbx
+add rsp, 0x20
+pop rbx
+ret
+""", {"guard": guard})
+    copy_name = "??0?$shared_ptr@VTaskbarHost@@@std@@QEAA@AEBV01@@Z"
+    copy = image.exact(copy_name)
+    decoder = Cs(CS_ARCH_X86, CS_MODE_64)
+    decoder.detail = True
+    leaf = list(decoder.disasm(image.bytes(copy, 40), copy))
+    require(sum(i.size for i in leaf) == 40, "Incomplete shared_ptr copy leaf")
+    match_instruction_template(leaf, """
+and qword ptr [rcx], 0
+and qword ptr [rcx + 8], 0
+mov rax, qword ptr [rdx + 8]
+test rax, rax
+je @copy
+lock inc dword ptr [rax + 8]
+@copy
+mov rax, qword ptr [rdx]
+mov qword ptr [rcx], rax
+mov rax, qword ptr [rdx + 8]
+mov qword ptr [rcx + 8], rax
+mov rax, rcx
+ret
+""", {})
+    logs.append({"module_role": image.role, "symbol": copy_name, "rva": copy,
+                 "boundary_recipe": "exact_40_byte_shared_ptr_copy_leaf_v1",
+                 "instructions": [instruction_record(i) for i in leaf]})
+    virtuals = (
+        ("?GetTaskbarHost@TrayUI@@UEBA?AV?$shared_ptr@VTaskbarHost@@@std@@XZ",
+         "??_7TrayUI@@6BITrayComponentHost@@@", 0x3f0, "0x2d0"),
+        ("?GetTaskbarHost@CSecondaryTray@@UEBA?AV?$shared_ptr@VTaskbarHost@@@std@@XZ",
+         "??_7CSecondaryTray@@6BISecondaryTray@@@", 0x118, "0x140"),
+    )
+    for name, table_name, slot, field in virtuals:
+        rva, body = function_evidence(image, name, logs)
+        require(image.pointer(image.exact(table_name) + slot) == rva,
+                "Shared_ptr virtual entry is not the exact named getter")
+        match_instruction_template(body, f"""
+sub rsp, 0x28
+mov r8, rdx
+lea rdx, [rcx + {field}]
+mov rcx, r8
+call $copy
+mov rax, r8
+add rsp, 0x28
+ret
+""", {"copy": copy})
+    match_instruction_template(bodies["release_host"], """
+push rbx
+sub rsp, 0x20
+mov rbx, rcx
+or eax, 0xffffffff
+lock xadd dword ptr [rcx + 8], eax
+cmp eax, 1
+je @destroy
+@return
+add rsp, 0x20
+pop rbx
+ret
+@destroy
+mov rax, qword ptr [rcx]
+movabs r10, 0xa545274f70dcb170
+mov rax, qword ptr [rax]
+call [$guard]
+or eax, 0xffffffff
+lock xadd dword ptr [rbx + 0xc], eax
+cmp eax, 1
+jne @return
+mov rax, qword ptr [rbx]
+movabs r10, 0x9e241f5a3adb5a70
+mov rax, qword ptr [rax + 8]
+mov rcx, rbx
+add rsp, 0x20
+pop rbx
+jmp [$guard]
+""", {"guard": guard})
+    return {"schema": 1, "module": image.identity, "symbols": entries}
+
+
+def xfg_source_layout(taskbar, shell, logs):
+    """Early child getter and writable table with exact relocations/targets."""
+    focus_name = CONSUME_FOCUS.replace("QEBA@XZ", "QEBA_NXZ")
+    focus_rva, focus = function_evidence(taskbar, HAS_FOCUS, logs)
+    consume, body = function_evidence(taskbar, focus_name, logs)
+    match_instruction_template(focus, """
+sub rsp, 0x28
+add rcx, 0x20
+xor eax, eax
+cmp qword ptr [rcx], rax
+je @return
+call $focus
+@return
+add rsp, 0x28
+ret
+""", {"focus": consume})
+    match_instruction_template(body, """
+sub rsp, 0x38
+mov rax, [$cookie]
+xor rax, rsp
+mov qword ptr [rsp + 0x28], rax
+mov rcx, qword ptr [rcx]
+mov byte ptr [rsp + 0x20], 0
+mov rax, qword ptr [rcx]
+movabs r10, 0xd0cca7f81cd14170
+mov rax, qword ptr [rax + 0x60]
+lea rdx, [rsp + 0x20]
+call [$guard]
+test eax, eax
+jns @success
+mov ecx, eax
+call $throw
+int3
+@success
+mov al, byte ptr [rsp + 0x20]
+mov rcx, qword ptr [rsp + 0x28]
+xor rcx, rsp
+call $check
+add rsp, 0x38
+ret
+""", {"cookie": taskbar.exact("__security_cookie"), "guard": taskbar.exact(XFG_DISPATCH),
+        "throw": taskbar.exact("?throw_hresult@winrt@@YAXUhresult@1@@Z"),
+        "check": taskbar.exact("__security_check_cookie")})
+    child = shell.exact(CHILD_TABLE)
+    # This named early table is writable. Require the exact finite table range
+    # and every DIR64 relocation; targets still use the normal immutable code
+    # checks. This does not alter Image.section for any other role or data.
+    sections = [s for s in shell.pe.sections if s.VirtualAddress <= child and
+                child + 13 * 8 <= s.VirtualAddress + min(s.Misc_VirtualSize, s.SizeOfRawData)]
+    require(child % 8 == 0 and len(sections) == 1 and sections[0].Name.rstrip(b"\0") == b".data" and
+            sections[0].Characteristics == 0xc0000040, "Unknown early writable child table section")
+    relocations = [(e.rva, e.type) for b in getattr(shell.pe, "DIRECTORY_ENTRY_BASERELOC", []) for e in b.entries]
+    slots = []
+    for slot in range(13):
+        location = child + slot * 8
+        require([kind for address, kind in relocations if address == location] == [10],
+                "Each early child table slot needs exactly one DIR64 relocation")
+        raw = shell.pe.get_data(location, 8)
+        require(len(raw) == 8, "Truncated early child table slot")
+        rva = struct.unpack("<Q", raw)[0] - shell.pe.OPTIONAL_HEADER.ImageBase
+        slots.append({"rva": rva, "prologue": list(shell.bytes(rva, 16))})
+    getter_rva = slots[8]["rva"]
+    getter_binding = anchored_symbol(shell, (GET_CONTENT, RAW_GET_CONTENT), getter_rva,
+                                     "exact_relocated_child_vtable_slot_8")
+    _, getter = bounded_evidence(shell, getter_rva, getter_binding["raw_names"][0], logs)
+    require(len(getter) == 22, "Unknown early child ABI getter body")
+    implementation = getter[9]
+    require(implementation.mnemonic == "call" and implementation.operands[0].type == X86_OP_IMM,
+            "Missing direct early child implementation call")
+    impl_rva = implementation.operands[0].imm
+    impl_binding = anchored_symbol(shell, (IMPL_CONTENT, RAW_IMPL_CONTENT), impl_rva,
+                                   "early_child_vtable_getter_direct_call")
+    _, impl = bounded_evidence(shell, impl_rva, impl_binding["raw_names"][0], logs)
+    offset, field_recipe = xfg_implementation_source_field(shell, impl, logs)
+    cleanup = getter[14]
+    require(cleanup.mnemonic == "jne" and cleanup.operands[0].type == X86_OP_IMM,
+            "Missing early getter cleanup branch")
+    cleanup_rva = cleanup.operands[0].imm
+    match_instruction_template(getter, """
+push rbx
+sub rsp, 0x20
+mov rbx, rdx
+and qword ptr [rdx], 0
+lea rax, [rcx - 0x10]
+neg rcx
+sbb rcx, rcx
+and rcx, rax
+lea rdx, [rsp + 0x30]
+call $implementation
+mov rcx, qword ptr [rax]
+and qword ptr [rax], 0
+mov qword ptr [rbx], rcx
+cmp qword ptr [rsp + 0x30], 0
+jne $cleanup
+@success
+xor eax, eax
+@return
+add rsp, 0x20
+pop rbx
+ret
+int3
+mov eax, dword ptr [rsp + 0x30]
+jmp @return
+""", {"implementation": impl_rva, "cleanup": cleanup_rva})
+    _, cold = bounded_evidence(shell, cleanup_rva, "early child result cleanup", logs)
+    match_instruction_template(cold, """
+lea rcx, [rsp + 0x30]
+call $release
+nop
+jmp $success
+int3
+int3
+""", {"release": shell.exact(UNKNOWN_RELEASE), "success": getter[15].address})
+    return {"recipe_candidate": "xaml_explorer_host_child_xfg_v1", "host_child_offset": 0x20,
+            "child_source_offset": offset - 0x10, "child_vtable_rva": child,
+            "child_vtable_entries": slots,
+            "evidence": {"has_focus_rva": focus_rva, "child_getter_rva": getter_rva,
+                         "implementation_getter_rva": impl_rva, "abi_this_adjustment": -0x10,
+                         "implementation_source_field": offset, "implementation_field_recipe": field_recipe,
+                         "symbol_bindings": {"child_getter": getter_binding, "implementation_getter": impl_binding},
+                         "factory_absent": True, "child_table_dir64_relocations": [child + i * 8 for i in range(13)]}}
+
+
 def host_layout(image: Image, logs):
+    if not any(s["decorated_name"] == HOST_SYMBOLS[4][1] for s in image.symbols):
+        return xfg_host_layout(image, logs)
     entries, code_by_role = [], {}
     for role, decorated in HOST_SYMBOLS:
         rva = image.exact(decorated)
@@ -904,6 +1253,8 @@ def host_layout(image: Image, logs):
 
 
 def source_layout(taskbar: Image, shell: Image, logs):
+    if not any(s["decorated_name"] == FACTORY_TABLE for s in shell.symbols):
+        return xfg_source_layout(taskbar, shell, logs)
     focus_rva, focus = function_evidence(taskbar, HAS_FOCUS, logs)
     require(len(focus) >= 6 and (focus[0].mnemonic, focus[0].op_str) == ("sub", "rsp, 0x28"),
             "Unknown TaskbarHost::HasFocus recipe")
@@ -954,6 +1305,9 @@ def match_instruction_template(code, template, targets):
     for line in template.strip().splitlines():
         if line.startswith("@"):
             labels[line] = len(expected)
+        elif line.startswith("lock "):
+            prefix, mnemonic, operand = line.split(" ", 2)
+            expected.append((prefix + " " + mnemonic, operand))
         else:
             expected.append(tuple(line.split(" ", 1)) if " " in line else (line, ""))
     require(len(code) == len(expected), "Borrowed ScreenRect body has an unreviewed instruction count")
