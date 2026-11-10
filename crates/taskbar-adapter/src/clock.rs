@@ -7,6 +7,8 @@ use crate::{
 };
 use std::{borrow::Cow, ptr::null_mut};
 use windows_sys::core::IID_IUnknown;
+#[path = "combined_clock_checks.rs"]
+mod combined_checks;
 
 pub(crate) fn boxed_text(text: &str) -> Result<Object, String> {
     unsafe {
@@ -64,7 +66,7 @@ fn font_family(name: &str) -> Result<Object, String> {
     }
 }
 
-/// Holds references to the exact two native TextBlocks and their original
+/// Holds references to the selected native TextBlocks and their original
 /// properties. Must be restored and dropped on the same XAML thread.
 pub(crate) struct ClockLease {
     properties: Vec<Property>,
@@ -72,9 +74,10 @@ pub(crate) struct ClockLease {
     identities: Vec<usize>,
     last_text: Option<(String, String)>,
     decorations: crate::clock_style::Decorations,
-    native_text: Option<[crate::clock_text::TextLayer; 2]>,
+    native_text: Option<Vec<crate::clock_text::TextLayer>>,
     native_date: Option<Object>,
     compact_two_lines: bool,
+    combined: bool,
 }
 impl ClockLease {
     pub(crate) fn capture_native(
@@ -83,7 +86,7 @@ impl ClockLease {
         container: &Object,
     ) -> Result<Self, String> {
         let mut lease = Self::capture(time, date, container)?;
-        lease.native_text = Some([
+        lease.native_text = Some(vec![
             crate::clock_text::TextLayer::prepare(time)?,
             crate::clock_text::TextLayer::prepare(date)?,
         ]);
@@ -91,12 +94,32 @@ impl ClockLease {
         Ok(lease)
     }
     pub fn capture(time: &Object, date: &Object, container: &Object) -> Result<Self, String> {
+        if same_object(time, date)? {
+            return Err("时间和日期元素不能相同".into());
+        }
+        Self::capture_rows(&[time, date], container)
+    }
+    /// The caller must have selected the exact single-TextBlock topology.
+    /// One property snapshot and one native refresh subscription own its text.
+    pub(crate) fn capture_combined(
+        text: &Object,
+        container: &Object,
+        native: bool,
+    ) -> Result<Self, String> {
+        let mut lease = Self::capture_rows(&[text], container)?;
+        if native {
+            lease.native_text = Some(vec![crate::clock_text::TextLayer::prepare(text)?]);
+        }
+        Ok(lease)
+    }
+    fn capture_rows(rows: &[&Object], container: &Object) -> Result<Self, String> {
         unsafe {
-            if same_object(time, date)? {
-                return Err("时间和日期元素不能相同".into());
+            for row in rows {
+                if same_object(row, container)? {
+                    return Err("时钟文字与布局容器不能相同".into());
+                }
+                row.query(&IID_ITextBlock)?;
             }
-            time.query(&IID_ITextBlock)?;
-            date.query(&IID_ITextBlock)?;
             let text = factory("Windows.UI.Xaml.Controls.TextBlock", &IID_ITextBlockStatics)?;
             let fe = factory(
                 "Windows.UI.Xaml.FrameworkElement",
@@ -104,36 +127,47 @@ impl ClockLease {
             )?;
             let text_table = text.table::<ITextBlockStatics_Vtbl>();
             let mut properties = Vec::with_capacity(7);
-            for (node, statics, getter) in [
-                (time, &text, text_table.TextProperty),
-                (date, &text, text_table.TextProperty),
-                (time, &text, text_table.FontSizeProperty),
-                (date, &text, text_table.FontSizeProperty),
-                (time, &text, text_table.FontFamilyProperty),
-                (date, &text, text_table.FontFamilyProperty),
-                (
-                    container,
+            for getter in [
+                text_table.TextProperty,
+                text_table.FontSizeProperty,
+                text_table.FontFamilyProperty,
+            ] {
+                let property = property(&text, getter)?;
+                for row in rows {
+                    properties.push(Property::capture(row, property.clone())?);
+                }
+            }
+            properties.push(Property::capture(
+                container,
+                property(
                     &fe,
                     fe.table::<IFrameworkElementStatics_Vtbl>().WidthProperty,
-                ),
-            ] {
-                properties.push(Property::capture(node, property(statics, getter)?)?);
-            }
+                )?,
+            )?);
+            let mut identities = rows
+                .iter()
+                .map(|row| Ok(row.query(&IID_IUnknown)?.raw() as usize))
+                .collect::<Result<Vec<_>, String>>()?;
+            identities.push(container.query(&IID_IUnknown)?.raw() as usize);
             Ok(Self {
                 properties,
                 live: false,
-                identities: vec![
-                    time.query(&IID_IUnknown)?.raw() as usize,
-                    date.query(&IID_IUnknown)?.raw() as usize,
-                    container.query(&IID_IUnknown)?.raw() as usize,
-                ],
+                identities,
                 last_text: None,
-                decorations: crate::clock_style::Decorations::capture(time, date, container)?,
+                decorations: if rows.len() == 1 {
+                    crate::clock_style::Decorations::capture_combined(rows[0], container)?
+                } else {
+                    crate::clock_style::Decorations::capture(rows[0], rows[1], container)?
+                },
                 native_text: None,
                 native_date: None,
                 compact_two_lines: false,
+                combined: rows.len() == 1,
             })
         }
+    }
+    fn row_count(&self) -> usize {
+        if self.combined { 1 } else { 2 }
     }
     pub(crate) fn with_tooltip_targets(
         mut self,
@@ -216,24 +250,21 @@ impl ClockLease {
         // clock untouched and keeps the original rollback snapshot.
         let displayed_top = self.display_top(top, bottom)?;
         let top = displayed_top.as_ref();
-        let top_value = boxed_text(top)?;
-        let bottom_value = boxed_text(bottom)?;
-        let top_size = boxed_number(fonts[0].0)?;
-        let bottom_size = boxed_number(fonts[1].0)?;
-        let top_family = font_family(fonts[0].1)?;
-        let bottom_family = font_family(fonts[1].1)?;
+        let row_count = self.row_count();
+        let mut values = [top, bottom][..row_count]
+            .iter()
+            .map(|text| boxed_text(text))
+            .collect::<Result<Vec<_>, _>>()?;
+        for (size, _) in &fonts[..row_count] {
+            values.push(boxed_number(*size)?);
+        }
+        for (_, family) in &fonts[..row_count] {
+            values.push(font_family(family)?);
+        }
         // FrameworkElement.Width = NaN is native Auto. Text changes then
         // invalidate layout themselves; no width polling or text estimates.
-        let width = boxed_number(if width == 0.0 { f64::NAN } else { width })?;
-        self.write(&[
-            &top_value,
-            &bottom_value,
-            &top_size,
-            &bottom_size,
-            &top_family,
-            &bottom_family,
-            &width,
-        ])?;
+        values.push(boxed_number(if width == 0.0 { f64::NAN } else { width })?);
+        self.write(&values.iter().collect::<Vec<_>>())?;
         if let Err(error) = self.write_native_text(top, bottom) {
             let restore = self.restore();
             return restore.and(Err(error));
@@ -247,7 +278,11 @@ impl ClockLease {
         for (i, value) in values
             .iter()
             .enumerate()
-            .skip(if self.native_text.is_some() { 2 } else { 0 })
+            .skip(if self.native_text.is_some() {
+                self.row_count()
+            } else {
+                0
+            })
         {
             if let Err(error) = self.properties[i].set(value) {
                 return match self.restore() {
@@ -286,6 +321,7 @@ impl ClockLease {
         let values = [boxed_text(top)?, boxed_text(bottom)?];
         for (i, (text, value)) in [(top, &values[0]), (bottom, &values[1])]
             .into_iter()
+            .take(self.row_count())
             .enumerate()
         {
             let same = self
@@ -303,6 +339,15 @@ impl ClockLease {
         Ok(())
     }
     fn display_top<'a>(&self, top: &'a str, bottom: &str) -> Result<Cow<'a, str>, String> {
+        if self.combined {
+            return Ok(Cow::Owned(
+                [top, bottom]
+                    .into_iter()
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ));
+        }
         let Some(date) = &self.native_date else {
             return Ok(Cow::Borrowed(top));
         };
@@ -372,7 +417,9 @@ impl ClockLease {
     fn write_native_text(&mut self, top: &str, bottom: &str) -> Result<(), String> {
         if let Some(layers) = &mut self.native_text {
             layers[0].set(top)?;
-            layers[1].set(bottom)?;
+            if let Some(date) = layers.get_mut(1) {
+                date.set(bottom)?;
+            }
         }
         Ok(())
     }
@@ -385,11 +432,11 @@ impl ClockLease {
                 }
             }
         }
-        for property in self
-            .properties
-            .iter()
-            .skip(if self.native_text.is_some() { 2 } else { 0 })
-        {
+        for property in self.properties.iter().skip(if self.native_text.is_some() {
+            self.row_count()
+        } else {
+            0
+        }) {
             match property.owns_current() {
                 Ok(true) => {}
                 Ok(false) => {
@@ -620,6 +667,7 @@ pub(crate) fn self_test() -> Result<serde_json::Value, String> {
         checks.extend(crate::lifecycle_checks::run()?);
         checks.extend(crate::clock_style_checks::run()?);
         checks.extend(crate::clock_text_checks::run()?);
+        checks.extend(combined_checks::run()?);
         checks.extend(crate::tray_menu::self_test()?);
         checks.extend(crate::tray::check_surface_sync()?);
         checks.extend(crate::tray_interaction::check_recovery()?);

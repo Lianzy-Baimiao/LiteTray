@@ -125,12 +125,10 @@ pub fn preflight(config: &Config) -> Result<Preflight, String> {
         return Err(error);
     }
     let plan = snapshot.target_plan.ok_or("无法建立时钟目标计划")?;
-    if plan.targets.is_empty() {
-        return Err("所选范围没有可用任务栏".into());
-    }
+    let routes = capabilities.select_routes(plan.targets.into_iter().map(|t| t.route).collect())?;
     Ok(Preflight {
         layout,
-        routes: plan.targets.into_iter().map(|t| t.route).collect(),
+        routes,
         custom_calendar: config.clock.click_action == ClickAction::CalendarWeather,
         volume_scroll: config.clock.volume_scroll,
         volume_mute: config.clock.volume_mute,

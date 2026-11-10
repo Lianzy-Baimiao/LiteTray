@@ -252,6 +252,51 @@ fn early_source_verifies_writable_table_slots_and_immutable_code_separately() {
 }
 
 #[test]
+fn notification_host_checks_exact_control_targets_and_code_before_use() {
+    use litetray_adapter_protocol::compatibility::{NotificationAreaLayout, SourceVtableEntry};
+    let mut fixture = Fixture::new(33);
+    let bytes = &mut fixture.images[0];
+    let base = 0x180000000u64;
+    bytes[0xb0..0xb8].copy_from_slice(&base.to_le_bytes());
+    let entry = |rva| SourceVtableEntry {
+        rva,
+        prologue: pe::rva_bytes(bytes, rva, 16).unwrap().0.try_into().unwrap(),
+    };
+    let entries = [entry(0x1100), entry(0x1120), entry(0x1160)];
+    let layout = NotificationAreaLayout {
+        component_offset: 0x270,
+        component_vtable_rva: 0x2020,
+        shared_host_offset: 0x2e0,
+        child_offset: 0x28,
+        parent_offset: 0x60,
+        copy_host: entry(0x1180),
+        control_vtable_rva: 0x2080,
+        control_entries: entries.clone(),
+    };
+    for (slot, entry) in entries.iter().enumerate() {
+        bytes[0x880 + slot * 8..0x888 + slot * 8]
+            .copy_from_slice(&(base + u64::from(entry.rva)).to_le_bytes());
+    }
+    // This test isolates the disk-layout checker. The protocol separately
+    // rejects using notification evidence with a modern source recipe.
+    fixture.profile.notification_area = Some(layout);
+    verify_layout(&fixture.profile, &fixture.profile.taskbar, bytes).unwrap();
+    for slot in 0..3 {
+        let mut changed = bytes.clone();
+        changed[0x880 + slot * 8] ^= 1;
+        assert!(verify_layout(&fixture.profile, &fixture.profile.taskbar, &changed).is_err());
+    }
+    for offset in [0x300, 0x320, 0x360, 0x380] {
+        let mut changed = bytes.clone();
+        changed[offset] ^= 1;
+        assert!(verify_layout(&fixture.profile, &fixture.profile.taskbar, &changed).is_err());
+    }
+    let mut writable = bytes.clone();
+    writable[0x1d4..0x1d8].copy_from_slice(&0xc0000040u32.to_le_bytes());
+    assert!(verify_layout(&fixture.profile, &fixture.profile.taskbar, &writable).is_err());
+}
+
+#[test]
 fn unknown_and_ambiguous_modules_never_choose_a_default() {
     let fixture = Fixture::new(19);
     let root = SystemRoot::new(fixture.images.each_ref().map(Vec::as_slice));
@@ -375,6 +420,7 @@ fn unknown_tray_degrades_only_requested_tray_and_never_enables_an_unrequested_cl
         Capabilities {
             clocks: true,
             tray: false,
+            clock_primary_only: false,
             notice: None
         }
     );
@@ -383,6 +429,114 @@ fn unknown_tray_degrades_only_requested_tray_and_never_enables_an_unrequested_cl
     assert!(partial.notice.unwrap().contains("托盘复制暂未启用"));
     assert!(result.report.negotiate(false, true).is_err());
     assert!(result.report.negotiate(false, false).is_err());
+}
+
+#[test]
+fn notification_clock_scope_depends_on_implementation_and_preserves_tray_notice() {
+    let old = Fixture::new(34);
+    let new = Fixture::new(35);
+    let root = SystemRoot::new([&old.images[0], &old.images[1], &new.images[2]]);
+    let mut report = collect_selected(&root.0, Some(22000), |role, path, bytes| {
+        recognize_from(&[&old.profile], role, path, bytes)
+    })
+    .report;
+    // The old OS label alone cannot narrow a recognized modern implementation.
+    assert!(!report.negotiate(true, false).unwrap().clock_primary_only);
+    let early = Profile::decode(include_bytes!(
+        "../crates/adapter-protocol/profiles/windows11-22000.318-x64-clock.json"
+    ))
+    .unwrap();
+    // Isolate capability negotiation; recognition separately verifies this
+    // implementation before it can populate a real report.
+    report.implementation.as_mut().unwrap().notification_area = early.notification_area;
+    report.os_build = Some(26300);
+    let clock_only = report.negotiate(true, false).unwrap();
+    assert!(clock_only.clocks && clock_only.clock_primary_only && !clock_only.tray);
+    assert!(clock_only.notice.as_ref().unwrap().contains("仅支持主屏"));
+    let partial = report.negotiate(true, true).unwrap();
+    assert!(partial.clocks && partial.clock_primary_only && !partial.tray);
+    let notice = partial.notice.unwrap();
+    assert!(notice.contains("托盘复制暂未启用") && notice.contains("副屏时钟暂未支持"));
+    assert!(report.negotiate(false, true).is_err());
+    assert!(report.negotiate(false, false).is_err());
+}
+
+#[test]
+fn primary_clock_scope_keeps_selected_primary_without_adding_unselected_displays() {
+    use litetray_adapter_protocol::routing::{Options, Plan, Route};
+    let primary = Route {
+        window: 100,
+        process_id: 10,
+        thread_id: 20,
+        secondary: false,
+        device: "DISPLAY1".into(),
+    };
+    let secondary = Route {
+        window: 200,
+        secondary: true,
+        device: "DISPLAY2".into(),
+        ..primary.clone()
+    };
+    let all = [primary.clone(), secondary.clone()];
+    let selected = |devices: &[&str]| {
+        let plan = Plan::build(
+            &all,
+            &devices
+                .iter()
+                .map(|device| (*device).into())
+                .collect::<Vec<_>>(),
+            Options {
+                clocks: true,
+                tray: false,
+                icons: false,
+                control_center: false,
+                copied_taskbars_only: true,
+            },
+        )
+        .unwrap();
+        assert!(plan.source.is_none());
+        plan.targets
+            .into_iter()
+            .map(|target| target.route)
+            .collect()
+    };
+    let limited = Capabilities {
+        clocks: true,
+        tray: false,
+        clock_primary_only: true,
+        notice: None,
+    };
+    assert_eq!(
+        limited
+            .select_routes(selected(&["DISPLAY1", "DISPLAY2"]))
+            .unwrap(),
+        std::slice::from_ref(&primary)
+    );
+    assert_eq!(
+        limited.select_routes(selected(&["DISPLAY1"])).unwrap(),
+        std::slice::from_ref(&primary)
+    );
+    assert!(
+        limited
+            .select_routes(selected(&["DISPLAY2"]))
+            .unwrap_err()
+            .contains("请将显示范围改为主屏")
+    );
+    assert!(limited.select_routes(Vec::new()).is_err());
+    let modern = Capabilities {
+        clock_primary_only: false,
+        ..limited
+    };
+    assert_eq!(
+        modern
+            .select_routes(selected(&["DISPLAY1", "DISPLAY2"]))
+            .unwrap(),
+        all
+    );
+    assert_eq!(
+        modern.select_routes(selected(&["DISPLAY2"])).unwrap(),
+        [secondary]
+    );
 }
 
 #[test]
@@ -439,20 +593,26 @@ fn support_catalog_keeps_recorded_scope_separate_from_built_in_support() {
                 } else {
                     ValidationStatus::Historical
                 }
-            } else if matches!(
-                profile.id.as_str(),
-                "windows11-26300.9818-x64"
-                    | "windows11-26200.8457-x64"
-                    | "windows11-26200.8037-x64"
-                    | "windows11-26100.1742-x64"
-                    | "windows11-22621.1702-x64"
-                    | "windows11-22631.2861-x64"
-            ) && matches!(
-                evidence.scenario,
-                ValidationScenario::ModuleLayout
-                    | ValidationScenario::ClockUpdateRestore
-                    | ValidationScenario::TrayPrepareStop
-            ) {
+            } else if (profile.id == "windows11-22000.318-x64-clock"
+                && matches!(
+                    evidence.scenario,
+                    ValidationScenario::ModuleLayout | ValidationScenario::ClockUpdateRestore
+                ))
+                || (matches!(
+                    profile.id.as_str(),
+                    "windows11-26300.9818-x64"
+                        | "windows11-26200.8457-x64"
+                        | "windows11-26200.8037-x64"
+                        | "windows11-26100.1742-x64"
+                        | "windows11-22621.1702-x64"
+                        | "windows11-22631.2861-x64"
+                ) && matches!(
+                    evidence.scenario,
+                    ValidationScenario::ModuleLayout
+                        | ValidationScenario::ClockUpdateRestore
+                        | ValidationScenario::TrayPrepareStop
+                ))
+            {
                 ValidationStatus::Tested
             } else {
                 ValidationStatus::NotRun

@@ -530,6 +530,12 @@ fn details_text(snapshot: &Snapshot) -> String {
             plan.child_source_offset,
             plan.tray_abi
         ));
+        if let Some(notification) = &plan.notification_area {
+            lines.push(format!(
+                "NotificationHostChild: {:#x}; NotificationParent: {:#x}",
+                notification.child_offset, notification.parent_offset
+            ));
+        }
         if let Some(geometry) = plan.tray_geometry {
             use litetray_adapter_protocol::compatibility::TrayGeometry;
             lines.push(tr(match geometry {

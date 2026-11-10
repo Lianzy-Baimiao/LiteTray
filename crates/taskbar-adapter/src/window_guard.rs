@@ -57,6 +57,9 @@ fn monitor(window: HWND) -> Result<Monitor, String> {
     }
 }
 impl WindowGuard {
+    pub(crate) fn invalidate_monitor_snapshot_for_test(&mut self) {
+        self.monitor.dpi ^= 1;
+    }
     pub(crate) fn capture(window: HWND) -> Result<Self, String> {
         if !local_window(window) {
             return Err("窗口生命周期检查只接受当前进程和线程的窗口".into());

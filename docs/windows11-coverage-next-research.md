@@ -129,3 +129,17 @@ Azure 文档证明存在 ARM64 开发测试环境路线，没有证明账户当�
 原始响应、最终 URL、HTTP 状态、取证时间及 SHA256 保存在 `local/compatibility-completion-next/research-sources/`，索引为 `evidence-index.json`。关键机器可读材料为 `26h1-selected-artifacts.json`、`26h1-preview-critical-file-hashes.json`、`21h2-318-critical-file-metadata.json`；后续实际模块的独立收据为 `26h1-targeted-modules/acquisition-index.json`。这些目录是本地证据，不随本研究文档自动分发。
 
 搜索工具本轮没有配置可用提供方，因此改为直接 HTTPS 读取微软页面。最初 `en-us` 下载页返回 403，随后微软公开 `en-gb` / 中性语言链接返回 200；没有关闭 TLS 验证。两个大型 CSV 初读采用 3 MB 上限并留下 `truncated=true` 记录；26H1 **预览**文件清单随后完整获取并单独记录，截断的 **安全更新**清单未用于逐文件结论。没有使用第三方下载站、镜像站或用户评论作为事实权威。
+
+## 26H1 实验配置接入
+
+已将 `28000.3365` x64 的已核验模块整理为 `compatibility-lab` 专用配置 `windows11-28000.3365-x64-notification`。重新读取三份微软模块及准确 PDB，复核模块身份、六个宿主入口、三个通知区域入口及 28 个 source 虚表槽；显式选择已审查的 `notification_area_owned` / `notification_area_bounds` 三参数传值约定。未审查的四参数拖放入口 `0xa8320` 没有启用。该配置暂只接受精确映像，不启用实现等价回退，也没有继承其他版本的运行验收记录。
+
+冻结实验程序对保留的离线目录执行 `--compatibility-report --system-root`，三个模块匹配、配置选择正确。报告仍为 `scope=disk_only`，`loaded_modules_checked=false`、`runtime_topology_checked=false`。这完成了实验程序的配置接入，不证明真实安装路径、系统一致性或 Explorer 中的运行兼容性。默认构建仍排除此配置。没有新增网络下载。
+
+可复核生成器、原始输入哈希和独立检查位于 `local/compatibility-completion-next/26h1-lab-proposal/`；程序输出为 `26h1-lab-disk-r1.json`。生产支持仍需真实 26H1 客体验证，ARM64 继续需要独立架构实现和对应运行环境。
+
+## 5.16.0 推进结果
+
+早期 21H2 `22000.318` x64 已完成独立通知区域 source 与单文本时钟适配，真实客体通过三次主屏时钟文字更新、宽度变化、停止恢复及原 Explorer 连续性验证，纳入默认目录。默认资料由七组增至八组。它目前只支持主屏时钟；副屏、托盘和完整输入仍未验证。包、实际报告与退出确认哈希见 [21H2 记录](compatibility-21h2.md)。本文前面调查表记录的是当时阶段，不应覆盖这项后续结果。
+
+26H1 `28000.3365` x64 已接入实验配置并通过磁盘匹配，仍需要真实系统的加载与运行验证。ARM64 需要独立实现与运行环境。当前仍不能将八组参考模块或相同版本名称当作完整 Windows 11 覆盖。

@@ -56,6 +56,18 @@ impl<'a> BoundView<'a> {
     pub(crate) fn capture(route: Route, view: &'a View, source: &Object) -> Result<Self, String> {
         check_window(&route)?;
         let binding = Binding::capture(route.window as HWND, source, &view.root_content()?)?;
+        Self::capture_bound(route, view, binding)
+    }
+    pub(crate) fn capture_bound(
+        route: Route,
+        view: &'a View,
+        binding: Rc<Binding>,
+    ) -> Result<Self, String> {
+        check_window(&route)?;
+        if binding.taskbar() != route.window as HWND {
+            return Err("XAML 绑定不属于所选任务栏".into());
+        }
+        binding.matches_root(&view.root_content()?)?;
         Ok(Self {
             route,
             view,

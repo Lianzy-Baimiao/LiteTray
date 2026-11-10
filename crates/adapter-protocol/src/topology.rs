@@ -63,9 +63,18 @@ pub struct Clock {
     pub surface: Role,
     pub time: usize,
     pub date: usize,
-    /// Smallest layout-only subtree containing exactly the two text elements.
+    #[serde(default)]
+    pub text_layout: ClockTextLayout,
+    /// Smallest layout-only subtree containing exactly the selected text elements.
     /// This does NOT authorize intercepting its parent notification button.
     pub container: usize,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClockTextLayout {
+    #[default]
+    Split,
+    Combined,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Topology {
@@ -156,6 +165,56 @@ impl<'a> Tree<'a> {
             if !self.visible(surface.node)? {
                 continue;
             }
+            let combined = (surface.node + 1..self.ends[surface.node])
+                .filter(|&i| self.nodes[i].name == "DateTimeInnerTextBlock")
+                .collect::<Vec<_>>();
+            if !combined.is_empty() {
+                if combined.len() != 1
+                    || (surface.node + 1..self.ends[surface.node]).any(|i| {
+                        matches!(
+                            self.nodes[i].name.as_str(),
+                            "TimeInnerTextBlock" | "DateInnerTextBlock"
+                        )
+                    })
+                {
+                    return Err("同一时钟区域混用或重复单控件时间日期布局".into());
+                }
+                let text = combined[0];
+                let container = self.parents[text].ok_or("单控件时钟缺少文字容器")?;
+                let datetime = self.parents[container].ok_or("单控件时钟缺少日期时间内容")?;
+                if self.nodes[text].class_name != "Windows.UI.Xaml.Controls.TextBlock"
+                    || self.nodes[container].name != "ContainerGrid"
+                    || self.nodes[container].class_name != "Windows.UI.Xaml.Controls.Grid"
+                    || self.nodes[datetime].class_name != "SystemTray.DateTimeIconContent"
+                    || self.ends[container] != text + 1
+                    || container + 1 != text
+                    || !self.visible(text)?
+                    || [container, text].into_iter().any(|i| {
+                        self.nodes[i].width.is_none_or(|v| v <= 0.)
+                            || self.nodes[i].height.is_none_or(|v| v <= 0.)
+                    })
+                {
+                    return Err("单控件时钟的内容、父子关系或布局尚未验证".into());
+                }
+                let clock = Clock {
+                    surface: surface.role,
+                    time: text,
+                    date: text,
+                    text_layout: ClockTextLayout::Combined,
+                    container,
+                };
+                // The combined layout has only been observed inside a separate
+                // clock IconView. Do not accept a renamed notification label.
+                let path = clock_boundary_path(self.nodes, &clock)?;
+                if path
+                    .last()
+                    .is_none_or(|&i| self.nodes[i].class_name != "SystemTray.IconView")
+                {
+                    return Err("单控件时钟无法与通知按钮的其他内容分离".into());
+                }
+                candidates.push(clock);
+                continue;
+            }
             for i in surface.node + 1..self.ends[surface.node] {
                 let node = &self.nodes[i];
                 if !matches!(
@@ -225,6 +284,7 @@ impl<'a> Tree<'a> {
                 surface: surface.role,
                 time,
                 date,
+                text_layout: ClockTextLayout::Split,
                 container: parent,
             });
         }
@@ -335,6 +395,9 @@ fn clock_boundary_path(nodes: &[ElementInfo], clock: &Clock) -> Result<Vec<usize
     {
         return Err("时钟输入索引无效".into());
     }
+    if (clock.time == clock.date) != (clock.text_layout == ClockTextLayout::Combined) {
+        return Err("时钟文本布局与控件身份不一致".into());
+    }
     let mut path = vec![clock.container];
     let mut cursor = tree.parents[clock.container];
     let mut datetime = false;
@@ -381,6 +444,70 @@ mod tests {
             text: None,
             visible: Some(true),
         }
+    }
+    // Minimal structural replay of the 22000.318 R8 notification snapshot.
+    fn combined_clock_panel() -> Vec<ElementInfo> {
+        let mut nodes = vec![
+            node("SystemTrayFrameGrid", "Grid", 0),
+            node("NotificationCenterButton", "ContentControl", 1),
+            node("SystemTrayIcon", "Grid", 2),
+            node("ContainerGrid", "Grid", 3),
+            node("ContentGrid", "Grid", 4),
+            node("", "Grid", 5),
+            node("ContainerGrid", "Grid", 6),
+            node("DateTimeInnerTextBlock", "TextBlock", 7),
+            node("Bell", "Button", 2),
+        ];
+        nodes[1].class_name = "SystemTray.OmniButton".into();
+        nodes[2].class_name = "SystemTray.IconView".into();
+        nodes[5].class_name = "SystemTray.DateTimeIconContent".into();
+        nodes[7].text = Some("15:30\n2026/11/10".into());
+        nodes
+    }
+    #[test]
+    fn combined_clock_is_selected_without_taking_the_notification_bell() {
+        let nodes = combined_clock_panel();
+        let topology = analyze_panel(&nodes, false).unwrap();
+        let clock = topology
+            .clock
+            .expect("single native DateTimeInnerTextBlock must work");
+        assert_eq!(clock.text_layout, ClockTextLayout::Combined);
+        assert_eq!((clock.time, clock.date, clock.container), (7, 7, 6));
+        assert_eq!(clock_input_node(&nodes, &clock).unwrap(), 6);
+        assert_eq!(
+            clock_tooltip_nodes(&nodes, &clock).unwrap(),
+            (2..=7).collect::<Vec<_>>()
+        );
+    }
+    #[test]
+    fn combined_clock_rejects_mixed_duplicate_hidden_and_foreign_content() {
+        for change in 0..9 {
+            let mut nodes = combined_clock_panel();
+            match change {
+                0 => nodes.insert(8, node("DateTimeInnerTextBlock", "TextBlock", 7)),
+                1 => nodes.insert(8, node("TimeInnerTextBlock", "TextBlock", 7)),
+                2 => nodes[7].visible = Some(false),
+                3 => nodes[7].visible = None,
+                4 => nodes[6].name = "SomeOtherGrid".into(),
+                5 => nodes[5].class_name = "SystemTray.TextIconContent".into(),
+                6 => nodes[7].class_name = "Windows.UI.Xaml.Controls.Button".into(),
+                7 => nodes.insert(8, node("Bell", "Button", 7)),
+                _ => nodes[2].class_name = "SystemTray.OtherIcon".into(),
+            }
+            let report = analyze_panel(&nodes, false).unwrap();
+            assert!(report.clock.is_none(), "case {change}");
+            assert!(report.clock_error.is_some(), "case {change}");
+        }
+    }
+    #[test]
+    fn historical_clock_reports_default_to_split_and_cannot_alias_texts() {
+        let mut clock: Clock = serde_json::from_value(serde_json::json!({
+            "surface":"notification_center", "time":7, "date":8, "container":6
+        }))
+        .unwrap();
+        assert_eq!(clock.text_layout, ClockTextLayout::Split);
+        clock.date = clock.time;
+        assert!(clock_input_node(&combined_clock_panel(), &clock).is_err());
     }
     #[test]
     fn captured_clock_padding_belongs_to_input_but_notification_bell_does_not() {

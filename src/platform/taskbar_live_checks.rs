@@ -6,10 +6,12 @@ use crate::config::MonitorScope;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
+use litetray_adapter_protocol::topology::ClockTextLayout;
 use litetray_adapter_protocol::{ElementInfo, InspectResponse, TaskbarInspection};
 
 #[derive(Clone, serde::Serialize)]
 struct ClockObservation {
+    text_layout: ClockTextLayout,
     time: ElementInfo,
     date: ElementInfo,
     container: ElementInfo,
@@ -58,6 +60,7 @@ fn observe_clock(snapshot: &InspectResponse, hwnd: u64) -> Result<ClockObservati
             .ok_or("时钟结构索引越界".to_string())
     };
     Ok(ClockObservation {
+        text_layout: clock.text_layout,
         time: element(clock.time)?,
         date: element(clock.date)?,
         container: element(clock.container)?,
@@ -71,14 +74,26 @@ fn close_dimension(a: Option<f64>, b: Option<f64>) -> bool {
         .is_some_and(|(a, b)| a.is_finite() && b.is_finite() && (a - b).abs() <= 0.5)
 }
 fn require_active(observed: &ClockObservation, frame: &Frame) -> Result<(), String> {
-    let expected_top = if observed.date.visible == Some(false) {
+    let combined = observed.text_layout == ClockTextLayout::Combined;
+    let expected_top = if combined {
+        [frame.text.top.as_str(), frame.text.bottom.as_str()]
+            .into_iter()
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else if observed.date.visible == Some(false) {
         format!("{} · {}", frame.text.top, frame.text.bottom)
     } else {
         frame.text.top.clone()
     };
     if observed.time.visible != Some(true)
         || observed_text(&observed.time) != expected_top
-        || observed_text(&observed.date) != frame.text.bottom
+        || observed_text(&observed.date)
+            != if combined {
+                expected_top.as_str()
+            } else {
+                frame.text.bottom.as_str()
+            }
         || !close_dimension(observed.container.width, Some(frame.style.width as f64))
     {
         return Err("主屏时钟的实际文字或固定宽度与测试帧不一致".into());
@@ -86,6 +101,9 @@ fn require_active(observed: &ClockObservation, frame: &Frame) -> Result<(), Stri
     Ok(())
 }
 fn require_restored(before: &ClockObservation, after: &ClockObservation) -> Result<(), String> {
+    if before.text_layout != after.text_layout {
+        return Err("停止后时钟文本布局已变化".into());
+    }
     for (original, current) in [
         (&before.time, &after.time),
         (&before.date, &after.date),
@@ -388,7 +406,7 @@ fn clocks() -> Result<Value, String> {
         "hwnd": bar.hwnd, "secondary": bar.secondary, "error": bar.error,
         "icons": bar.elements.iter().filter(|e| e.class_name == "SystemTray.NotifyIconView").map(|e| json!({"width":e.width,"visible":e.visible})).collect::<Vec<_>>(),
         "surfaces":bar.elements.iter().filter(|e| matches!(e.name.as_str(),"NotifyIconStack"|"NotificationAreaIcons"|"DateTimeStackPanel")).map(|e| json!({"name":e.name,"width":e.width,"visible":e.visible})).collect::<Vec<_>>(),
-        "text": bar.elements.iter().filter(|e| matches!(e.name.as_str(), "TimeInnerTextBlock" | "DateInnerTextBlock"))
+        "text": bar.elements.iter().filter(|e| matches!(e.name.as_str(), "TimeInnerTextBlock" | "DateInnerTextBlock" | "DateTimeInnerTextBlock"))
             .map(|e| json!({"name":e.name,"text":e.text.as_deref().unwrap_or("").trim_end_matches('\0'),"visible":e.visible})).collect::<Vec<_>>()
     })).collect::<Vec<_>>()))
 }
@@ -499,12 +517,11 @@ fn check(config: &Config, mirror: bool) -> Value {
                     .iter()
                     .find(|b| b["hwnd"].as_u64() == Some(route.window))
                     .ok_or("副屏任务栏已变化")?;
-                if !bar["text"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|t| t["name"] == "TimeInnerTextBlock" && t["text"] == frame.text.top)
-                {
+                if !bar["text"].as_array().unwrap().iter().any(|t| {
+                    t["name"] == "TimeInnerTextBlock" && t["text"] == frame.text.top
+                        || t["name"] == "DateTimeInnerTextBlock"
+                            && t["text"] == format!("{}\n{}", frame.text.top, frame.text.bottom)
+                }) {
                     report["samples"].as_array_mut().unwrap().push(observed);
                     return Err("副屏原生 TextBlock 未保持指定时间内容".into());
                 }
@@ -641,6 +658,7 @@ mod compatibility_report_tests {
     }
     fn native() -> ClockObservation {
         ClockObservation {
+            text_layout: ClockTextLayout::Split,
             time: node("TimeInnerTextBlock", Some("12:34"), 80.),
             date: node("DateInnerTextBlock", Some("2026/11/08"), 80.),
             container: node("DateTimeStackPanel", None, 80.),
@@ -682,5 +700,29 @@ mod compatibility_report_tests {
         assert!(require_active(&observed, &frame).is_err());
         observed.time.text = Some("LT LIVE 02 · Sandbox check B".into());
         assert!(require_active(&observed, &frame).is_ok());
+    }
+
+    #[test]
+    fn combined_clock_report_requires_both_lines_and_exact_restoration() {
+        let mut frame = crate::clock::frame(&Config::default().clock, "", chrono::Local::now());
+        frame.text.top = "LT LIVE 01".into();
+        frame.text.bottom = "Sandbox check A".into();
+        frame.style.width = 240;
+        let mut observed = native();
+        observed.text_layout = ClockTextLayout::Combined;
+        observed.time.name = "DateTimeInnerTextBlock".into();
+        observed.time.text = Some("LT LIVE 01\nSandbox check A".into());
+        observed.date = observed.time.clone();
+        observed.container.width = Some(240.);
+        assert!(require_active(&observed, &frame).is_ok());
+        assert!(require_restored(&observed, &observed).is_ok());
+        let mut changed = observed.clone();
+        changed.time.text = Some(frame.text.top.clone());
+        changed.date = changed.time.clone();
+        assert!(require_active(&changed, &frame).is_err());
+        assert!(require_restored(&observed, &changed).is_err());
+        changed = observed.clone();
+        changed.text_layout = ClockTextLayout::Split;
+        assert!(require_restored(&observed, &changed).is_err());
     }
 }

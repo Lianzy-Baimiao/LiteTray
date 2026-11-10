@@ -31,6 +31,7 @@ pub(crate) struct Binding {
     window: HWND,
     parent_guard: WindowGuard,
     window_guard: WindowGuard,
+    notification_taskbar: Option<(HWND, WindowGuard)>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RestoreTarget {
@@ -51,6 +52,16 @@ fn local_pair(parent: HWND, window: HWND) -> Result<(), String> {
         if parent == window || GetParent(window) != parent || IsChild(parent, window) == 0 {
             return Err("XAML source 的原生窗口不属于给定父窗口".into());
         }
+    }
+    Ok(())
+}
+fn notification_pair(taskbar: HWND, parent: HWND) -> Result<(), String> {
+    local_pair(taskbar, parent)?;
+    if unsafe {
+        crate::class_name(taskbar) != "Shell_TrayWnd"
+            || crate::class_name(parent) != "TrayNotifyWnd"
+    } {
+        return Err("通知区域不是主任务栏的已验证直接子窗口".into());
     }
     Ok(())
 }
@@ -82,6 +93,14 @@ fn window(native: &Object) -> Result<HWND, String> {
     }
 }
 impl Binding {
+    // Only used by the isolated XAML self-check, on its own hidden windows.
+    pub(crate) fn invalidate_notification_monitor_for_test(&mut self) {
+        self.notification_taskbar
+            .as_mut()
+            .unwrap()
+            .1
+            .invalidate_monitor_snapshot_for_test();
+    }
     pub(crate) fn window(&self) -> HWND {
         self.window
     }
@@ -91,6 +110,31 @@ impl Binding {
         parent: HWND,
         source: &Object,
         expected_root_content: &Object,
+    ) -> Result<Rc<Self>, String> {
+        Self::capture_with_parent(parent, source, expected_root_content, None)
+    }
+    /// Early notification islands have one explicit TrayNotifyWnd between
+    /// source and taskbar. Keep all three lifetimes and both direct links.
+    pub(crate) fn capture_notification(
+        taskbar: HWND,
+        parent: HWND,
+        source: &Object,
+        expected_root_content: &Object,
+    ) -> Result<Rc<Self>, String> {
+        notification_pair(taskbar, parent)?;
+        let guard = WindowGuard::capture(taskbar)?;
+        Self::capture_with_parent(
+            parent,
+            source,
+            expected_root_content,
+            Some((taskbar, guard)),
+        )
+    }
+    fn capture_with_parent(
+        parent: HWND,
+        source: &Object,
+        expected_root_content: &Object,
+        notification_taskbar: Option<(HWND, WindowGuard)>,
     ) -> Result<Rc<Self>, String> {
         let source = source.query(&IID_IDesktopWindowXamlSource)?;
         let native = source.query(&IID_NATIVE)?;
@@ -112,6 +156,7 @@ impl Binding {
             window,
             parent_guard: WindowGuard::capture(parent)?,
             window_guard: WindowGuard::capture(window)?,
+            notification_taskbar,
         });
         binding.validate()?;
         Ok(binding)
@@ -150,7 +195,8 @@ impl Binding {
         self.restore_windows()
     }
     fn restore_windows(&self) -> Result<RestoreTarget, String> {
-        if self.parent_guard.lifetime()? == Lifetime::Retired
+        if self.notification_retired()?
+            || self.parent_guard.lifetime()? == Lifetime::Retired
             || self.window_guard.lifetime()? == Lifetime::Retired
             || window(&self.native)? != self.window
         {
@@ -158,21 +204,51 @@ impl Binding {
         }
         // The native getter may pump same-thread messages. Recheck the
         // captured markers after it returns before permitting any reattach.
-        if self.parent_guard.lifetime()? == Lifetime::Retired
+        if self.notification_retired()?
+            || self.parent_guard.lifetime()? == Lifetime::Retired
             || self.window_guard.lifetime()? == Lifetime::Retired
         {
             return Ok(RestoreTarget::Retired);
         }
         local_pair(self.parent, self.window)?;
+        if let Some((taskbar, _)) = &self.notification_taskbar {
+            // Stop restores the retained current source even after a monitor
+            // change. Its lifetime was checked above; the old monitor snapshot
+            // must not prevent cleanup of this still-current window chain.
+            notification_pair(*taskbar, self.parent)?;
+        }
         Ok(RestoreTarget::Current)
     }
     fn validate_windows(&self) -> Result<(), String> {
+        self.validate_notification()?;
         self.parent_guard.validate()?;
         self.window_guard.validate()?;
         if window(&self.native)? != self.window {
             return Err("XAML source 的原生窗口已变化".into());
         }
-        local_pair(self.parent, self.window)
+        self.parent_guard.validate()?;
+        self.window_guard.validate()?;
+        local_pair(self.parent, self.window)?;
+        self.validate_notification()
+    }
+    fn notification_retired(&self) -> Result<bool, String> {
+        self.notification_taskbar
+            .as_ref()
+            .map_or(Ok(false), |(_, guard)| {
+                Ok(guard.lifetime()? == Lifetime::Retired)
+            })
+    }
+    fn validate_notification(&self) -> Result<(), String> {
+        if let Some((taskbar, guard)) = &self.notification_taskbar {
+            guard.validate()?;
+            notification_pair(*taskbar, self.parent)?;
+        }
+        Ok(())
+    }
+    pub(crate) fn taskbar(&self) -> HWND {
+        self.notification_taskbar
+            .as_ref()
+            .map_or(self.parent, |(taskbar, _)| *taskbar)
     }
     pub(crate) fn matches_root(&self, expected: &Object) -> Result<(), String> {
         self.validate()?;

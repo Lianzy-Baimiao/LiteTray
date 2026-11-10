@@ -96,6 +96,8 @@ pub struct ImplementationReport {
     pub topology: compatibility::Topology,
     pub host_child_offset: u32,
     pub child_source_offset: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notification_area: Option<compatibility::NotificationAreaLayout>,
     pub tray_abi: Option<TrayAbi>,
     pub tray_geometry: Option<compatibility::TrayGeometry>,
 }
@@ -103,7 +105,30 @@ pub struct ImplementationReport {
 pub struct Capabilities {
     pub clocks: bool,
     pub tray: bool,
+    pub clock_primary_only: bool,
     pub notice: Option<String>,
+}
+impl Capabilities {
+    /// Narrow the caller's selected routes without adding another display or
+    /// changing its saved preference. Native identity checks still run later.
+    pub fn select_routes(
+        &self,
+        mut routes: Vec<litetray_adapter_protocol::routing::Route>,
+    ) -> Result<Vec<litetray_adapter_protocol::routing::Route>, String> {
+        if routes.is_empty() {
+            return Err("所选范围没有可用任务栏".into());
+        }
+        if self.clocks && self.clock_primary_only {
+            routes.retain(|route| !route.secondary);
+            if routes.is_empty() {
+                return Err(
+                    "当前任务栏仅支持主屏时钟，所选屏幕均为副屏。请将显示范围改为主屏或所有显示器。"
+                        .into(),
+                );
+            }
+        }
+        Ok(routes)
+    }
 }
 impl Report {
     /// A disk match authorizes only the existing in-process preparation, which
@@ -130,6 +155,10 @@ impl Report {
         let mut enabled = Capabilities {
             clocks,
             tray,
+            clock_primary_only: self
+                .implementation
+                .as_ref()
+                .is_some_and(|plan| plan.notification_area.is_some()),
             notice: None,
         };
         if tray && let Err(error) = self.require(false, true) {
@@ -143,6 +172,13 @@ impl Report {
         }
         if !clocks && !tray {
             return Err("没有请求启用的任务栏功能".into());
+        }
+        if clocks && enabled.clock_primary_only {
+            let scope = "当前任务栏的时钟接管仅支持主屏；副屏时钟暂未支持，显示范围设置保持不变。";
+            enabled
+                .notice
+                .get_or_insert_with(String::new)
+                .push_str(scope);
         }
         Ok(enabled)
     }
@@ -188,6 +224,18 @@ fn verify_layout(profile: &Profile, module: &Module, bytes: &[u8]) -> Result<(),
             )?;
             if symbol.executable && code != symbol.prologue {
                 return Err("内置宿主符号入口与系统模块不匹配".into());
+            }
+        }
+        if let Some(notification) = &profile.notification_area {
+            section(bytes, notification.component_vtable_rva, 3 * 8, false)?;
+            let table = section(bytes, notification.control_vtable_rva, 3 * 8, false)?;
+            notification.verify_control_vtable(pe::preferred_image_base(bytes)?, table)?;
+            for entry in
+                std::iter::once(&notification.copy_host).chain(&notification.control_entries)
+            {
+                if section(bytes, entry.rva, 16, true)? != entry.prologue {
+                    return Err("通知区域引用入口与系统模块不匹配".into());
+                }
             }
         }
     } else if module.name == profile.shell.name {
@@ -255,6 +303,19 @@ impl DiskImage {
                                 basis: recognized.basis,
                                 evidence_profile: recognized.evidence.id.clone(),
                                 implementation: match role {
+                                    Role::Taskbar
+                                        if recognized.evidence.notification_area.is_some() =>
+                                    {
+                                        format!(
+                                            "独立通知区域 XAML 宿主；子宿主偏移 {:#x}",
+                                            recognized
+                                                .evidence
+                                                .notification_area
+                                                .as_ref()
+                                                .unwrap()
+                                                .child_offset
+                                        )
+                                    }
                                     Role::Taskbar => format!(
                                         "XAML 宿主；元素偏移 {}，子宿主偏移 {:#x}",
                                         recognized.evidence.host.element_offset.map_or_else(
@@ -494,6 +555,7 @@ fn collect_selected<'a>(
         topology: plan.topology,
         host_child_offset: plan.source.host_child_offset,
         child_source_offset: plan.source.child_source_offset,
+        notification_area: plan.notification_area.clone(),
         tray_abi: plan.tray.as_ref().map(|tray| tray.abi),
         tray_geometry: plan.tray.as_ref().map(|tray| tray.geometry),
     });

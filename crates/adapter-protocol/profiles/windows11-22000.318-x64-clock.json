@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "id": "windows11-22000.318-x64-clock",
-  "system_label": "Windows 11 Pro 21H2 22000.318 x64 — clock laboratory candidate",
+  "system_label": "Windows 11 Pro 21H2 22000.318 x64 — primary clock",
   "taskbar": {
     "name": "taskbar.dll",
     "relative_path": "System32/taskbar.dll",
@@ -461,5 +461,99 @@
     ],
     "recipe": "xaml_explorer_host_child_xfg_v1"
   },
-  "topology": "system_tray_frame_v1"
+  "topology": "system_tray_frame_v1",
+  "notification_area": {
+    "component_offset": 624,
+    "component_vtable_rva": 1983392,
+    "shared_host_offset": 736,
+    "child_offset": 40,
+    "parent_offset": 96,
+    "copy_host": {
+      "rva": 20796,
+      "prologue": [
+        72,
+        131,
+        33,
+        0,
+        72,
+        131,
+        97,
+        8,
+        0,
+        72,
+        139,
+        66,
+        8,
+        72,
+        133,
+        192
+      ]
+    },
+    "control_vtable_rva": 1904560,
+    "control_entries": [
+      {
+        "rva": 1018320,
+        "prologue": [
+          72,
+          131,
+          193,
+          16,
+          233,
+          243,
+          48,
+          255,
+          255,
+          204,
+          204,
+          204,
+          204,
+          204,
+          204,
+          204
+        ]
+      },
+      {
+        "rva": 254144,
+        "prologue": [
+          72,
+          131,
+          236,
+          40,
+          72,
+          133,
+          201,
+          116,
+          28,
+          72,
+          139,
+          1,
+          73,
+          186,
+          112,
+          249
+        ]
+      },
+      {
+        "rva": 966544,
+        "prologue": [
+          64,
+          83,
+          72,
+          131,
+          236,
+          32,
+          72,
+          141,
+          5,
+          19,
+          80,
+          14,
+          0,
+          72,
+          139,
+          217
+        ]
+      }
+    ]
+  }
 }

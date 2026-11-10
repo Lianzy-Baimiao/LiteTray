@@ -18,6 +18,7 @@ mod input_surface;
 mod inspect;
 mod island;
 mod lifecycle_checks;
+mod notification_checks;
 mod preview;
 mod property;
 mod routing;

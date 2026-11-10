@@ -5,8 +5,9 @@ use crate::{
     xaml_abi::*,
 };
 use litetray_adapter_protocol::compatibility::{Resolved, SourceRecipe};
-use std::{mem::size_of, ptr::null_mut};
+use std::{mem::size_of, ptr::null_mut, rc::Rc};
 use windows_sys::Win32::System::Memory::*;
+use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::{Win32::Foundation::*, core::GUID};
 fn child_iid(recipe: SourceRecipe) -> GUID {
     // These are distinct private interfaces, despite their identical names.
@@ -24,10 +25,107 @@ fn child_iid(recipe: SourceRecipe) -> GUID {
 }
 pub(crate) struct Source {
     pub root: Object,
-    pub source: Object,
+    _source: Object,
+    pub binding: Rc<crate::island::Binding>,
     // Keep the private host alive while source and discovery are consumed.
     _host: inspect::SharedHost,
     _child: Object,
+}
+unsafe fn notification_host(
+    hwnd: HWND,
+    plan: &Resolved,
+    base: usize,
+) -> Result<(inspect::SharedHost, HWND, usize), String> {
+    unsafe {
+        if crate::class_name(hwnd) != "Shell_TrayWnd" {
+            return Err("此通知区域实现尚未验证副屏时钟".into());
+        }
+        let layout = plan
+            .notification_area
+            .as_ref()
+            .ok_or("缺少通知区域宿主证据")?;
+        let taskbar_guard = crate::window_guard::WindowGuard::capture(hwnd)?;
+        let site = inspect::taskband_site(hwnd, false, base, &plan.host)?;
+        let component = inspect::pointer(
+            site.checked_add(layout.component_offset as usize)
+                .ok_or("组件地址溢出")?,
+        )?;
+        let table = inspect::pointer(component)?;
+        if table
+            != base
+                .checked_add(layout.component_vtable_rva as usize)
+                .ok_or("组件虚表溢出")?
+        {
+            return Err("通知区域组件不是已验证的 TrayUI".into());
+        }
+        source_image_region(table, 3 * size_of::<usize>(), base, false)?;
+        let shared = component
+            .checked_add(layout.shared_host_offset as usize)
+            .ok_or("通知区域地址溢出")?;
+        let object = inspect::pointer(shared)?;
+        let control = inspect::pointer(
+            shared
+                .checked_add(size_of::<usize>())
+                .ok_or("引用地址溢出")?,
+        )?;
+        if object == 0 || control == 0 || control.checked_add(0x10) != Some(object) {
+            return Err("通知区域宿主为空或共享对象布局不符".into());
+        }
+        let control_table = inspect::pointer(control)?;
+        if control_table
+            != base
+                .checked_add(layout.control_vtable_rva as usize)
+                .ok_or("引用虚表溢出")?
+        {
+            return Err("通知区域共享宿主的具体类型不符".into());
+        }
+        source_image_region(control_table, 3 * size_of::<usize>(), base, false)?;
+        for (index, entry) in layout.control_entries.iter().enumerate() {
+            let address = base.checked_add(entry.rva as usize).ok_or("引用入口溢出")?;
+            if inspect::pointer(control_table + index * size_of::<usize>())? != address {
+                return Err("通知区域共享引用入口已变化".into());
+            }
+            source_image_region(address, 16, base, true)?;
+            if crate::read_memory(address, 16).ok_or("无法读取引用入口")? != entry.prologue
+            {
+                return Err("通知区域引用函数已变化".into());
+            }
+        }
+        let copy = base
+            .checked_add(layout.copy_host.rva as usize)
+            .ok_or("复制入口溢出")?;
+        source_image_region(copy, 16, base, true)?;
+        if crate::read_memory(copy, 16).ok_or("无法读取复制入口")? != layout.copy_host.prologue
+        {
+            return Err("通知区域共享引用复制函数已变化".into());
+        }
+        let release = base
+            + plan
+                .host
+                .symbol(litetray_adapter_protocol::SymbolRole::ReleaseHost)
+                .rva as usize;
+        // This exact copy helper only increments the verified shared control
+        // block and copies its two pointers; it cannot pump window messages.
+        let host = inspect::SharedHost::copy_from(shared, copy, release)?;
+        if host.value != [object, control] {
+            return Err("通知区域宿主在保留引用时发生变化".into());
+        }
+        taskbar_guard.validate()?;
+        let parent = inspect::pointer(
+            object
+                .checked_add(layout.parent_offset as usize)
+                .ok_or("通知区域父窗口地址溢出")?,
+        )? as HWND;
+        if parent.is_null()
+            || GetParent(parent) != hwnd
+            || crate::class_name(parent) != "TrayNotifyWnd"
+        {
+            return Err("通知区域宿主的父窗口不属于所选任务栏".into());
+        }
+        // Binding will additionally prove PID/TID and the source's exact
+        // direct parent, retaining markers for all three windows.
+        Ok((host, parent, layout.child_offset as usize))
+    }
 }
 unsafe fn source_image_region(
     address: usize,
@@ -104,15 +202,23 @@ pub(crate) unsafe fn resolve(hwnd: HWND, plan: &Resolved) -> Result<Source, Stri
     unsafe {
         let base = inspect::validate_resolved(plan)?;
         let shell = crate::compatibility::loaded(&plan.shell)?;
-        let host = inspect::host(
-            hwnd,
-            crate::class_name(hwnd) == "Shell_SecondaryTrayWnd",
-            base,
-            &plan.host,
-        )?;
+        let (host, parent, child_offset) = if plan.notification_area.is_some() {
+            notification_host(hwnd, plan, base)?
+        } else {
+            (
+                inspect::host(
+                    hwnd,
+                    crate::class_name(hwnd) == "Shell_SecondaryTrayWnd",
+                    base,
+                    &plan.host,
+                )?,
+                hwnd,
+                plan.source.host_child_offset as usize,
+            )
+        };
         let raw = inspect::pointer(
             host.value[0]
-                .checked_add(plan.source.host_child_offset as usize)
+                .checked_add(child_offset)
                 .ok_or("宿主指针溢出")?,
         )?;
         inspect::check_region(raw, size_of::<usize>(), 0, false)?;
@@ -140,11 +246,17 @@ pub(crate) unsafe fn resolve(hwnd: HWND, plan: &Resolved) -> Result<Source, Stri
             "Taskbar source.Content",
         )?;
         let root = xaml::root_content(&Object::owned(content)?)?;
+        let binding = if plan.notification_area.is_some() {
+            crate::island::Binding::capture_notification(hwnd, parent, &source, &root)?
+        } else {
+            crate::island::Binding::capture(hwnd, &source, &root)?
+        };
         // Binding::capture additionally proves its actual HWND and root belong
         // to this taskbar. No window-class/coordinate approximation is used.
         Ok(Source {
             root,
-            source,
+            _source: source,
+            binding,
             _host: host,
             _child: child,
         })

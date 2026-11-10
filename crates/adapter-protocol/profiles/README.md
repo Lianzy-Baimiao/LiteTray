@@ -1,7 +1,8 @@
 # Built-in taskbar compatibility evidence
 
-Since 5.14.2, the default and explicit `compatibility-lab` registries contain seven
-profiles. `windows11-22621.1702-x64.json` (22H2 Pro) and
+Version 5.16.0 contains eight default profiles, including the primary-clock-only
+21H2 implementation. The explicit `compatibility-lab` registry adds one 26H1
+candidate. Version 5.14.2 contained seven profiles. `windows11-22621.1702-x64.json` (22H2 Pro) and
 `windows11-22631.2861-x64.json` (23H2 Pro) were promoted after independently
 installed guests passed six scoped checks and independent evidence review.
 Both use the separately implemented four-argument borrowed-element
@@ -79,12 +80,27 @@ release binaries; it does not validate the new candidates. Offline candidate
 artifacts are not automatically registered or activated, and neither runtime
 settings nor external JSON can override the compiled module identities.
 
-The `compatibility-lab` feature additionally includes
-`lab/windows11-22000.318-x64-clock.json`. This early host/source candidate has
-five real host roles, no FrameHeight field or factory vtable, and thirteen
-individually verified child-vtable entries. Its tray module, ABI, purpose and
-entries are all absent. These four fields must either all exist or all be
-absent; incomplete tray evidence is rejected. The two-module clock candidate
-does not authorize tray calls and has no live acceptance record. Its source
-recognition does not prove that the actual taskbar clock is in that XAML root.
-See [the 21H2 investigation](../../../docs/compatibility-21h2.md).
+The default registry includes `windows11-22000.318-x64-clock.json` after an
+independently installed guest passed primary-clock text updates, width changes
+and Stop restoration with the frozen laboratory package. The final default
+package has its own verification record. This early host has five real roles,
+no FrameHeight field or factory vtable, and thirteen individually verified
+child-vtable entries. It uses a separately verified NotificationAreaHost route.
+Its tray module, ABI, purpose and entries are all absent; incomplete tray
+evidence is rejected. Only the selected primary clock is supported. See
+[the exact 21H2 scope and package identities](../../../docs/compatibility-21h2.md).
+
+The lab feature also includes `lab/windows11-28000.3365-x64-notification.json`.
+It selects the independently reviewed notification-area owned ABI and keeps
+unreviewed drag/drop excluded. The current experiment requires exact image
+identities; it has no implementation-equivalence fingerprint or runtime
+acceptance record. A frozen lab EXE matches the retained Microsoft module
+bytes in a disk-only report. Installed paths, a coherent installed system,
+loaded modules and actual clock/tray behavior remain unverified. See
+[26H1 research and integration](../../../docs/windows11-coverage-next-research.md).
+
+The 21H2 implementation carries a separately verified NotificationAreaHost
+route and recognizes the observed single DateTimeInnerTextBlock clock. Its
+combined lines share the first line's font, color and alignment. The adjacent
+notification bell is excluded. Source discovery, isolated update/restore and
+real taskbar acceptance are distinct evidence levels in the 21H2 record.

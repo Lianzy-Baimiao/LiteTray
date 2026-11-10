@@ -2,7 +2,10 @@
 //! implementations with narrowly defined metadata changes, never new code/RVAs.
 //! Both the host and the injected adapter run this same parser on their own
 //! disk reads. No caller-provided profile or OS version chooses a recipe.
-use super::{Module, Profile, SourceLayout, Topology, TrayAbi, TrayEntry, TrayGeometry, profiles};
+use super::{
+    Module, NotificationAreaLayout, Profile, SourceLayout, Topology, TrayAbi, TrayEntry,
+    TrayGeometry, profiles,
+};
 use crate::{HostLayout, ModuleIdentity, pe};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -61,6 +64,7 @@ pub struct Resolved {
     pub tray: Option<ResolvedTray>,
     pub host: HostLayout,
     pub source: SourceLayout,
+    pub notification_area: Option<NotificationAreaLayout>,
     pub topology: Topology,
 }
 
@@ -156,6 +160,7 @@ fn same_recipe(role: Role, a: &Profile, b: &Profile) -> bool {
                 && a.host.element_offset == b.host.element_offset
                 && a.source.recipe == b.source.recipe
                 && a.source.host_child_offset == b.source.host_child_offset
+                && a.notification_area == b.notification_area
         }
         Role::Shell => {
             a.source.recipe == b.source.recipe
@@ -262,6 +267,7 @@ pub fn assemble(
         || taskbar.evidence.source.recipe != shell.evidence.source.recipe
         || taskbar.evidence.topology != shell.evidence.topology
         || tray.is_some_and(|v| v.evidence.topology != taskbar.evidence.topology)
+        || (taskbar.evidence.notification_area.is_some() && tray.is_some())
     {
         return Err("模块角色或 XAML 宿主接口契约不一致".into());
     }
@@ -281,6 +287,10 @@ pub fn assemble(
     let mut host = taskbar.evidence.host.clone();
     host.module = taskbar.module.identity.clone();
     host.validate()?;
+    let notification_area = taskbar.evidence.notification_area.clone();
+    if let Some(notification) = &notification_area {
+        notification.validate(taskbar.module.identity.image_size)?;
+    }
     let source = SourceLayout {
         recipe: taskbar.evidence.source.recipe,
         host_child_offset: taskbar.evidence.source.host_child_offset,
@@ -320,6 +330,7 @@ pub fn assemble(
         tray,
         host,
         source,
+        notification_area,
         topology: taskbar.evidence.topology,
     })
 }
@@ -335,6 +346,62 @@ mod tests {
             evidence: profile,
             basis: MatchBasis::ExactImage,
         }
+    }
+
+    #[test]
+    fn notification_route_is_owned_only_by_the_taskbar_recipe() {
+        let notification = Profile::decode(include_bytes!(
+            "../../profiles/windows11-22000.318-x64-clock.json"
+        ))
+        .unwrap();
+        let mut previous = notification.clone();
+        previous.notification_area = None;
+        assert!(!same_recipe(Role::Taskbar, &notification, &previous));
+        assert!(same_recipe(Role::Shell, &notification, &previous));
+        let taskbar = known(Role::Taskbar, &notification);
+        let previous_shell = known(Role::Shell, &previous);
+        let resolved = assemble(&taskbar, &previous_shell, None).unwrap();
+        assert_eq!(resolved.notification_area, notification.notification_area);
+        assert_eq!(resolved.source.host_child_offset, 0x20);
+        let previous_taskbar = known(Role::Taskbar, &previous);
+        let notification_shell = known(Role::Shell, &notification);
+        assert!(
+            assemble(&previous_taskbar, &notification_shell, None)
+                .unwrap()
+                .notification_area
+                .is_none()
+        );
+        let modern = &profiles().unwrap()[0];
+        assert!(assemble(&taskbar, &known(Role::Shell, modern), None).is_err());
+        assert!(assemble(&taskbar, &previous_shell, Some(&known(Role::Tray, modern))).is_err());
+
+        for mutate in 0..3 {
+            let mut changed = notification.clone();
+            let layout = changed.notification_area.as_mut().unwrap();
+            match mutate {
+                0 => layout.parent_offset += 8,
+                1 => layout.copy_host.prologue[0] ^= 1,
+                _ => layout.control_entries[2].rva += 1,
+            }
+            changed.validate().unwrap();
+            assert!(!same_recipe(Role::Taskbar, &notification, &changed));
+        }
+    }
+
+    #[test]
+    fn notification_layout_is_checked_against_the_current_taskbar_image() {
+        let mut profile = Profile::decode(include_bytes!(
+            "../../profiles/windows11-22000.318-x64-clock.json"
+        ))
+        .unwrap();
+        profile.notification_area.as_mut().unwrap().copy_host.rva =
+            profile.taskbar.identity.image_size - 16;
+        profile.validate().unwrap();
+        let mut taskbar = known(Role::Taskbar, &profile);
+        let shell = known(Role::Shell, &profile);
+        // Keep all host sections in range while truncating a notification entry.
+        taskbar.module.identity.image_size -= 4096;
+        assert!(assemble(&taskbar, &shell, None).is_err());
     }
 
     #[test]
@@ -374,14 +441,12 @@ mod tests {
         );
         assert_eq!(
             entries.iter().filter(|e| e.fingerprint.is_some()).count(),
-            18 + if cfg!(feature = "compatibility-lab") {
-                2
-            } else {
-                0
-            }
+            20
         );
         assert!(entries.iter().filter(|e| e.fingerprint.is_none()).all(|e| {
-            e.profile_id == "windows11-26300.9711-x64"
+            (e.profile_id == "windows11-26300.9711-x64"
+                || cfg!(feature = "compatibility-lab")
+                    && e.profile_id == "windows11-28000.3365-x64-notification")
                 && e.unavailable_reason.as_ref().is_some_and(|v| !v.is_empty())
         }));
     }

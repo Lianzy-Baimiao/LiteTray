@@ -1,0 +1,325 @@
+{
+  "schema": 1,
+  "id": "windows11-28000.3365-x64-notification",
+  "system_label": "Windows 11 26H1 28000.3365 x64 - notification-area lab candidate",
+  "taskbar": {
+    "name": "taskbar.dll",
+    "relative_path": "System32/taskbar.dll",
+    "sha256": "6c7ba38f1ac0ffa1661ef6c21cd20a96d56a44d07c3872e12118e929e0ddddbe",
+    "identity": {
+      "machine": 34404,
+      "timestamp": 1451234697,
+      "image_size": 3215360,
+      "pdb_guid": [
+        7,
+        107,
+        208,
+        35,
+        170,
+        230,
+        228,
+        7,
+        232,
+        134,
+        97,
+        113,
+        252,
+        161,
+        63,
+        98
+      ],
+      "pdb_age": 1
+    }
+  },
+  "shell": {
+    "name": "twinui.pcshell.dll",
+    "relative_path": "System32/twinui.pcshell.dll",
+    "sha256": "7cda1bce4543969ab2d626b28ead3e6ce66db73d2582e1505ae780887aa0b7bc",
+    "identity": {
+      "machine": 34404,
+      "timestamp": 3161279195,
+      "image_size": 10145792,
+      "pdb_guid": [
+        22,
+        252,
+        250,
+        150,
+        109,
+        77,
+        39,
+        106,
+        210,
+        174,
+        103,
+        64,
+        60,
+        97,
+        210,
+        217
+      ],
+      "pdb_age": 1
+    }
+  },
+  "tray": {
+    "name": "SystemTray.dll",
+    "relative_path": "SystemApps/MicrosoftWindows.Client.Core_cw5n1h2txyewy/SystemTray.dll",
+    "sha256": "aa258b28f6c7afa5d74b2baf46f2d9d6a13777bdfa608d51043a4e696724fcb2",
+    "identity": {
+      "machine": 34404,
+      "timestamp": 1789519179,
+      "image_size": 2105344,
+      "pdb_guid": [
+        244,
+        133,
+        139,
+        244,
+        54,
+        215,
+        190,
+        72,
+        182,
+        242,
+        247,
+        233,
+        56,
+        116,
+        38,
+        73
+      ],
+      "pdb_age": 1
+    }
+  },
+  "host": {
+    "schema": 1,
+    "module": {
+      "machine": 34404,
+      "timestamp": 1451234697,
+      "image_size": 3215360,
+      "pdb_guid": [
+        7,
+        107,
+        208,
+        35,
+        170,
+        230,
+        228,
+        7,
+        232,
+        134,
+        97,
+        113,
+        252,
+        161,
+        63,
+        98
+      ],
+      "pdb_age": 1
+    },
+    "symbols": [
+      {
+        "role": "primary_site",
+        "rva": 1875952,
+        "section_start": 1830912,
+        "section_size": 533930,
+        "executable": false,
+        "prologue": []
+      },
+      {
+        "role": "secondary_site",
+        "rva": 1922752,
+        "section_start": 1830912,
+        "section_size": 533930,
+        "executable": false,
+        "prologue": []
+      },
+      {
+        "role": "primary_host",
+        "rva": 1285008,
+        "section_start": 4096,
+        "section_size": 1818943,
+        "executable": true,
+        "prologue": [
+          64,
+          83,
+          72,
+          131,
+          236,
+          32,
+          72,
+          139,
+          137,
+          232,
+          1,
+          0,
+          0,
+          72,
+          139,
+          218
+        ]
+      },
+      {
+        "role": "secondary_host",
+        "rva": 1577712,
+        "section_start": 4096,
+        "section_size": 1818943,
+        "executable": true,
+        "prologue": [
+          64,
+          83,
+          72,
+          131,
+          236,
+          32,
+          72,
+          139,
+          73,
+          56,
+          72,
+          139,
+          218,
+          72,
+          139,
+          1
+        ]
+      },
+      {
+        "role": "frame_height",
+        "rva": 1348380,
+        "section_start": 4096,
+        "section_size": 1818943,
+        "executable": true,
+        "prologue": [
+          72,
+          131,
+          236,
+          40,
+          72,
+          131,
+          193,
+          16,
+          72,
+          131,
+          57,
+          0,
+          116,
+          11,
+          232,
+          249
+        ]
+      },
+      {
+        "role": "release_host",
+        "rva": 163848,
+        "section_start": 4096,
+        "section_size": 1818943,
+        "executable": true,
+        "prologue": [
+          64,
+          83,
+          72,
+          131,
+          236,
+          32,
+          72,
+          139,
+          217,
+          131,
+          200,
+          255,
+          240,
+          15,
+          193,
+          65
+        ]
+      }
+    ],
+    "element_offset": 16
+  },
+  "source": {
+    "host_child_offset": 56,
+    "child_source_offset": 16,
+    "child_vtable_rva": 7767696,
+    "factory_vtable_rva": 7905640,
+    "recipe": "xaml_explorer_host_child_v1"
+  },
+  "topology": "system_tray_frame_v1",
+  "tray_abi": "system_tray_coordinates_x64_v1",
+  "tray_geometry": "notification_area_bounds",
+  "tray_entries": [
+    {
+      "role": "invocation_point",
+      "rva": 755212,
+      "section_start": 4096,
+      "section_size": 1613786,
+      "executable": true,
+      "prologue": [
+        64,
+        83,
+        86,
+        87,
+        72,
+        131,
+        236,
+        80,
+        15,
+        41,
+        116,
+        36,
+        64,
+        72,
+        139,
+        5
+      ]
+    },
+    {
+      "role": "icon_bounds",
+      "rva": 754912,
+      "section_start": 4096,
+      "section_size": 1613786,
+      "executable": true,
+      "prologue": [
+        72,
+        137,
+        92,
+        36,
+        32,
+        85,
+        86,
+        87,
+        72,
+        139,
+        236,
+        72,
+        131,
+        236,
+        80,
+        15
+      ]
+    },
+    {
+      "role": "screen_rect",
+      "rva": 755436,
+      "section_start": 4096,
+      "section_size": 1613786,
+      "executable": true,
+      "prologue": [
+        72,
+        137,
+        92,
+        36,
+        8,
+        72,
+        137,
+        116,
+        36,
+        32,
+        85,
+        87,
+        65,
+        84,
+        65,
+        86
+      ]
+    }
+  ]
+}

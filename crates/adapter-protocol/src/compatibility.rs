@@ -17,8 +17,9 @@ const PROFILE_BYTES: &[&[u8]] = &[
     include_bytes!("../profiles/windows11-26100.1742-x64.json"),
     include_bytes!("../profiles/windows11-22631.2861-x64.json"),
     include_bytes!("../profiles/windows11-22621.1702-x64.json"),
+    include_bytes!("../profiles/windows11-22000.318-x64-clock.json"),
     #[cfg(feature = "compatibility-lab")]
-    include_bytes!("../profiles/lab/windows11-22000.318-x64-clock.json"),
+    include_bytes!("../profiles/lab/windows11-28000.3365-x64-notification.json"),
 ];
 const MAX_PROFILE: usize = 64 * 1024;
 
@@ -121,6 +122,66 @@ pub struct SourceVtableEntry {
     pub rva: u32,
     pub prologue: [u8; 16],
 }
+/// The early primary notification island owns a separate shared host and HWND.
+/// All addresses belong to Taskbar.dll, independently of the shell child ABI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationAreaLayout {
+    pub component_offset: u32,
+    pub component_vtable_rva: u32,
+    pub shared_host_offset: u32,
+    pub child_offset: u32,
+    pub parent_offset: u32,
+    pub copy_host: SourceVtableEntry,
+    pub control_vtable_rva: u32,
+    pub control_entries: [SourceVtableEntry; 3],
+}
+impl NotificationAreaLayout {
+    pub fn validate(&self, image_size: u32) -> Result<(), String> {
+        for (offset, limit) in [
+            (self.component_offset, 0x400),
+            (self.shared_host_offset, 0x400),
+            (self.child_offset, 0x100),
+            (self.parent_offset, 0x100),
+        ] {
+            if !(8..=limit).contains(&offset) || !offset.is_multiple_of(8) {
+                return Err("通知区宿主字段超出已实现解析范围".into());
+            }
+        }
+        if self.child_offset == self.parent_offset {
+            return Err("通知区子接口与父窗口字段重叠".into());
+        }
+        for (rva, bytes) in [
+            (self.component_vtable_rva, 3 * 8),
+            (self.control_vtable_rva, 3 * 8),
+        ] {
+            if rva < 4096
+                || !rva.is_multiple_of(8)
+                || rva.checked_add(bytes).is_none_or(|end| end > image_size)
+            {
+                return Err("通知区宿主虚表超出 Taskbar 模块范围".into());
+            }
+        }
+        for entry in std::iter::once(&self.copy_host).chain(&self.control_entries) {
+            if entry.rva < 4096 || entry.rva.checked_add(16).is_none_or(|end| end > image_size) {
+                return Err("通知区宿主函数超出 Taskbar 模块范围".into());
+            }
+        }
+        Ok(())
+    }
+
+    pub fn verify_control_vtable(&self, image_base: u64, table: &[u8]) -> Result<(), String> {
+        if table.len() != self.control_entries.len() * 8 {
+            return Err("通知区引用计数虚表长度不一致".into());
+        }
+        for (slot, expected) in table.as_chunks::<8>().0.iter().zip(&self.control_entries) {
+            if image_base.checked_add(u64::from(expected.rva)) != Some(u64::from_le_bytes(*slot)) {
+                return Err("通知区引用计数虚表入口已变化".into());
+            }
+        }
+        Ok(())
+    }
+}
 impl SourceLayout {
     /// The same bounded equality is used for preferred-base disk pointers and
     /// ASLR-relocated live pointers. No pointer supplied by the table is called.
@@ -175,6 +236,8 @@ pub struct Profile {
     pub tray: Option<Module>,
     pub host: HostLayout,
     pub source: SourceLayout,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification_area: Option<NotificationAreaLayout>,
     pub topology: Topology,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tray_abi: Option<TrayAbi>,
@@ -307,6 +370,12 @@ impl Profile {
                 }
             }
         }
+        if let Some(notification) = &self.notification_area {
+            if self.source.recipe != SourceRecipe::XamlExplorerHostChildXfgV1 || tray.is_some() {
+                return Err("通知区独立宿主仅属于已实现的早期无托盘方案".into());
+            }
+            notification.validate(self.taskbar.identity.image_size)?;
+        }
         let child_slots = if self.source.child_vtable_entries.is_some() {
             13
         } else {
@@ -375,8 +444,8 @@ fn decode_profiles(sources: &[&[u8]]) -> Result<Vec<Profile>, String> {
 
 /// Validated, embedded evidence only. Registry order is not a compatibility
 /// preference: callers must select an exact module identity, never a default.
-/// Default builds include seven reviewed profiles. `compatibility-lab` also
-/// includes the early XFG clock candidate pending isolated live acceptance.
+/// Default builds include eight reviewed profiles, including primary-clock-only
+/// support. `compatibility-lab` adds a 26H1 candidate pending live acceptance.
 pub fn profiles() -> Result<&'static [Profile], String> {
     static PROFILES: OnceLock<Result<Vec<Profile>, String>> = OnceLock::new();
     PROFILES
@@ -413,6 +482,166 @@ pub fn profile_for_taskbar(identity: &ModuleIdentity) -> Result<&'static Profile
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn notification_profile() -> Profile {
+        Profile::decode(include_bytes!(
+            "../profiles/windows11-22000.318-x64-clock.json"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn next_notification_candidate_is_lab_only_and_keeps_reviewed_consumer() {
+        let candidate = Profile::decode(include_bytes!(
+            "../profiles/lab/windows11-28000.3365-x64-notification.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            profiles().unwrap().iter().any(|p| p.id == candidate.id),
+            cfg!(feature = "compatibility-lab")
+        );
+        assert_eq!(
+            profile_for_taskbar(&candidate.taskbar.identity).is_ok(),
+            cfg!(feature = "compatibility-lab")
+        );
+        assert_eq!(
+            candidate.tray_abi,
+            Some(TrayAbi::SystemTrayCoordinatesX64V1)
+        );
+        assert_eq!(
+            candidate.tray_geometry,
+            Some(TrayGeometry::NotificationAreaBounds)
+        );
+        let entries = candidate.tray_entries.as_ref().unwrap();
+        assert_eq!(entries[2].rva, 0xb86ec);
+        assert!(entries.iter().all(|entry| entry.rva != 0xa8320));
+        assert!(candidate.notification_area.is_none());
+        assert_eq!(
+            candidate.source.recipe,
+            SourceRecipe::XamlExplorerHostChildV1
+        );
+        let mut wrong = candidate.clone();
+        wrong.tray_geometry = Some(TrayGeometry::DragDropHitTesting);
+        assert!(wrong.validate().is_err());
+    }
+
+    #[test]
+    fn notification_evidence_is_optional_and_cannot_enter_a_modern_or_tray_recipe() {
+        let early = notification_profile();
+        assert_eq!(early.source.host_child_offset, 0x20);
+        assert_eq!(early.notification_area.as_ref().unwrap().child_offset, 0x28);
+        let mut previous = early.clone();
+        previous.notification_area = None;
+        previous.validate().unwrap();
+        assert!(
+            serde_json::to_value(&previous)
+                .unwrap()
+                .get("notification_area")
+                .is_none()
+        );
+        for bytes in &PROFILE_BYTES[..7] {
+            let mut modern = Profile::decode(bytes).unwrap();
+            let encoded = serde_json::to_value(&modern).unwrap();
+            assert_eq!(
+                encoded,
+                serde_json::from_slice::<serde_json::Value>(bytes).unwrap()
+            );
+            modern.tray = None;
+            modern.tray_abi = None;
+            modern.tray_geometry = None;
+            modern.tray_entries = None;
+            modern.notification_area = early.notification_area.clone();
+            assert!(modern.validate().is_err());
+        }
+        let modern = &profiles().unwrap()[0];
+        let mut mixed = early;
+        mixed.tray = modern.tray.clone();
+        mixed.tray_abi = modern.tray_abi;
+        mixed.tray_geometry = modern.tray_geometry;
+        mixed.tray_entries = modern.tray_entries.clone();
+        assert!(mixed.validate().is_err());
+    }
+
+    #[test]
+    fn notification_fields_functions_and_tables_must_stay_bounded() {
+        let original = serde_json::to_value(notification_profile()).unwrap();
+        for field in [
+            "component_offset",
+            "shared_host_offset",
+            "child_offset",
+            "parent_offset",
+        ] {
+            for invalid in [0, 7, 9, 0x1008, u32::MAX] {
+                let mut value = original.clone();
+                value["notification_area"][field] = invalid.into();
+                assert!(
+                    Profile::decode(&serde_json::to_vec(&value).unwrap()).is_err(),
+                    "{field}: {invalid}"
+                );
+            }
+        }
+        for field in ["component_vtable_rva", "control_vtable_rva"] {
+            for invalid in [0, 0x1001, u32::MAX - 7] {
+                let mut value = original.clone();
+                value["notification_area"][field] = invalid.into();
+                assert!(Profile::decode(&serde_json::to_vec(&value).unwrap()).is_err());
+            }
+        }
+        let size = original["taskbar"]["identity"]["image_size"]
+            .as_u64()
+            .unwrap() as u32;
+        for entry in 0..4 {
+            for invalid in [0xfff, size - 8, u32::MAX - 7] {
+                let mut value = original.clone();
+                let layout = &mut value["notification_area"];
+                let target = if entry == 0 {
+                    &mut layout["copy_host"]
+                } else {
+                    &mut layout["control_entries"][entry - 1]
+                };
+                target["rva"] = invalid.into();
+                assert!(Profile::decode(&serde_json::to_vec(&value).unwrap()).is_err());
+            }
+        }
+        let mut overlapping = notification_profile();
+        let layout = overlapping.notification_area.as_mut().unwrap();
+        layout.parent_offset = layout.child_offset;
+        assert!(overlapping.validate().is_err());
+        let mut truncated = original;
+        truncated["notification_area"]["control_entries"]
+            .as_array_mut()
+            .unwrap()
+            .pop();
+        assert!(Profile::decode(&serde_json::to_vec(&truncated).unwrap()).is_err());
+    }
+
+    #[test]
+    fn notification_control_table_requires_all_three_exact_relocated_entries() {
+        let layout = notification_profile().notification_area.unwrap();
+        for base in [0x180000000u64, 0x7ff700000000] {
+            let table = layout
+                .control_entries
+                .iter()
+                .flat_map(|entry| (base + u64::from(entry.rva)).to_le_bytes())
+                .collect::<Vec<_>>();
+            layout.verify_control_vtable(base, &table).unwrap();
+            for index in 0..3 {
+                let mut changed = table.clone();
+                changed[index * 8] ^= 1;
+                assert!(layout.verify_control_vtable(base, &changed).is_err());
+            }
+            assert!(
+                layout
+                    .verify_control_vtable(base + 0x10000, &table)
+                    .is_err()
+            );
+            assert!(layout.verify_control_vtable(u64::MAX, &table).is_err());
+            assert!(layout.verify_control_vtable(base, &table[..23]).is_err());
+            let mut extended = table;
+            extended.extend_from_slice(&[0; 8]);
+            assert!(layout.verify_control_vtable(base, &extended).is_err());
+        }
+    }
 
     #[test]
     fn clock_only_evidence_needs_no_fabricated_tray_entry() {
@@ -511,8 +740,9 @@ mod tests {
             "windows11-26100.1742-x64",
             "windows11-22631.2861-x64",
             "windows11-22621.1702-x64",
-            #[cfg(feature = "compatibility-lab")]
             "windows11-22000.318-x64-clock",
+            #[cfg(feature = "compatibility-lab")]
+            "windows11-28000.3365-x64-notification",
         ];
         assert_eq!(profiles.len(), expected_ids.len());
         for id in expected_ids {
@@ -570,8 +800,9 @@ mod tests {
                 "windows11-26100.1742-x64",
                 "windows11-22631.2861-x64",
                 "windows11-22621.1702-x64",
-                #[cfg(feature = "compatibility-lab")]
                 "windows11-22000.318-x64-clock",
+                #[cfg(feature = "compatibility-lab")]
+                "windows11-28000.3365-x64-notification",
             ]
         );
         for candidate in &candidates {

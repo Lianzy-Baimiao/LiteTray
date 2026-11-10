@@ -60,7 +60,8 @@ impl Override {
     }
 }
 pub(crate) struct Decorations {
-    values: [Override; 5],
+    // A combined native TextBlock has no independent bottom-row properties.
+    values: [Option<Override>; 5],
     suppressed_tooltips: Vec<Override>,
     last: Option<Applied>,
 }
@@ -80,6 +81,16 @@ impl Decorations {
     pub(crate) fn capture(
         time: &Object,
         date: &Object,
+        container: &Object,
+    ) -> Result<Self, String> {
+        Self::capture_rows(time, Some(date), container)
+    }
+    pub(crate) fn capture_combined(text: &Object, container: &Object) -> Result<Self, String> {
+        Self::capture_rows(text, None, container)
+    }
+    fn capture_rows(
+        time: &Object,
+        date: Option<&Object>,
         container: &Object,
     ) -> Result<Self, String> {
         let text = factory("Windows.UI.Xaml.Controls.TextBlock", &IID_ITextBlockStatics)?;
@@ -105,11 +116,11 @@ impl Decorations {
         };
         Ok(Self {
             values: [
-                Override::new(time, color.clone()),
-                Override::new(date, color),
-                Override::new(time, alignment.clone()),
-                Override::new(date, alignment),
-                Override::new(container, tooltip),
+                Some(Override::new(time, color.clone())),
+                date.map(|date| Override::new(date, color)),
+                Some(Override::new(time, alignment.clone())),
+                date.map(|date| Override::new(date, alignment)),
+                Some(Override::new(container, tooltip)),
             ],
             suppressed_tooltips: Vec::new(),
             last: None,
@@ -123,7 +134,11 @@ impl Decorations {
         if self.last.is_some() || !self.clean() {
             return Err("不能更换已接管时钟的提示目标".into());
         }
-        let property = self.values[4].property.clone();
+        let property = self.values[4]
+            .as_ref()
+            .expect("tooltip slot")
+            .property
+            .clone();
         let mut suppressed: Vec<Override> = Vec::new();
         for target in targets {
             if same_object(primary, target)? {
@@ -136,7 +151,7 @@ impl Decorations {
             }
             suppressed.push(Override::new(target, property.clone()));
         }
-        self.values[4] = Override::new(primary, property);
+        self.values[4] = Some(Override::new(primary, property));
         self.suppressed_tooltips = suppressed;
         Ok(())
     }
@@ -180,10 +195,13 @@ impl Decorations {
             if !changed {
                 continue;
             }
+            let Some(target) = &self.values[i] else {
+                continue;
+            };
             let value = match i {
                 0 => frame.style.top_color.as_deref().map(brush).transpose()?,
                 1 => frame.style.bottom_color.as_deref().map(brush).transpose()?,
-                2 | 3 => alignment_box(next.alignment[i - 2], &self.values[i].property)?,
+                2 | 3 => alignment_box(next.alignment[i - 2], &target.property)?,
                 _ => frame.text.tooltip.as_deref().map(boxed_text).transpose()?,
             };
             pending.push((i, value));
@@ -191,7 +209,7 @@ impl Decorations {
         // Capture every newly enabled override before the first setter. A
         // synchronous callback cannot change a later original unnoticed.
         for (i, value) in &pending {
-            let target = &mut self.values[*i];
+            let target = self.values[*i].as_mut().expect("prepared slot");
             if value.is_some() || *i == 4 {
                 target.capture()?;
             }
@@ -225,17 +243,23 @@ impl Decorations {
             }
         }
         for (i, value) in pending {
+            let target = self.values[i].as_mut().expect("prepared slot");
             if i == 4 {
-                self.values[i].set_tooltip(value.as_ref())?;
+                target.set_tooltip(value.as_ref())?;
             } else {
-                self.values[i].set(value.as_ref())?;
+                target.set(value.as_ref())?;
             }
         }
         self.last = Some(next);
         Ok(())
     }
     pub(crate) fn validate(&self) -> Result<(), String> {
-        for value in self.values.iter().chain(&self.suppressed_tooltips) {
+        for value in self
+            .values
+            .iter()
+            .flatten()
+            .chain(&self.suppressed_tooltips)
+        {
             value.validate()?;
         }
         Ok(())
@@ -245,6 +269,7 @@ impl Decorations {
         for value in self
             .values
             .iter_mut()
+            .flatten()
             .chain(&mut self.suppressed_tooltips)
             .rev()
         {
@@ -262,6 +287,7 @@ impl Decorations {
     pub(crate) fn clean(&self) -> bool {
         self.values
             .iter()
+            .flatten()
             .chain(&self.suppressed_tooltips)
             .all(|value| value.lease.as_ref().is_none_or(|lease| !lease.dirty))
     }

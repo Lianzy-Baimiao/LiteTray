@@ -232,9 +232,14 @@ impl View {
             .into_iter()
             .map(|index| fresh.objects[index].clone())
             .collect::<Vec<_>>();
-        Ok(Target {
-            id,
-            clock: (if fresh.native_clock {
+        let lease = if clock.text_layout == topology::ClockTextLayout::Combined {
+            ClockLease::capture_combined(
+                &fresh.objects[clock.time],
+                &fresh.objects[clock.container],
+                fresh.native_clock,
+            )?
+        } else {
+            (if fresh.native_clock {
                 ClockLease::capture_native
             } else {
                 ClockLease::capture
@@ -243,7 +248,10 @@ impl View {
                 &fresh.objects[clock.date],
                 &fresh.objects[clock.container],
             )?
-            .with_tooltip_targets(&fresh.objects[tooltip_target], &tooltip_nodes)?,
+        };
+        Ok(Target {
+            id,
+            clock: lease.with_tooltip_targets(&fresh.objects[tooltip_target], &tooltip_nodes)?,
         })
     }
     pub(crate) fn clock_input_element(&self) -> Result<Object, String> {

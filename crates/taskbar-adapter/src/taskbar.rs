@@ -91,7 +91,7 @@ unsafe fn prepare(request: &Prepare) -> Result<Reply, String> {
             .iter()
             .zip(&views)
             .zip(&sources)
-            .map(|((r, v), s)| BoundView::capture(r.clone(), v, &s.source))
+            .map(|((r, v), s)| BoundView::capture_bound(r.clone(), v, s.binding.clone()))
             .collect::<Result<Vec<_>, _>>()?;
         // Once registered callbacks can outlive a timed-out caller. Pin once;
         // no detached worker or remote unload is needed for this first build.

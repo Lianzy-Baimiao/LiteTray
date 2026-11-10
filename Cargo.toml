@@ -1,6 +1,6 @@
 [package]
 name = "litetray"
-version = "5.15.2"
+version = "5.16.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Native Windows taskbar, clock, calendar and weather companion"
@@ -15,8 +15,8 @@ resolver = "3"
 
 [features]
 default = []
-# Includes the early XFG clock candidate pending disposable-VM acceptance.
-# The seven previously reviewed profiles remain in the default registry.
+# Includes the 26H1 notification candidate pending VM acceptance.
+# Eight reviewed profiles, including the 21H2 primary clock, ship by default.
 # Release packages always use the default feature set.
 compatibility-lab = ["litetray-adapter-protocol/compatibility-lab"]
 

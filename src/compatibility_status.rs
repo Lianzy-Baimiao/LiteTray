@@ -527,7 +527,8 @@ pub struct RecordedAcceptance {
     pub recipe_sha256: &'static str,
     pub package_version: &'static str,
     pub package_build_id: &'static str,
-    pub published_commit: &'static str,
+    /// None for a frozen development package that was never published.
+    pub published_commit: Option<&'static str>,
     pub package_manifest_sha256: &'static str,
     pub executable_sha256: &'static str,
     pub adapter_sha256: &'static str,
@@ -555,7 +556,7 @@ const RECORDED_ACCEPTANCES: &[RecordedAcceptance] = &[
         recipe_sha256: "c550f7cc9f60f1d6d32897de0402a122c6449325b88380bf471921c24c3223bb",
         package_version: "5.15.1",
         package_build_id: "5.15.1-8e688e0f1c01",
-        published_commit: "1417f38b8d031ded3db2734fd11e82517f419d38",
+        published_commit: Some("1417f38b8d031ded3db2734fd11e82517f419d38"),
         package_manifest_sha256: "7de3103f1f05859ecf6806e4f8dd192c9189a51f049480f0c02a5a705859a1f1",
         executable_sha256: "837ebebd89c192dff94397565c1498c1007c3a5ae814eb23164a25dcf652e62a",
         adapter_sha256: "ac68fa6dbb6c9cdc0d3a4691aaf30033109a2178ad0e92603c16b84fd0db5b62",
@@ -586,7 +587,7 @@ const RECORDED_ACCEPTANCES: &[RecordedAcceptance] = &[
         recipe_sha256: "28ca9cfd9ba1f805cc3dd1e7c116a81770d497c1c424a742cc856c3739a76e1d",
         package_version: "5.15.1",
         package_build_id: "5.15.1-8e688e0f1c01",
-        published_commit: "1417f38b8d031ded3db2734fd11e82517f419d38",
+        published_commit: Some("1417f38b8d031ded3db2734fd11e82517f419d38"),
         package_manifest_sha256: "7de3103f1f05859ecf6806e4f8dd192c9189a51f049480f0c02a5a705859a1f1",
         executable_sha256: "837ebebd89c192dff94397565c1498c1007c3a5ae814eb23164a25dcf652e62a",
         adapter_sha256: "ac68fa6dbb6c9cdc0d3a4691aaf30033109a2178ad0e92603c16b84fd0db5b62",
@@ -609,6 +610,33 @@ const RECORDED_ACCEPTANCES: &[RecordedAcceptance] = &[
             AcceptedScenario {
                 scenario: ValidationScenario::TrayPrepareStop,
                 detail: "普通 Pro 24H2 的五类必需托盘区域、当前借用拖放坐标入口准备与停止通过；未激活托盘复制、菜单或悬停。这是新包在 Professional 客体的结果，不沿用旧 LTSC 的传值 Copilot 入口验收。",
+            },
+        ],
+    },
+    RecordedAcceptance {
+        profile_id: "windows11-22000.318-x64-clock",
+        recipe_sha256: "a1f32a2f93d24aee31559764c607297f36490b0b8b873c0a8843380207a0e70a",
+        package_version: "5.15.2",
+        package_build_id: "lab-package-r6-combined",
+        published_commit: None,
+        package_manifest_sha256: "c426a98962ac1828549dfe2c02a5a93699cba4c6ebdc7cd86662b736b586551f",
+        executable_sha256: "8726580eb110873d76d5cb1a1839d21210aa21db965dc90627ac7955a6bdef06",
+        adapter_sha256: "061d36559359862adb91fef60887475e9281678a747dcac001f25c6141cf7f3a",
+        popup_sha256: "b89532bf19ecb25f703031d0a99ecfc51449d8a76b7a543d0d67afc3a8bdd3a5",
+        run_id: "sandbox-20261110-161111-f88fd698",
+        nonce: "888f7f898eff4128a7a61b31dd5e3f70",
+        archive_sha256: "f19492341ac90596eca6583a766733c875907c283e85bd34942598d9af7002c0",
+        environment_scope: "基于 5.15.2 开发工作区冻结的 lab-package-r6-combined，未发布实验包；独立 Windows 11 Pro 21H2 22000.318 x64 单屏 TCG 虚拟机，Medium 普通权限。只验收主屏时钟，不代表公开 5.15.2、当前程序或其他模块的现场结果。",
+        recorded_on: "2026-11-10",
+        reference: "docs/compatibility-21h2.md",
+        scenarios: &[
+            AcceptedScenario {
+                scenario: ValidationScenario::ModuleLayout,
+                detail: "实际加载的宿主/source、独立通知区窗口归属与 XAML 结构检查通过；按真实单个 DateTimeInnerTextBlock 识别合并时钟，通知铃铛不属于文字容器。此资料不提供托盘坐标入口。",
+            },
+            AcceptedScenario {
+                scenario: ValidationScenario::ClockUpdateRestore,
+                detail: "同一文本控件三次完整双行文字及宽度 63→240→320→320→63 读回通过；停止及最终清理恢复原始文字（含方向标记）、布局、宽度、可见性和高度，原 Explorer 保持不变。产品正常退出，随后独立只读检查确认产品和测试进程已结束。未验收持续原生走时、屏幕绘制、字体、颜色、绑定或输入。",
             },
         ],
     },
@@ -673,7 +701,9 @@ fn support_profile(profile: &Profile) -> SupportProfile {
             topology: profile.topology,
             tray_abi: profile.tray_abi,
             tray_geometry: profile.tray_geometry,
-            description: if profile.tray.is_some() {
+            description: if profile.notification_area.is_some() {
+                "这份适配仅提供主屏时钟，暂不支持副屏时钟和托盘复制。启用前会再次确认当前任务栏。"
+            } else if profile.tray.is_some() {
                 "分别检查时钟和托盘所需的系统模块；启用前再次确认当前任务栏。"
             } else {
                 "这份适配资料提供时钟功能，尚未包含托盘复制。启用前会再次确认当前任务栏。"
@@ -899,6 +929,100 @@ mod tests {
                     item.scenario
                 );
             }
+        }
+    }
+
+    #[test]
+    fn notification_acceptance_is_scoped_to_the_unpublished_primary_clock_run() {
+        let profile = profiles()
+            .unwrap()
+            .iter()
+            .find(|profile| profile.id == "windows11-22000.318-x64-clock")
+            .unwrap();
+        let catalog = support_profile(profile);
+        let record = catalog.recorded_acceptance.unwrap();
+        assert_eq!(record.package_version, "5.15.2");
+        assert_eq!(record.package_build_id, "lab-package-r6-combined");
+        assert!(record.published_commit.is_none());
+        assert_eq!(record.run_id, "sandbox-20261110-161111-f88fd698");
+        assert_eq!(record.nonce, "888f7f898eff4128a7a61b31dd5e3f70");
+        assert_eq!(record.scenarios.len(), 2);
+        assert!(record.environment_scope.contains("未发布实验包"));
+        assert!(record.environment_scope.contains("只验收主屏时钟"));
+        assert!(catalog.family.description.contains("暂不支持副屏时钟"));
+        assert!(
+            catalog.historical_evidence.iter().all(|item| {
+                item.status == ValidationStatus::NotRun && item.recorded_on.is_none()
+            })
+        );
+        for item in &catalog.evidence {
+            let accepted = matches!(
+                item.scenario,
+                ValidationScenario::ModuleLayout | ValidationScenario::ClockUpdateRestore
+            );
+            assert_eq!(
+                item.status,
+                if accepted {
+                    ValidationStatus::Tested
+                } else {
+                    ValidationStatus::NotRun
+                }
+            );
+            if accepted {
+                assert_eq!(item.scope, record.environment_scope);
+                assert_eq!(item.reference, Some("docs/compatibility-21h2.md"));
+            } else {
+                assert!(item.recorded_on.is_none());
+                assert!(item.reference.is_none());
+            }
+        }
+        let export = serde_json::to_value(catalog).unwrap();
+        assert!(export["recorded_acceptance"]["published_commit"].is_null());
+        assert_eq!(
+            export["recorded_acceptance"]["executable_sha256"],
+            "8726580eb110873d76d5cb1a1839d21210aa21db965dc90627ac7955a6bdef06"
+        );
+        let published = RECORDED_ACCEPTANCES
+            .iter()
+            .find(|record| record.profile_id == "windows11-26200.8037-x64")
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(published).unwrap()["published_commit"],
+            "1417f38b8d031ded3db2734fd11e82517f419d38"
+        );
+    }
+
+    #[test]
+    fn notification_acceptance_does_not_survive_a_changed_host_contract() {
+        let original = profiles()
+            .unwrap()
+            .iter()
+            .find(|profile| profile.id == "windows11-22000.318-x64-clock")
+            .unwrap();
+        let mut renamed = original.clone();
+        renamed.system_label = "same primary-clock implementation".into();
+        assert!(recorded_acceptance(&renamed).is_some());
+        for change in 0..7 {
+            let mut profile = original.clone();
+            if change == 0 {
+                profile.notification_area = None;
+            } else {
+                let notification = profile.notification_area.as_mut().unwrap();
+                match change {
+                    1 => notification.component_offset += 8,
+                    2 => notification.component_vtable_rva += 8,
+                    3 => notification.shared_host_offset += 8,
+                    4 => notification.child_offset += 8,
+                    5 => notification.copy_host.prologue[0] ^= 1,
+                    _ => notification.control_entries[2].prologue[0] ^= 1,
+                }
+            }
+            assert!(recorded_acceptance(&profile).is_none(), "change {change}");
+            assert!(evidence(&profile).iter().all(|item| {
+                item.status == ValidationStatus::NotRun
+                    && item.recorded_on.is_none()
+                    && item.reference.is_none()
+            }));
         }
     }
 

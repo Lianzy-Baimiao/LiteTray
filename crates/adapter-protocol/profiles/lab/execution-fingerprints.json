@@ -2,16 +2,25 @@
   "algorithm": "litetray-execution-equivalence-v1",
   "entries": [
     {
-      "fingerprint": "edfbb5f89dc5aeea9b1c742439d981d9c264c3f361cf6ce92351a1125dc13f4a",
-      "profile_id": "windows11-22000.318-x64-clock",
+      "profile_id": "windows11-28000.3365-x64-notification",
       "role": "taskbar",
-      "sha256": "21e122d5561ee827534ae6ff3cf2838336d66fa9e533f13e15f94076342f6b00"
+      "sha256": "6c7ba38f1ac0ffa1661ef6c21cd20a96d56a44d07c3872e12118e929e0ddddbe",
+      "fingerprint": null,
+      "unavailable_reason": "Execution equivalence is not enabled for this experimental proposal; exact image identity only."
     },
     {
-      "fingerprint": "58a349612b9af9f5f1cc9b5074379332c8af0052561ea334e88745d17e818139",
-      "profile_id": "windows11-22000.318-x64-clock",
+      "profile_id": "windows11-28000.3365-x64-notification",
       "role": "shell",
-      "sha256": "dc24a218229828455be50ddd5af8a0c88399b74df81c9b6d563a2f78e3e66eb8"
+      "sha256": "7cda1bce4543969ab2d626b28ead3e6ce66db73d2582e1505ae780887aa0b7bc",
+      "fingerprint": null,
+      "unavailable_reason": "Execution equivalence is not enabled for this experimental proposal; exact image identity only."
+    },
+    {
+      "profile_id": "windows11-28000.3365-x64-notification",
+      "role": "tray",
+      "sha256": "aa258b28f6c7afa5d74b2baf46f2d9d6a13777bdfa608d51043a4e696724fcb2",
+      "fingerprint": null,
+      "unavailable_reason": "Execution equivalence is not enabled for this experimental proposal; exact image identity only."
     }
   ],
   "schema": 1

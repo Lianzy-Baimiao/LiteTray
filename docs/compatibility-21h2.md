@@ -1,6 +1,6 @@
 # Windows 11 21H2 适配记录
 
-目标样本为 Windows 11 Pro x64 `22000.318`。目前已完成宿主/source 的离线适配和实验构建；是否能接管原生时钟，仍须由实际客体中的控件结构和运行结果确定。实验资料不在默认构建中，不能把 XAML 宿主识别成功当作时钟、托盘已经可用。
+目标样本为 Windows 11 Pro x64 `22000.318`。已完成独立通知区域宿主解析，真实客体读到了原生时钟，并据此增加单文本时钟布局适配。5.16.0 已将此实现纳入默认构建，仅支持主屏时钟。接管更新与恢复已在独立客体通过；具体测试包、正式包复测和未测范围见文末，控件读取成功不等于完整功能通过。
 
 ## 输入与识别依据
 
@@ -58,3 +58,53 @@
 本地原始材料位于 `local/compatibility-completion-next/`：`21h2-static-r3`、`21h2-microsoft-image-check`、`21h2-child-vtable-independent.json`、`21h2-lab-package-r1-receipt.json`、`fingerprint-verify-r1.log` 及各独立审查目录。实验包仍使用开发基线版本 5.15.2，不是新的公开 Release。
 
 提交 `395961c` 的 [GitHub CI](https://github.com/Lianzy-Baimiao/LiteTray/actions/runs/42756292735) 已通过默认测试、实验目录检查、后台检测与导出、Clippy、正式构建、独立进程异常回调、磁盘导出及隔离 XAML 应用/恢复检查。该结果不代替真实任务栏验收。后期样本另见 `21h2-final-servicing/` 和 `21h2-final-separate3196-static-r1/`；前者保留版本不符的拒绝记录及全部下载预算收据。
+
+## 独立通知区域与单文本时钟
+
+只读枚举证明此实现的时钟位于 `Shell_TrayWnd → TrayNotifyWnd → DesktopWindowContentBridge`，与之前读取的任务栏图标 XAML 岛分离。精确 Taskbar 映像及 PDB 的构造/调用证据给出站点到组件、组件到通知宿主的字段链；解析器先验证具体组件虚表、共享引用控制块和复制/释放入口，再保有宿主，按该实现的准确 IID 查询 child/source。source 的真实父窗口必须与宿主保存的 TrayNotifyWnd 相同，三层窗口还必须属于同一 Explorer UI 线程。
+
+`notification_area` 是可选实现资料，只允许与早期 XFG source 和不含托盘入口的组合使用；现代直接父窗口路径保持原来的检查。活动绑定仍核验显示器、工作区和 DPI。停止恢复则核验原窗口生命周期、父子关系和 source 内容，不因旧显示快照变化阻止当前对象恢复。这里修正的是绑定恢复接口的一致性；它不是已经复现的 clock-only Stop 故障，当前通知区候选也没有托盘重挂接能力。
+
+只读运行 `sandbox-20261110-152135-3302b17c` 返回完整 108 节点树（面板内 106 个），无 source/几何错误，Explorer `4788`、UI 线程 `1700` 保持不变。实际时钟为 `SystemTray.DateTimeIconContent → ContainerGrid → DateTimeInnerTextBlock`，时间和日期同在一个 TextBlock。旧解析器要求两个文本控件，因此本次只读结果仍明确记录 `clock=null`，没有执行接管。原始检查 SHA256：`87ee8118ab8e3b490048aa5bb0552fd2ccdc1b4d1cf9d35e65f96df643bce085`。
+
+新增适配按上述真实结构选择 `text_layout=combined`，要求文字容器独占一个 TextBlock、可见且尺寸有效，并位于能与通知铃铛分离的时钟 IconView 内；混合两种布局、重复文本、未知父类或铃铛进入文字容器均拒绝。未按 Windows 版本号放行。仅保存一份原文本、字体和宽度，注册一个原生文字刷新监听；自定义两行合并显示，停止时恢复系统最近一次原生更新。此原生控件的两行共用第一行的字体、颜色和对齐，不能分别设置两行样式。
+
+五项独立通知绑定检查和六项单文本时钟检查已在实际发布模式 EXE 的隔离 XAML 进程通过，共 179 项；未访问 Explorer。单文本结构回归在修复前失败，修复后通过；默认与实验工作区、Clippy 和实际客体结果另行记录，不以隔离控件测试代替任务栏实测。证据位于 `local/compatibility-completion-next/combined-clock/`，独立审查在同目录 `independent-review.md`。新候选冻结于 `lab-package-r6-combined/`，EXE `8726580eb110873d76d5cb1a1839d21210aa21db965dc90627ac7955a6bdef06`，适配器 `061d36559359862adb91fef60887475e9281678a747dcac001f25c6141cf7f3a`。
+
+## 5.16.0 纳入默认支持与实际验收
+
+21H2 配置已从实验目录移至默认目录，默认八组、实验九组；26H1 仍只在显式实验构建中。识别依据仍为完整模块身份或严格实现等价规则、具体宿主接口和实际控件结构。只允许主屏时钟；显示范围选所有显示器时保留已选主屏，仅选副屏则明确提示改为主屏或所有显示器，不修改保存设置。托盘复制仍不可用。
+
+冻结实验包 R6 在运行 `sandbox-20261110-161111-f88fd698` 完成真实主屏时钟三次更新：`LT LIVE 01\nSandbox check A`、`LT LIVE 02\nSandbox check B`、`LT LIVE 03\nSandbox check C`；宽度为 `240 → 320 → 320` DIP。两种语义文字指向同一 DateTimeInnerTextBlock，停止及最终清理后完整原生文字、63 DIP 宽度、可见性、节点身份和高度恢复。原 Explorer `4788`、会话 `2`、启动时间 `2026-11-10T05:02:17.3889956Z` 保持不变，产品子进程正常退出 0。独立 R11 只读收据进一步确认测试工作进程和产品均已退出，没有残留 LiteTray 进程。
+
+| 证据 | SHA-256 |
+| --- | --- |
+| R6 包清单 | `c426a98962ac1828549dfe2c02a5a93699cba4c6ebdc7cd86662b736b586551f` |
+| 实际时钟报告 | `45ef94624571dd3f709adbac289865fe6e8ab32695dd460dfc2ee88ef3ad04b1` |
+| R10 客体归档 | `f19492341ac90596eca6583a766733c875907c283e85bd34942598d9af7002c0` |
+| R11 退出确认收据 | `68b9b5bdab9958f01efd84f2428b231c773f4d4ece85015503c18373355b7e01` |
+
+R10 nonce 为 `888f7f898eff4128a7a61b31dd5e3f70`。外层运行、普通权限令牌、用户/会话、程序参数、脚本及包哈希、当前 nonce 的授权/完成标记均经过独立核对；17 个当前运行文件另与归档字节逐一比较。报告与标准输出一致。测试包是未发布的 **5.15.2 开发基线**，不能冒充公共 5.15.2 安装包或随后正式 5.16.0 的结果。内置验收记录明确该包身份，`published_commit=null`，仅登记模块/布局和时钟更新/恢复两项。
+
+局部测试不覆盖托盘、真实鼠标/键盘输入、副屏、物理插拔、混合 DPI 或所有累计更新。字体/颜色冲突和原生刷新回调有隔离测试，不属于本次三帧客体验收。真实客体通过也不扩大为全部 Windows 11 或 ARM64 支持。原始只读失败、初始控件布局不匹配和所有历史材料均保留。
+
+对应本地材料：`fresh21/clock-only-combined-r10-acceptance.json`、`combined-clock-harness-r1/r10-independent-actual-review.md`、`primary-scope-independent-review.md`。正式默认包复测结果在后续条目单独登记。
+
+### 正式默认包复测
+
+同一份 5.16.0 默认二进制在真实 `22000.318` 客体重新执行了只读识别和时钟接管验收。只读运行 `sandbox-20261110-163651-a4fc6d63` 的五项命令通过，隔离 XAML 179 项通过，实际控件检查 SHA-256 为 `21abd526e26b0f5fa855fd4081ca9555a81815deb39a459adebdacda105a2c9a`。
+
+随后运行 `sandbox-20261110-164157-04be8fb5`，nonce `efe8a3ca8fd741cea8d25499651bca74`：三次合并文字与 `240 → 320 → 320` DIP 宽度读回正确；停止后恢复原生完整文字及 63 DIP 宽度。产品正常退出，普通权限工作进程 `3312` 完成后已确认不存在，Explorer 仍为原 `4788`。此次复测没有托盘、物理输入或副屏操作。
+
+| 正式候选身份与结果 | SHA-256 |
+| --- | --- |
+| LiteTray.exe | `477946e5d7403b337b0b19b9177ee7c256f85fc244b228d8c0cfffa0af7d72b9` |
+| taskbar adapter | `16a2cc8ffcff944806797926992b66bb18469fa644071061a6a86154f0b15509` |
+| popup hook | `cf29dad7037d8eb4de2e2b2474632b62618fd47c5f0b54a9c40c4dd8bed84145` |
+| 测试包清单 | `40989be9ef3eafc6d528224f6f37e6638f930463478b6678c185a616bdad145a` |
+| 实际时钟报告 | `ffa0d627cb6e76d4db6aa3459eeeed966677a345e305b14830cb9e3caddb8c93` |
+| 客体归档 | `ffc4c23741e1dde12de1ea769ca0c7186d6dc0f904398bc7e16f247717423bed` |
+
+正式安装包使用这三份冻结二进制，文档补充不会重新编译它们。内置验收表保留先前 R6/R10 的准确包绑定，后续正式包的本次结果在本节单独登记，不篡改旧验收记录。可复核材料为 `fresh21/clock-only-default516-r13-acceptance.json` 及同目录的实际报告、传输与工作进程退出收据。
+
+当前源代码默认及实验工作区分别 **317 项通过、9 项显式忽略**，Python 解析器 **68 项通过**，Clippy 无警告。正式程序另通过 **179 项隔离 XAML**、后台报告导出和异常回调生命周期检查。默认程序对 26H1 离线样本明确返回未识别，未启用实验配置。上述检查不替代未执行的输入或多屏矩阵。

@@ -339,6 +339,7 @@ pub(crate) fn run(owner: Owner, frame: Frame) -> Result<Vec<&'static str>, Strin
     checks.extend(interactive_routing_checks(owner.clone(), frame.clone())?);
     checks.extend(runtime_guard_checks(owner.clone(), frame.clone())?);
     checks.extend(crate::window_guard::self_test()?);
+    checks.extend(crate::notification_checks::run()?);
     checks.extend(visibility_checks(owner, frame)?);
     Ok(checks)
 }

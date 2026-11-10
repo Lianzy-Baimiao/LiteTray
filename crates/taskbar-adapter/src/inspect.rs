@@ -84,6 +84,30 @@ pub(crate) struct SharedHost {
     pub(crate) value: [usize; 2],
     release: ReleaseHost,
 }
+impl SharedHost {
+    /// Both entries and the source shared_ptr/control block must be validated
+    /// by the implementation-specific caller on the owning taskbar thread.
+    pub(crate) unsafe fn copy_from(
+        source: usize,
+        copy: usize,
+        release: usize,
+    ) -> Result<Self, String> {
+        unsafe {
+            type CopyHost =
+                unsafe extern "system" fn(*mut [usize; 2], *const [usize; 2]) -> *mut [usize; 2];
+            let copy: CopyHost = std::mem::transmute(copy);
+            let mut host = Self {
+                value: [0; 2],
+                release: std::mem::transmute::<usize, ReleaseHost>(release),
+            };
+            copy(&mut host.value, source as *const _);
+            if host.value[0] == 0 || host.value[1] == 0 {
+                return Err("通知区域宿主尚未就绪".into());
+            }
+            Ok(host)
+        }
+    }
+}
 impl Drop for SharedHost {
     fn drop(&mut self) {
         if self.value[1] != 0 {
@@ -93,12 +117,12 @@ impl Drop for SharedHost {
         }
     }
 }
-pub(crate) unsafe fn host(
+pub(crate) unsafe fn taskband_site(
     hwnd: HWND,
     secondary: bool,
     module: usize,
     layout: &HostLayout,
-) -> Result<SharedHost, String> {
+) -> Result<usize, String> {
     unsafe {
         let task_window = if secondary {
             FindWindowExW(hwnd, null_mut(), wide("WorkerW").as_ptr(), std::ptr::null())
@@ -130,7 +154,17 @@ pub(crate) unsafe fn host(
                 break;
             }
         }
-        let matched = matched.ok_or("TaskBand 接口布局不匹配")?;
+        matched.ok_or("TaskBand 接口布局不匹配".into())
+    }
+}
+pub(crate) unsafe fn host(
+    hwnd: HWND,
+    secondary: bool,
+    module: usize,
+    layout: &HostLayout,
+) -> Result<SharedHost, String> {
+    unsafe {
+        let matched = taskband_site(hwnd, secondary, module, layout)?;
         let get: GetHost = std::mem::transmute(
             module
                 + layout
@@ -218,10 +252,7 @@ pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
                         },
                     },
                 );
-                let binding = crate::island::Binding::capture(hwnd, &source.source, &root);
-                if let Err(error) = &binding {
-                    report.geometry_error = Some(error.clone());
-                }
+                let binding = source.binding.clone();
                 let model_property = crate::tray::Field::DataContext.property()?;
                 let mut index = 0;
                 let mut tray_depth = None;
@@ -232,8 +263,7 @@ pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
                     if info.class_name == "SystemTray.SystemTrayFrame" {
                         tray_depth = Some(info.depth);
                     }
-                    if let Ok(binding) = &binding
-                        && tray_depth.is_some()
+                    if tray_depth.is_some()
                         && let Ok(bounds) = crate::input::bounds(node, binding.window())
                     {
                         let model_identity = crate::tray::read(node, &model_property)?
@@ -289,10 +319,16 @@ pub unsafe fn run(layout: &HostLayout, nonce: u64) -> InspectResponse {
                 Ok(tree) => {
                     report.truncated = tree.truncated;
                     for element in &tree.elements {
-                        if element.name == "TimeInnerTextBlock" {
+                        if matches!(
+                            element.name.as_str(),
+                            "TimeInnerTextBlock" | "DateTimeInnerTextBlock"
+                        ) {
                             report.time_elements.push(element.name.clone());
                         }
-                        if element.name == "DateInnerTextBlock" {
+                        if matches!(
+                            element.name.as_str(),
+                            "DateInnerTextBlock" | "DateTimeInnerTextBlock"
+                        ) {
                             report.date_elements.push(element.name.clone());
                         }
                     }
