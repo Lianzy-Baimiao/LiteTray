@@ -24,6 +24,14 @@
 
 检查和接管现在使用相同的 source 解析路径。检查过程中保有宿主、子宿主和 source 引用，直到控件遍历结束。
 
+## 后期 21H2 样本的共性
+
+另行核对最终维护更新 KB5044280 的文件清单。旧清单只提供版本和大小，没有逐文件 SHA。微软符号服务器取得的 Taskbar `22000.3260` 与 ExplorerExtensions `423.29300.0.0` 分别符合清单；Taskbar 还有有效的微软嵌入签名。清单要求的 twinui `22000.3079` 地址实际返回 `22000.3196`，因此保留拒绝记录，没有把它冒充为所需版本。
+
+随后把微软提供的 `3196` shell 作为独立静态样本，使用它自己的 PDB、虚表和入口进行检查。它同样通过 `xaml_explorer_host_child_xfg_v1`，字段链仍为 `+0x20 / +0x10`，不需要新增按系统版本号判断的解析分支。但 13 个入口中的 5 个前缀已变化，旧地址和入口字节不能直接复用。
+
+这证明的是结构解析规则可复用。该组合没有已安装系统的一致性证据，不代表 `3260` 已完成运行验收。托盘矩形入口仍未通过，未生成生产资料。全程新增下载约 73.8 MiB，包含系统模块、三个 PDB 和元数据，没有下载 ISO 或 MSU。
+
 ## 验证范围
 
 - 默认 Rust 工作区和显式实验构建各有 302 项通过、9 项显式忽略；Python 离线解析器 64 项通过。
@@ -34,3 +42,5 @@
 所有实际接管测试仅在隔离客体执行。默认完整检查仍要求时钟和托盘，不会因托盘不支持而静默降级成通过。
 
 本地原始材料位于 `local/compatibility-completion-next/`：`21h2-static-r3`、`21h2-microsoft-image-check`、`21h2-child-vtable-independent.json`、`21h2-lab-package-r1-receipt.json`、`fingerprint-verify-r1.log` 及各独立审查目录。实验包仍使用开发基线版本 5.15.2，不是新的公开 Release。
+
+提交 `395961c` 的 [GitHub CI](https://github.com/Lianzy-Baimiao/LiteTray/actions/runs/42756292735) 已通过默认测试、实验目录检查、后台检测与导出、Clippy、正式构建、独立进程异常回调、磁盘导出及隔离 XAML 应用/恢复检查。该结果不代替真实任务栏验收。后期样本另见 `21h2-final-servicing/` 和 `21h2-final-separate3196-static-r1/`；前者保留版本不符的拒绝记录及全部下载预算收据。

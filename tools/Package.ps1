@@ -91,6 +91,7 @@ $documents += @('docs/hotplug-recovery-5.15.0.md')
 $documents += @('docs/images/compatibility-5.15.0-zh-light.png','docs/images/compatibility-5.15.0-en-light.png')
 $documents += @('docs/images/compatibility-5.15.1-zh-light.png','docs/images/compatibility-5.15.1-en-light.png')
 $documents += @('docs/compatibility-completion-5.15.1.md')
+$documents += @('docs/compatibility-21h2.md','docs/windows11-coverage-next-research.md')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null
