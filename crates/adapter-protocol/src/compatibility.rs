@@ -79,6 +79,22 @@ pub enum SourceRecipe {
     /// writable vtable. Every callable slot is checked before querying it.
     XamlExplorerHostChildXfgV1,
 }
+/// Private interface identity is independent of the child field layout.
+/// Both identities have appeared on the reviewed 13-slot XFG layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChildInterface {
+    XamlExplorerHostChildEef8V1,
+    XamlExplorerHostChildEc97V1,
+}
+impl ChildInterface {
+    pub const fn iid(self) -> u128 {
+        match self {
+            Self::XamlExplorerHostChildEef8V1 => 0xeef8f632_6c0d_5fcb_b6a1_354819e51f3b,
+            Self::XamlExplorerHostChildEc97V1 => 0xec97afd0_5c0d_581b_9508_074773c6f1e0,
+        }
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Topology {
@@ -108,6 +124,9 @@ pub enum TrayGeometry {
 #[serde(deny_unknown_fields)]
 pub struct SourceLayout {
     pub recipe: SourceRecipe,
+    /// Omission preserves the original built-in profile and its serialized hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_interface: Option<ChildInterface>,
     pub host_child_offset: u32,
     pub child_source_offset: u32,
     pub child_vtable_rva: u32,
@@ -183,6 +202,12 @@ impl NotificationAreaLayout {
     }
 }
 impl SourceLayout {
+    pub fn interface_contract(&self) -> ChildInterface {
+        self.child_interface.unwrap_or(match self.recipe {
+            SourceRecipe::XamlExplorerHostChildV1 => ChildInterface::XamlExplorerHostChildEc97V1,
+            SourceRecipe::XamlExplorerHostChildXfgV1 => ChildInterface::XamlExplorerHostChildEef8V1,
+        })
+    }
     /// The same bounded equality is used for preferred-base disk pointers and
     /// ASLR-relocated live pointers. No pointer supplied by the table is called.
     pub fn verify_child_vtable(&self, image_base: u64, table: &[u8]) -> Result<(), String> {
@@ -357,6 +382,8 @@ impl Profile {
                 if self.host.element_offset.is_none()
                     || self.source.factory_vtable_rva.is_none()
                     || self.source.child_vtable_entries.is_some()
+                    || self.source.interface_contract()
+                        != ChildInterface::XamlExplorerHostChildEc97V1
                 {
                     return Err("现代子宿主必须包含已验证的工厂虚表".into());
                 }
@@ -488,6 +515,45 @@ mod tests {
             "../profiles/windows11-22000.318-x64-clock.json"
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn child_interface_is_independent_of_xfg_layout_and_keeps_old_profile_bytes() {
+        for bytes in PROFILE_BYTES {
+            let profile = Profile::decode(bytes).unwrap();
+            assert!(profile.source.child_interface.is_none());
+            assert_eq!(
+                serde_json::to_value(&profile).unwrap(),
+                serde_json::from_slice::<serde_json::Value>(bytes).unwrap()
+            );
+        }
+        let early = notification_profile();
+        assert_eq!(
+            early.source.interface_contract(),
+            ChildInterface::XamlExplorerHostChildEef8V1
+        );
+        assert_eq!(
+            early.source.interface_contract().iid(),
+            0xeef8f632_6c0d_5fcb_b6a1_354819e51f3b
+        );
+        // A synthetic protocol fixture, not a new supported module profile.
+        let mut later = serde_json::to_value(&early).unwrap();
+        later["source"]["child_interface"] = "xaml_explorer_host_child_ec97_v1".into();
+        let decoded = Profile::decode(&serde_json::to_vec(&later).unwrap()).unwrap();
+        assert_eq!(decoded.source.recipe, early.source.recipe);
+        assert_eq!(
+            decoded.source.interface_contract(),
+            ChildInterface::XamlExplorerHostChildEc97V1
+        );
+        assert_eq!(
+            decoded.source.interface_contract().iid(),
+            0xec97afd0_5c0d_581b_9508_074773c6f1e0
+        );
+        later["source"]["child_interface"] = "unknown_interface".into();
+        assert!(Profile::decode(&serde_json::to_vec(&later).unwrap()).is_err());
+        let mut modern = Profile::decode(PROFILE_BYTES[0]).unwrap();
+        modern.source.child_interface = Some(ChildInterface::XamlExplorerHostChildEef8V1);
+        assert!(modern.validate().is_err());
     }
 
     #[test]

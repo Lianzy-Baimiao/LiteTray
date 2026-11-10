@@ -93,6 +93,8 @@ $documents += @('docs/images/compatibility-5.15.1-zh-light.png','docs/images/com
 $documents += @('docs/compatibility-completion-5.15.1.md')
 $documents += @('docs/compatibility-21h2.md','docs/windows11-coverage-next-research.md')
 $documents += @('crates/adapter-protocol/profiles/windows11-22000.318-x64-clock.json')
+$documents += @('docs/compatibility-child-contracts.md','docs/compatibility-release-5.16.0.md','docs/windows11-arm64-test-environment.md')
+$documents += @('docs/compatibility-release-5.16.1.md')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null

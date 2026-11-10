@@ -2,6 +2,8 @@
 
 **5.16.0 新增 [21H2 22000.318 主屏时钟](compatibility-21h2.md)，默认资料增至八组。** 该实现使用独立通知区域和单文本时钟；仅主屏时钟具备文字更新、宽度变化和停止恢复证据，副屏与托盘暂不支持。选择所有显示器时仅应用已选主屏，仅选副屏会提示修改显示范围。两行共用第一行样式。26H1 仍为实验配置，ARM64 尚未实现。以下各旧版本记录保留其原始范围。
 
+5.16.0 后续开发中的验收目录已接入[正式二进制在 21H2 与普通 Pro 24H2 的结果](compatibility-release-5.16.0.md)，并在导出报告中保留按运行批次排列的 `recorded_acceptances`。每个场景使用最近一次实际完成该场景的记录，不会用新一轮局部复测改写其他场景的测试包或系统范围。已有 5.16.0 发布文件保持原样。ARM64 与 26H1 的环境依赖见[测试环境核查](windows11-arm64-test-environment.md)。
+
 5.13.0 开始将系统兼容资料集中到内置档案。自 5.14.2 起默认包含 [Windows 11 26300.9711 x64](../crates/adapter-protocol/profiles/windows11-26300.9711-x64.json)、[26300.9818 x64](../crates/adapter-protocol/profiles/windows11-26300.9818-x64.json)、[25H2 26200.8457 x64](../crates/adapter-protocol/profiles/windows11-26200.8457-x64.json)、[25H2 26200.8037 x64](../crates/adapter-protocol/profiles/windows11-26200.8037-x64.json)、[Enterprise LTSC 2024 Evaluation 26100.1742 x64](../crates/adapter-protocol/profiles/windows11-26100.1742-x64.json)、[22H2 22621.1702 x64](../crates/adapter-protocol/profiles/windows11-22621.1702-x64.json) 和 [23H2 22631.2861 x64](../crates/adapter-protocol/profiles/windows11-22631.2861-x64.json) 七组精确模块资料；宿主 EXE、Explorer 适配器及私有宿主隔离测试共同使用同一套选择规则。
 
 **5.15.0 改为按模块实现识别和功能协商，上述七组是参考实现与实测记录。** 当前模块先核验完整身份；只有明确元数据变化、完整代码/数据/布局保持相同时才允许实现等价匹配。任务栏宿主、XAML 容器、托盘模块各自识别并按已实现的接口组合，时钟与托盘分别判断。详见[识别规则与边界](module-recognition.md)。验收范围仍按功能和场景分别记录。 新增 22H2 和 23H2 在两台独立安装客体通过六项检查及独立复核后进入默认目录。六组新增资料分别取得主屏时钟文字/宽度更新、停止恢复和托盘入口准备/停止证据；9711 保留历史记录。日历点击、滚轮音量、实际托盘复制及菜单/悬停、多屏和混合 DPI 尚未完成验收。各组证据与所测二进制身份见 [22H2 / 23H2 记录](compatibility-22h2-23h2.md)、[9818 兼容记录](compatibility-9818.md)、[25H2 虚拟机记录](compatibility-8457.md)及 [8037 / LTSC 记录](compatibility-next-versions.md)。

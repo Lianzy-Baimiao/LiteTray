@@ -1,0 +1,856 @@
+{
+  "taskbar": {
+    "code": {
+      "313248": "40534883ec20488b8970020000488bda488b0149ba703ad35a85b669d7488b80f0030000ff1536091800488bc34883c4205bc3",
+      "358944": "40534883ec20488b4938488bda488b0149ba70215d1457074d98488b8018010000ff15b9561700488bc34883c4205bc3",
+      "128820": "40534883ec20488bd983c8fff00fc1410883f80174064883c4205bc3488b0149ba70b1dc704f2745a5488b00ff159ad91a0083c8fff00fc1430c83f80175d7488b0349ba705adb3a5a1f249e488b4008488bcb4883c4205b48ff256dd91a00",
+      "128916": "488321004883610800488b42084885c07404f0ff4008488b02488901488b420848894108488bc1c3",
+      "306832": "4883ec284c8bc2488d91d0020000498bc8e8ee48fdff498bc04883c428c3",
+      "319824": "4883ec284c8bc2488d9140010000498bc8e82e16fdff498bc04883c428c3",
+      "1294716": "4883ec284883c12033c04839017405e8b810f6ff4883c428c3",
+      "643656": "4883ec38488b05b50d1b004833c44889442428488b09c644242000488b0149ba7041d11cf8a7ccd0488b4060488d542420ff1581fe120085c079088bc8e80690ffffcc8a442420488b4c24284833cce8147dfaff4883c438c3"
+    },
+    "data": {
+      "1931024": "90ae048001000000",
+      "1933864": "50e1048001000000",
+      "1932856": "0021118001000000",
+      "2022512": "c0be138001000000"
+    },
+    "symbols": [
+      {
+        "decorated_name": "?_Decref@_Ref_count_base@std@@QEAAXXZ",
+        "rva": 128820
+      },
+      {
+        "decorated_name": "??0?$shared_ptr@VTaskbarHost@@@std@@QEAA@AEBV01@@Z",
+        "rva": 128916
+      },
+      {
+        "decorated_name": "__security_check_cookie",
+        "rva": 282544
+      },
+      {
+        "decorated_name": "?GetTaskbarHost@TrayUI@@UEBA?AV?$shared_ptr@VTaskbarHost@@@std@@XZ",
+        "rva": 306832
+      },
+      {
+        "decorated_name": "?GetTaskbarHost@CTaskBand@@UEBA?AV?$shared_ptr@VTaskbarHost@@@std@@XZ",
+        "rva": 313248
+      },
+      {
+        "decorated_name": "?GetTaskbarHost@CSecondaryTray@@UEBA?AV?$shared_ptr@VTaskbarHost@@@std@@XZ",
+        "rva": 319824
+      },
+      {
+        "decorated_name": "?GetTaskbarHost@CSecondaryTaskBand@@UEBA?AV?$shared_ptr@VTaskbarHost@@@std@@XZ",
+        "rva": 358944
+      },
+      {
+        "decorated_name": "?throw_hresult@winrt@@YAXUhresult@1@@Z",
+        "rva": 615056
+      },
+      {
+        "decorated_name": "?HasFocus@?$consume_Windows_Internal_Shell_XamlExplorerHost_IXamlExplorerHostChildWindow@UIXamlExplorerHostChildWindow@XamlExplorerHost@Shell@Internal@Windows@winrt@@@impl@winrt@@QEBA_NXZ",
+        "rva": 643656
+      },
+      {
+        "decorated_name": "?HasFocus@TaskbarHost@@QEAA_NXZ",
+        "rva": 1294716
+      },
+      {
+        "decorated_name": "__guard_xfg_dispatch_icall_fptr",
+        "rva": 1888512
+      },
+      {
+        "decorated_name": "??_7TrayUI@@6BITrayComponentHost@@@",
+        "rva": 1930016
+      },
+      {
+        "decorated_name": "??_7CTaskBand@@6BITaskListWndSite@@@",
+        "rva": 1931848
+      },
+      {
+        "decorated_name": "??_7CSecondaryTray@@6BISecondaryTray@@@",
+        "rva": 1933584
+      },
+      {
+        "decorated_name": "??_7CSecondaryTaskBand@@6BITaskListWndSite@@@",
+        "rva": 2022232
+      },
+      {
+        "decorated_name": "__security_cookie",
+        "rva": 2416648
+      }
+    ],
+    "imports": {},
+    "pointers": {
+      "1932856": 1122560,
+      "2022512": 1294016
+    }
+  },
+  "shell": {
+    "code": {
+      "1553472": "488d41f048f7d9481bc94823c8e922cbf7ff",
+      "229520": "4885c94c8d41f8b8080000004c0f44c0498b084885c90f88dadb2000488d5101488bc1f0490fb110488bc875e68bc2c3",
+      "1014672": "488d41f048f7d9481bc94823c8e906020000",
+      "1699312": "488d41f048f7d9481bc94823c8e98a09",
+      "3416080": "488d41f048f7d9481bc94823c8e92e05",
+      "3416112": "488d41f048f7d9481bc94823c8e98a05",
+      "4338496": "40534883ec30488bda488d41f048f7d9",
+      "1338368": "4883ec384c8bd1f30f6f12f30f2cd20f",
+      "1023232": "40534883ec20488bda48832200488d41f048f7d9481bc94823c8488d542430e82c000000488b084883200048890b48837c2430000f85c27b1b0033c04883c4205bc3cc8b442430ebf3",
+      "1028032": "48895424104883ec28488d41f048f7d9",
+      "4338400": "4883ec28488d414c41b85c0000004885",
+      "4338608": "4883ec28488d41f048f7d9481bc94823",
+      "192352": "4c8bdc49895b1049897318574883ec20",
+      "1004396": "48894c2408555356574154415541564157488bec4883ec38498bf8488bf24c8bf9488d0514866b0048894110488d05b1866b0048894118b9010000008bc1f00fc105ee076c0049894f08488d05634f6b00498907498d4f20e85bebffff4533ed4d896f284d896f304d8d77384d892e4d8d67404d892c24488b0fe8c9d8ffff498947484989775045886f5845896f5c4d896f604d896f684d896f70498b5720488d4d50e8b0d6ffff488d45504c3bf00f84d3b91b004d392e0f85bcb91b00488b4d50498bc54889455049890e4885c00f85bcb91b00498b0e488b0149ba7082d970908e31f3498b5750488b4018ff15e15e570085c00f88a5b91b00498b0e488b0149ba7069595a63b658fe498bd4488b4020ff15bc5e570085c00f8888b91b00488d0545ef6b00488945f0f048ff0539ef6b004c392d2aef6b000f848c000000488d5558488d0d19ef6b00e88cae070090f048ff0d13ef6b00488b5558488d4d60e88ad5ffff904c396d587409488d4d58e8ce1b0000488b4d60488b0149ba7032db50078e98b7b201488b4038ff15415e570085c0785aba08000000498b0c2448ff15252372000f1f44000090488d4d60e88e1b000090498bc74883c438415f415e415d415c5f5e5b5dc3ccf048ff0d98ee6b00488d05d9ad0700488945e84c8d45e8488d5558e8f01bf7ffe968ffffff8bc8e8ac84240090",
+      "1027696": "4883ec284c8bd24c8bc9498bca488d15fc885d00e847e8ffff4533c084c07528488d15d9885d00e834e8ffff84c07509498bc04883c428c3cc498d411849f7d94d1bc04c23c0ebe8498d4110ebef",
+      "1021648": "488b01482b027508488b4108482b42084885c0740432c0c3ccb001c3",
+      "1589904": "488d05a1f65000c7020200000048894208488bc2c3",
+      "1015668": "48895c24084889742410574883ec20488b01498bf0488bfa488bd949ba70e15e5edb1714c9488b4030ff159d3357004889064885c07567488d1596b35d00488bcfe81617000084c00f855a941b00488d15afb35d00e80217000084c00f8583941b00488d155bb65d00e8ee16000084c00f84bc941b00488bcbe80230000048890648f7d81bc0f7d0250e000780488b5c2430488b7424384883c4205fc3cc488b53084885d20f8877941b00488d4a01488bc2f0480fb14b08488bd075e533c0ebcc",
+      "2823196": "488b0349ba7008de7489b72cd5488b4038488bcbff150a9f3b00488906488b53084885d27854488d4a01488bc2f0480fb14b08488bd075e9e9d86be4ff488b0349ba70095534ea1e9cfe488b4018488bcbff15cd9e3b00488906488b53084885d27817488d4a01488bc2f0480fb14b08488bd075e9e99b6be4ffb801000000f00fc1441218e98b6be4ff488b0349ba706b553a052f01e6488b004c8bc6488bd7488bcbff157b9e3b0090e9366be4ff",
+      "1583776": "b802400080c3",
+      "2382982": "ba01000000f00fc1540918ffc2e92524dfff",
+      "1015208": "48895c2408574883ec20488bd9e81e0100008bf885c0740e488b5c24308bc74883c4205fc3ccba01000000448bc24c8743084885db74e1488b0b488b410849ba70f2583e51aeb1a3488bcbff1547355700ebc5",
+      "1015512": "40534883ec20488b41084885c07815488d50fff0480fb1510875ef8bc24883c4205bc3cc488d0c0083cbfff00fc1591883eb0174048bc3ebe4e86a663200ebf5",
+      "4318592": "48895c2408574883ec20488bd983cffff00fc1791c83ef01751c4885c97417488d0dfa753900e8b5bacdff8d5720488bcbe806a2d6ff488b5c24308bc74883c4205fc3cc",
+      "1024096": "4883ec2883c8fff00fc10183e801740885c00f88d6791b004883c428c3ccebf8",
+      "2824782": "48ff15b38d3b000f1f440000cc",
+      "1607612": "e967050000",
+      "1609000": "e9bb010000",
+      "1609448": "ff25b2184e00",
+      "1023312": "488bc44889581048897018574883ec20488bda488b7c24284883600800488d7120488d5008488bcee85b00000084c00f85897b1b00488364243000488b0e488b0149ba70f3555029ae158b488d542430488b4030ff159615570085c0781c488b442430488903488bc3488b5c2438488b7424404883c4205fc3cc8bc8e83f3c2400cc",
+      "1023448": "48895c2420574883ec20488b09488bfa483b0a741d4885c9740a48833a000f852e7b1b0032c0488b5c24484883c4205fc3ccb001ebf0",
+      "2824462": "41b99f1307804c8d05e5213e00ba45000000488bcfe8e086e7ffcc",
+      "2824444": "488d4c2430e8aa57e4ff90e92e84e4ffcccc"
+    },
+    "data": {
+      "7157632": "d0af97ec0d5c1b589508074773c6f1e0",
+      "7157616": "29a8d530a47f264083bbd75bae4ea99e",
+      "6895928": "d0af97ec0d5c1b589508074773c6f1e029a8d530a47f264083bbd75bae4ea99e",
+      "7156552": "e0e286af2db16a4c9c5ad7aa65101e90",
+      "7156600": "0000000000000000c000000000000046",
+      "7157304": "3800000000000000c000000000000046"
+    },
+    "symbols": [
+      {
+        "decorated_name": "winrt::impl::produce<winrt::Windows::Internal::Shell::XamlExplorerHost::implementation::XamlExplorerHostChildWindow,winrt::Windows::Internal::Shell::XamlExplorerHost::IXamlExplorerHostChildWindow>::get_HasFocus",
+        "rva": 192352
+      },
+      {
+        "decorated_name": "winrt::impl::produce_base<std::experimental::coroutine_traits<winrt::Windows::Foundation::IAsyncAction,XamlExplorerHostShellComponent *>::promise_type,winrt::Windows::Foundation::IAsyncAction,void>::AddRef",
+        "rva": 229520
+      },
+      {
+        "decorated_name": "winrt::impl::produce_base<winrt::Windows::Internal::Shell::XamlExplorerHost::implementation::XamlExplorerHostChildWindow,winrt::Windows::Internal::Shell::XamlExplorerHost::IXamlExplorerHostChildWindow,void>::AddRef",
+        "rva": 229520
+      },
+      {
+        "decorated_name": "??_GXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UEAAPEAXI@Z",
+        "rva": 254448
+      },
+      {
+        "decorated_name": "winrt::Windows::Internal::Shell::XamlExplorerHost::implementation::XamlExplorerHostChildWindow::XamlExplorerHostChildWindow",
+        "rva": 1004396
+      },
+      {
+        "decorated_name": "?unconditional_release_ref@IUnknown@Foundation@Windows@winrt@@AEAAXXZ",
+        "rva": 1011888
+      },
+      {
+        "decorated_name": "?Release@?$produce_base@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostChildWindow@34567@X@impl@winrt@@UEAAIXZ",
+        "rva": 1014672
+      },
+      {
+        "decorated_name": "?NonDelegatingRelease@?$root_implements@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@UIClosable@Foundation@67@Unon_agile@7@@impl@winrt@@IEAAIXZ",
+        "rva": 1015208
+      },
+      {
+        "decorated_name": "?subtract_reference@?$root_implements@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@UIClosable@Foundation@67@Unon_agile@7@@impl@winrt@@IEAAIXZ",
+        "rva": 1015512
+      },
+      {
+        "decorated_name": "winrt::impl::root_implements<winrt::Windows::Internal::Shell::XamlExplorerHost::implementation::XamlExplorerHostChildWindow,winrt::Windows::Internal::Shell::XamlExplorerHost::XamlExplorerHostChildWindow,winrt::Windows::Foundation::IClosable,winrt::non_agile>::query_interface",
+        "rva": 1015668
+      },
+      {
+        "decorated_name": "winrt::impl::produce<winrt::Windows::Internal::Shell::XamlExplorerHost::implementation::XamlExplorerHostChildWindow,winrt::Windows::Internal::Shell::XamlExplorerHost::IXamlExplorerHostChildWindow>::get_XamlContent",
+        "rva": 1023232
+      },
+      {
+        "decorated_name": "winrt::Windows::Internal::Shell::XamlExplorerHost::implementation::XamlExplorerHostChildWindow::XamlContent",
+        "rva": 1023312
+      },
+      {
+        "decorated_name": "winrt::Windows::Foundation::operator==",
+        "rva": 1023448
+      },
+      {
+        "decorated_name": "?find_interface@?$implements@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@UIClosable@Foundation@67@Unon_agile@7@@winrt@@UEBAPEAXAEBUguid@2@@Z",
+        "rva": 1027696
+      },
+      {
+        "decorated_name": "?put_XamlContent@?$produce@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostChildWindow@34567@@impl@winrt@@UEAAHPEAX@Z",
+        "rva": 1028032
+      },
+      {
+        "decorated_name": "winrt::impl::root_implements<winrt::Windows::Internal::Shell::XamlExplorerHost::implementation::XamlExplorerHostChildWindow,winrt::Windows::Internal::Shell::XamlExplorerHost::XamlExplorerHostChildWindow,winrt::Windows::Foundation::IClosable,winrt::non_agile>::make_weak_ref",
+        "rva": 1028084
+      },
+      {
+        "decorated_name": "?Throw_Hr@in1diag3@details@wil@@YAXPEAXIPEBDJ@Z",
+        "rva": 1220616
+      },
+      {
+        "decorated_name": "?put_Bounds@?$produce@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostChildWindow@34567@@impl@winrt@@UEAAHURect@Foundation@Windows@3@@Z",
+        "rva": 1338368
+      },
+      {
+        "decorated_name": "?QueryInterface@?$produce_base@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostChildWindow@34567@X@impl@winrt@@UEAAHAEBUguid@3@PEAPEAX@Z",
+        "rva": 1553472
+      },
+      {
+        "decorated_name": "?query_interface_tearoff@?$root_implements@UActivationChangedEventArgs@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@@impl@winrt@@MEBAHAEBUguid@3@PEAPEAX@Z",
+        "rva": 1583776
+      },
+      {
+        "decorated_name": "?query_interface_tearoff@?$root_implements@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@UIClosable@Foundation@67@Unon_agile@7@@impl@winrt@@MEBAHAEBUguid@3@PEAPEAX@Z",
+        "rva": 1583776
+      },
+      {
+        "decorated_name": "?query_interface_tearoff@?$root_implements@UXamlExplorerHostWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@UIClosable@Foundation@67@@impl@winrt@@MEBAHAEBUguid@3@PEAPEAX@Z",
+        "rva": 1583776
+      },
+      {
+        "decorated_name": "?query_interface_tearoff@?$root_implements@Upromise_type@?$coroutine_traits@UIAsyncAction@Foundation@Windows@winrt@@PEAVXamlExplorerHostShellComponent@@@experimental@std@@UIAsyncAction@Foundation@Windows@winrt@@UIAsyncInfo@678@@impl@winrt@@MEBAHAEBUguid@3@PEAPEAX@Z",
+        "rva": 1583776
+      },
+      {
+        "decorated_name": "?get_local_iids@?$implements@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@UIClosable@Foundation@67@Unon_agile@7@@winrt@@UEBA?AU?$pair@IPEBUguid@winrt@@@std@@XZ",
+        "rva": 1589904
+      },
+      {
+        "decorated_name": "?GetIids@?$produce_base@UActivationChangedEventArgs@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIActivationChangedEventArgs@34567@X@impl@winrt@@UEAAHPEAIPEAPEAUguid@3@@Z",
+        "rva": 1699312
+      },
+      {
+        "decorated_name": "?GetIids@?$produce_base@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostChildWindow@34567@X@impl@winrt@@UEAAHPEAIPEAPEAUguid@3@@Z",
+        "rva": 1699312
+      },
+      {
+        "decorated_name": "?GetIids@?$produce_base@UXamlExplorerHostWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostWindow@34567@X@impl@winrt@@UEAAHPEAIPEAPEAUguid@3@@Z",
+        "rva": 1699312
+      },
+      {
+        "decorated_name": "?throw_hresult@winrt@@YAXUhresult@1@@Z",
+        "rva": 3398160
+      },
+      {
+        "decorated_name": "?GetRuntimeClassName@?$produce_base@UActivationChangedEventArgs@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIActivationChangedEventArgs@34567@X@impl@winrt@@UEAAHPEAPEAX@Z",
+        "rva": 3416080
+      },
+      {
+        "decorated_name": "?GetRuntimeClassName@?$produce_base@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostChildWindow@34567@X@impl@winrt@@UEAAHPEAPEAX@Z",
+        "rva": 3416080
+      },
+      {
+        "decorated_name": "?GetRuntimeClassName@?$produce_base@UXamlExplorerHostWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostWindow@34567@X@impl@winrt@@UEAAHPEAPEAX@Z",
+        "rva": 3416080
+      },
+      {
+        "decorated_name": "?GetTrustLevel@?$produce_base@UActivationChangedEventArgs@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIActivationChangedEventArgs@34567@X@impl@winrt@@UEAAHPEAW4TrustLevel@Foundation@Windows@3@@Z",
+        "rva": 3416112
+      },
+      {
+        "decorated_name": "?GetTrustLevel@?$produce_base@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostChildWindow@34567@X@impl@winrt@@UEAAHPEAW4TrustLevel@Foundation@Windows@3@@Z",
+        "rva": 3416112
+      },
+      {
+        "decorated_name": "?GetTrustLevel@?$produce_base@UXamlExplorerHostWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostWindow@34567@X@impl@winrt@@UEAAHPEAW4TrustLevel@Foundation@Windows@3@@Z",
+        "rva": 3416112
+      },
+      {
+        "decorated_name": "?GetTrustLevel@?$produce_base@Upromise_type@?$coroutine_traits@UIAsyncAction@Foundation@Windows@winrt@@PEAVXamlExplorerHostShellComponent@@@experimental@std@@UIAsyncAction@Foundation@Windows@winrt@@X@impl@winrt@@UEAAHPEAW4TrustLevel@Foundation@Windows@3@@Z",
+        "rva": 3416112
+      },
+      {
+        "decorated_name": "?get_ActivationOptions@?$produce@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostChildWindow@34567@@impl@winrt@@UEAAHPEAI@Z",
+        "rva": 4338400
+      },
+      {
+        "decorated_name": "?get_Bounds@?$produce@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostChildWindow@34567@@impl@winrt@@UEAAHPEAURect@Foundation@Windows@3@@Z",
+        "rva": 4338496
+      },
+      {
+        "decorated_name": "?put_ActivationOptions@?$produce@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostChildWindow@34567@@impl@winrt@@UEAAHI@Z",
+        "rva": 4338608
+      },
+      {
+        "decorated_name": "__guard_xfg_dispatch_icall_fptr",
+        "rva": 6730560
+      },
+      {
+        "decorated_name": "??$guid_v@UIXamlExplorerHostChildWindow@XamlExplorerHost@Shell@Internal@Windows@winrt@@@impl@winrt@@3Uguid@2@B",
+        "rva": 7157632
+      },
+      {
+        "decorated_name": "??_7XamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@6B@",
+        "rva": 8037152
+      },
+      {
+        "decorated_name": "??_7?$produce@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostChildWindow@34567@@impl@winrt@@6B@",
+        "rva": 8051112
+      },
+      {
+        "decorated_name": "??_7?$produce@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIClosable@Foundation@67@@impl@winrt@@6B@",
+        "rva": 8051280
+      }
+    ],
+    "imports": {
+      "api-ms-win-crt-private-l1-1-0.dll!_o_terminate": 6727688,
+      "api-ms-win-crt-private-l1-1-0.dll!_o_free": 6727584
+    },
+    "implementation_table": {
+      "8037152": 1583776,
+      "8037160": 254448,
+      "8037184": 1589904,
+      "8037200": 1027696
+    }
+  },
+  "host": {
+    "schema": 1,
+    "module": {
+      "machine": 34404,
+      "timestamp": 2502105167,
+      "image_size": 3403776,
+      "pdb_guid": [
+        18,
+        129,
+        82,
+        198,
+        172,
+        51,
+        125,
+        132,
+        41,
+        196,
+        204,
+        74,
+        79,
+        245,
+        96,
+        39
+      ],
+      "pdb_age": 1
+    },
+    "symbols": [
+      {
+        "role": "primary_site",
+        "rva": 1931848,
+        "section_start": 1880064,
+        "section_size": 533004,
+        "executable": false,
+        "prologue": []
+      },
+      {
+        "role": "secondary_site",
+        "rva": 2022232,
+        "section_start": 1880064,
+        "section_size": 533004,
+        "executable": false,
+        "prologue": []
+      },
+      {
+        "role": "primary_host",
+        "rva": 313248,
+        "section_start": 4096,
+        "section_size": 1874357,
+        "executable": true,
+        "prologue": [
+          64,
+          83,
+          72,
+          131,
+          236,
+          32,
+          72,
+          139,
+          137,
+          112,
+          2,
+          0,
+          0,
+          72,
+          139,
+          218
+        ]
+      },
+      {
+        "role": "secondary_host",
+        "rva": 358944,
+        "section_start": 4096,
+        "section_size": 1874357,
+        "executable": true,
+        "prologue": [
+          64,
+          83,
+          72,
+          131,
+          236,
+          32,
+          72,
+          139,
+          73,
+          56,
+          72,
+          139,
+          218,
+          72,
+          139,
+          1
+        ]
+      },
+      {
+        "role": "release_host",
+        "rva": 128820,
+        "section_start": 4096,
+        "section_size": 1874357,
+        "executable": true,
+        "prologue": [
+          64,
+          83,
+          72,
+          131,
+          236,
+          32,
+          72,
+          139,
+          217,
+          131,
+          200,
+          255,
+          240,
+          15,
+          193,
+          65
+        ]
+      }
+    ]
+  },
+  "source": {
+    "recipe_candidate": "xaml_explorer_host_child_xfg_v1",
+    "child_interface": "xaml_explorer_host_child_ec97_v1",
+    "host_child_offset": 32,
+    "child_source_offset": 16,
+    "child_vtable_rva": 8051112,
+    "child_vtable_entries": [
+      {
+        "rva": 1553472,
+        "prologue": [
+          72,
+          141,
+          65,
+          240,
+          72,
+          247,
+          217,
+          72,
+          27,
+          201,
+          72,
+          35,
+          200,
+          233,
+          34,
+          203
+        ]
+      },
+      {
+        "rva": 229520,
+        "prologue": [
+          72,
+          133,
+          201,
+          76,
+          141,
+          65,
+          248,
+          184,
+          8,
+          0,
+          0,
+          0,
+          76,
+          15,
+          68,
+          192
+        ]
+      },
+      {
+        "rva": 1014672,
+        "prologue": [
+          72,
+          141,
+          65,
+          240,
+          72,
+          247,
+          217,
+          72,
+          27,
+          201,
+          72,
+          35,
+          200,
+          233,
+          6,
+          2
+        ]
+      },
+      {
+        "rva": 1699312,
+        "prologue": [
+          72,
+          141,
+          65,
+          240,
+          72,
+          247,
+          217,
+          72,
+          27,
+          201,
+          72,
+          35,
+          200,
+          233,
+          138,
+          9
+        ]
+      },
+      {
+        "rva": 3416080,
+        "prologue": [
+          72,
+          141,
+          65,
+          240,
+          72,
+          247,
+          217,
+          72,
+          27,
+          201,
+          72,
+          35,
+          200,
+          233,
+          46,
+          5
+        ]
+      },
+      {
+        "rva": 3416112,
+        "prologue": [
+          72,
+          141,
+          65,
+          240,
+          72,
+          247,
+          217,
+          72,
+          27,
+          201,
+          72,
+          35,
+          200,
+          233,
+          138,
+          5
+        ]
+      },
+      {
+        "rva": 4338496,
+        "prologue": [
+          64,
+          83,
+          72,
+          131,
+          236,
+          48,
+          72,
+          139,
+          218,
+          72,
+          141,
+          65,
+          240,
+          72,
+          247,
+          217
+        ]
+      },
+      {
+        "rva": 1338368,
+        "prologue": [
+          72,
+          131,
+          236,
+          56,
+          76,
+          139,
+          209,
+          243,
+          15,
+          111,
+          18,
+          243,
+          15,
+          44,
+          210,
+          15
+        ]
+      },
+      {
+        "rva": 1023232,
+        "prologue": [
+          64,
+          83,
+          72,
+          131,
+          236,
+          32,
+          72,
+          139,
+          218,
+          72,
+          131,
+          34,
+          0,
+          72,
+          141,
+          65
+        ]
+      },
+      {
+        "rva": 1028032,
+        "prologue": [
+          72,
+          137,
+          84,
+          36,
+          16,
+          72,
+          131,
+          236,
+          40,
+          72,
+          141,
+          65,
+          240,
+          72,
+          247,
+          217
+        ]
+      },
+      {
+        "rva": 4338400,
+        "prologue": [
+          72,
+          131,
+          236,
+          40,
+          72,
+          141,
+          65,
+          76,
+          65,
+          184,
+          92,
+          0,
+          0,
+          0,
+          72,
+          133
+        ]
+      },
+      {
+        "rva": 4338608,
+        "prologue": [
+          72,
+          131,
+          236,
+          40,
+          72,
+          141,
+          65,
+          240,
+          72,
+          247,
+          217,
+          72,
+          27,
+          201,
+          72,
+          35
+        ]
+      },
+      {
+        "rva": 192352,
+        "prologue": [
+          76,
+          139,
+          220,
+          73,
+          137,
+          91,
+          16,
+          73,
+          137,
+          115,
+          24,
+          87,
+          72,
+          131,
+          236,
+          32
+        ]
+      }
+    ],
+    "evidence": {
+      "has_focus_rva": 1294716,
+      "child_getter_rva": 1023232,
+      "implementation_getter_rva": 1023312,
+      "abi_this_adjustment": -16,
+      "implementation_source_field": 32,
+      "implementation_field_recipe": "rsi_xfg_inline_content_v1",
+      "symbol_bindings": {
+        "child_getter": {
+          "rva": 1023232,
+          "raw_names": [
+            "winrt::impl::produce<winrt::Windows::Internal::Shell::XamlExplorerHost::implementation::XamlExplorerHostChildWindow,winrt::Windows::Internal::Shell::XamlExplorerHost::IXamlExplorerHostChildWindow>::get_XamlContent"
+          ],
+          "anchor": "exact_relocated_child_vtable_slot_8",
+          "uses_raw_alias": true
+        },
+        "implementation_getter": {
+          "rva": 1023312,
+          "raw_names": [
+            "winrt::Windows::Internal::Shell::XamlExplorerHost::implementation::XamlExplorerHostChildWindow::XamlContent"
+          ],
+          "anchor": "early_child_vtable_getter_direct_call",
+          "uses_raw_alias": true
+        }
+      },
+      "child_query_interface": {
+        "recipe": "ec97_private_iid_owned_query_v1",
+        "iid": "ec97afd0-5c0d-581b-9508-074773c6f1e0",
+        "module_counter_rva": 8084384,
+        "iid_rva": 7157632,
+        "query_interface_rva": 1553472,
+        "root_query_interface_rva": 1015668,
+        "implementation_vtable_rva": 8037152,
+        "find_interface_rva": 1027696,
+        "get_local_iids_rva": 1589904,
+        "get_local_iids_array_rva": 6895928,
+        "abi_this_adjustment": -16,
+        "returned_implementation_offset": 16,
+        "owned_reference": true
+      },
+      "child_reference_contract": {
+        "recipe": "xfg_child_owned_reference_v1",
+        "add_ref_rva": 229520,
+        "release_rva": 1014672,
+        "root_release_rva": 1015208,
+        "subtract_reference_rva": 1015512,
+        "weak_release_rva": 4318592,
+        "implementation_reference_offset": 8,
+        "weak_strong_offset": 24,
+        "weak_count_offset": 28
+      },
+      "factory_absent": true,
+      "child_table_dir64_relocations": [
+        8051112,
+        8051120,
+        8051128,
+        8051136,
+        8051144,
+        8051152,
+        8051160,
+        8051168,
+        8051176,
+        8051184,
+        8051192,
+        8051200,
+        8051208
+      ]
+    }
+  },
+  "provenance": {
+    "scope": "Independent cached module samples; not a coherent installed system or live acceptance",
+    "modules": {
+      "taskbar": {
+        "name": "Taskbar.dll",
+        "relative_path": "System32/Taskbar.dll",
+        "sha256": "88fca676e3abbaa64ad3bab2f767d02d7819954cb627a828385c81c76a96ae13",
+        "identity": {
+          "machine": 34404,
+          "timestamp": 2502105167,
+          "image_size": 3403776,
+          "pdb_guid": [
+            18,
+            129,
+            82,
+            198,
+            172,
+            51,
+            125,
+            132,
+            41,
+            196,
+            204,
+            74,
+            79,
+            245,
+            96,
+            39
+          ],
+          "pdb_age": 1
+        }
+      },
+      "shell": {
+        "name": "twinui.pcshell.dll",
+        "relative_path": "System32/twinui.pcshell.dll",
+        "sha256": "1c614e888a2f1f0a4090d45b6b65a0ab91f5277140748b05dd614d7e64545c63",
+        "identity": {
+          "machine": 34404,
+          "timestamp": 1309702217,
+          "image_size": 8585216,
+          "pdb_guid": [
+            176,
+            18,
+            229,
+            83,
+            18,
+            184,
+            203,
+            169,
+            167,
+            233,
+            248,
+            70,
+            168,
+            79,
+            69,
+            188
+          ],
+          "pdb_age": 1
+        }
+      }
+    },
+    "source_shell_version": "10.0.22000.3196",
+    "runtime_validated": false,
+    "expected_3079_mismatch_preserved": true
+  }
+}

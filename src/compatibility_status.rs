@@ -61,6 +61,9 @@ pub struct SupportProfile {
     pub historical_evidence: Vec<ValidationEvidence>,
     /// Exact tested package/run for this recipe; never current-session proof.
     pub recorded_acceptance: Option<&'static RecordedAcceptance>,
+    /// Matching runs in recording order, including the latest run above.
+    /// A newer partial run does not erase acceptance of other scenarios.
+    pub recorded_acceptances: Vec<&'static RecordedAcceptance>,
 }
 
 /// A compact projection of a disk report, deliberately excluding acceptance
@@ -550,6 +553,7 @@ pub struct AcceptedScenario {
 
 // Only independently reviewed completed runs belong here. This is an evidence
 // table, not an OS-version support list. Each scope names its observed edition.
+// Append newer runs; retain earlier package identities and their scope.
 const RECORDED_ACCEPTANCES: &[RecordedAcceptance] = &[
     RecordedAcceptance {
         profile_id: "windows11-26200.8037-x64",
@@ -640,6 +644,85 @@ const RECORDED_ACCEPTANCES: &[RecordedAcceptance] = &[
             },
         ],
     },
+    RecordedAcceptance {
+        profile_id: "windows11-22000.318-x64-clock",
+        recipe_sha256: "a1f32a2f93d24aee31559764c607297f36490b0b8b873c0a8843380207a0e70a",
+        package_version: "5.16.0",
+        package_build_id: "5.16.0-af2ca67da2fd",
+        published_commit: Some("0761ab7d642176693eb33c548dfd1643f703ad31"),
+        package_manifest_sha256: "40989be9ef3eafc6d528224f6f37e6638f930463478b6678c185a616bdad145a",
+        executable_sha256: "477946e5d7403b337b0b19b9177ee7c256f85fc244b228d8c0cfffa0af7d72b9",
+        adapter_sha256: "16a2cc8ffcff944806797926992b66bb18469fa644071061a6a86154f0b15509",
+        popup_sha256: "cf29dad7037d8eb4de2e2b2474632b62618fd47c5f0b54a9c40c4dd8bed84145",
+        run_id: "sandbox-20261110-164157-04be8fb5",
+        nonce: "efe8a3ca8fd741cea8d25499651bca74",
+        archive_sha256: "ffc4c23741e1dde12de1ea769ca0c7186d6dc0f904398bc7e16f247717423bed",
+        environment_scope: "LiteTray 5.16.0 正式二进制、指定哈希的测试包；独立 Windows 11 Pro 21H2 22000.318 x64 单屏 TCG 虚拟机，Medium 普通权限。只验收主屏时钟；最终分发包只补充文档，二进制相同。此记录不是当前会话的现场检查。",
+        recorded_on: "2026-11-10",
+        reference: "docs/compatibility-release-5.16.0.md",
+        scenarios: &[
+            AcceptedScenario {
+                scenario: ValidationScenario::ModuleLayout,
+                detail: "五项只读命令通过；实际加载模块、独立通知区窗口归属及合并时钟结构匹配。发布程序使用默认八组资料；本机型仍仅支持主屏时钟。",
+            },
+            AcceptedScenario {
+                scenario: ValidationScenario::ClockUpdateRestore,
+                detail: "合并时间/日期控件三帧文字和宽度 63→240→320→320→63 读回通过；停止后完整原文、节点、布局、可见性和高度恢复。Explorer 保持不变，产品正常退出，工作进程确认退出。未验收持续原生走时、像素绘制或输入。",
+            },
+        ],
+    },
+    RecordedAcceptance {
+        profile_id: "windows11-26100.1742-x64",
+        recipe_sha256: "28ca9cfd9ba1f805cc3dd1e7c116a81770d497c1c424a742cc856c3739a76e1d",
+        package_version: "5.16.0",
+        package_build_id: "5.16.0-af2ca67da2fd",
+        published_commit: Some("0761ab7d642176693eb33c548dfd1643f703ad31"),
+        package_manifest_sha256: "40989be9ef3eafc6d528224f6f37e6638f930463478b6678c185a616bdad145a",
+        executable_sha256: "477946e5d7403b337b0b19b9177ee7c256f85fc244b228d8c0cfffa0af7d72b9",
+        adapter_sha256: "16a2cc8ffcff944806797926992b66bb18469fa644071061a6a86154f0b15509",
+        popup_sha256: "cf29dad7037d8eb4de2e2b2474632b62618fd47c5f0b54a9c40c4dd8bed84145",
+        run_id: "sandbox-20261110-170638-cdfefae4",
+        nonce: "bc7ee9c5858b484b8c3a3933bb03b544",
+        archive_sha256: "a9fcfb12ab6312a155c1afa3359da4389455e43e42c11f3f8dd908bebf6d485c",
+        environment_scope: "LiteTray 5.16.0 正式二进制、指定哈希的测试包；独立 Windows 11 Pro 24H2 26100.1742 x64 单屏 WHPX 虚拟机，Professional、Medium 普通权限。LTSC 保留独立旧记录；最终分发包只补充文档，二进制相同。此记录不是当前会话的现场检查。",
+        recorded_on: "2026-11-10",
+        reference: "docs/compatibility-release-5.16.0.md",
+        scenarios: &[
+            AcceptedScenario {
+                scenario: ValidationScenario::ModuleLayout,
+                detail: "五项只读命令、三模块/四能力识别和实际分离式时钟检查通过；运行前绑定同一 Explorer、普通权限会话和已冻结程序。",
+            },
+            AcceptedScenario {
+                scenario: ValidationScenario::ClockUpdateRestore,
+                detail: "时间/日期各三帧文字及宽度 63→240→320→320→63 读回通过；停止后完整原文（含方向标记和 NUL）、节点、可见性和高度恢复。Explorer 不变，产品及工作进程正常结束。基线原生时间已滞后，本次只证明字段恢复，不证明持续走时、时间准确或像素绘制。",
+            },
+            AcceptedScenario {
+                scenario: ValidationScenario::TrayPrepareStop,
+                detail: "五类必需托盘区域及当前坐标入口准备、停止通过，清理收到确认。未激活托盘复制，未验收输入、副屏或混合 DPI。",
+            },
+        ],
+    },
+    RecordedAcceptance {
+        profile_id: "windows11-26200.8037-x64",
+        recipe_sha256: "c550f7cc9f60f1d6d32897de0402a122c6449325b88380bf471921c24c3223bb",
+        package_version: "5.16.0",
+        package_build_id: "5.16.0-af2ca67da2fd",
+        published_commit: Some("0761ab7d642176693eb33c548dfd1643f703ad31"),
+        package_manifest_sha256: "40989be9ef3eafc6d528224f6f37e6638f930463478b6678c185a616bdad145a",
+        executable_sha256: "477946e5d7403b337b0b19b9177ee7c256f85fc244b228d8c0cfffa0af7d72b9",
+        adapter_sha256: "16a2cc8ffcff944806797926992b66bb18469fa644071061a6a86154f0b15509",
+        popup_sha256: "cf29dad7037d8eb4de2e2b2474632b62618fd47c5f0b54a9c40c4dd8bed84145",
+        run_id: "sandbox-20261110-185055-d3671190",
+        nonce: "a8519a76a40c4171a608f907bf1d0844",
+        archive_sha256: "9d8858f1b4f4dcb8e3fbe904b1dce804cf5c3b39d7ab685aa7807a4f797c14d9",
+        environment_scope: "LiteTray 5.16.0 正式二进制；独立 Windows 11 Pro 25H2 26200.8037 x64 双屏 WHPX 虚拟机，Medium 普通权限。本轮仅补充双屏时钟混合缩放场景，不是当前会话的现场检查。",
+        recorded_on: "2026-11-10",
+        reference: "docs/compatibility-release-5.16.1.md",
+        scenarios: &[AcceptedScenario {
+            scenario: ValidationScenario::MixedDpi,
+            detail: "通过 Windows 设置将副屏从 100% 改为 125%，实读 DPI 96/96→96/120→96/96；两屏托管文字和 240 DIP 宽度自动恢复，显示布局恢复，正常退出后原生时钟结构恢复并观察到 75 秒跨分钟走时，Explorer 未重启。未测物理插拔、休眠、其他缩放比例或托盘复制。",
+        }],
+    },
 ];
 
 fn recorded_recipe_digest(profile: &Profile) -> String {
@@ -657,34 +740,43 @@ fn recorded_recipe_digest(profile: &Profile) -> String {
     format!("{:x}", digest.finalize())
 }
 
-fn recorded_acceptance(profile: &Profile) -> Option<&'static RecordedAcceptance> {
+fn recorded_acceptances(profile: &Profile) -> Vec<&'static RecordedAcceptance> {
     let digest = recorded_recipe_digest(profile);
     RECORDED_ACCEPTANCES
         .iter()
-        .find(|record| record.profile_id == profile.id && record.recipe_sha256 == digest)
+        .filter(|record| record.profile_id == profile.id && record.recipe_sha256 == digest)
+        .collect()
+}
+
+fn recorded_acceptance(profile: &Profile) -> Option<&'static RecordedAcceptance> {
+    recorded_acceptances(profile).last().copied()
 }
 
 fn evidence(profile: &Profile) -> Vec<ValidationEvidence> {
     let mut results = historical_evidence(profile);
-    if let Some(record) = recorded_acceptance(profile) {
-        for result in &mut results {
-            if let Some(accepted) = record
-                .scenarios
-                .iter()
-                .find(|item| item.scenario == result.scenario)
-            {
-                *result = ValidationEvidence {
-                    scenario: accepted.scenario,
-                    status: ValidationStatus::Tested,
-                    scope: record.environment_scope,
-                    detail: accepted.detail,
-                    recorded_on: Some(record.recorded_on),
-                    reference: Some(record.reference),
-                };
-            }
-        }
+    for record in recorded_acceptances(profile) {
+        apply_acceptance(&mut results, record);
     }
     results
+}
+
+fn apply_acceptance(results: &mut [ValidationEvidence], record: &RecordedAcceptance) {
+    for result in results {
+        if let Some(accepted) = record
+            .scenarios
+            .iter()
+            .find(|item| item.scenario == result.scenario)
+        {
+            *result = ValidationEvidence {
+                scenario: accepted.scenario,
+                status: ValidationStatus::Tested,
+                scope: record.environment_scope,
+                detail: accepted.detail,
+                recorded_on: Some(record.recorded_on),
+                reference: Some(record.reference),
+            };
+        }
+    }
 }
 
 fn support_profile(profile: &Profile) -> SupportProfile {
@@ -713,6 +805,7 @@ fn support_profile(profile: &Profile) -> SupportProfile {
         evidence: evidence(profile),
         historical_evidence: historical_evidence(profile),
         recorded_acceptance: recorded_acceptance(profile),
+        recorded_acceptances: recorded_acceptances(profile),
     }
 }
 
@@ -879,7 +972,7 @@ mod tests {
                 .iter()
                 .filter(|item| item.status == ValidationStatus::Tested)
                 .count(),
-            3
+            4
         );
         for change in 0..5 {
             let mut profile = original.clone();
@@ -933,7 +1026,7 @@ mod tests {
     }
 
     #[test]
-    fn notification_acceptance_is_scoped_to_the_unpublished_primary_clock_run() {
+    fn notification_acceptance_keeps_lab_history_and_selects_the_published_run() {
         let profile = profiles()
             .unwrap()
             .iter()
@@ -941,13 +1034,22 @@ mod tests {
             .unwrap();
         let catalog = support_profile(profile);
         let record = catalog.recorded_acceptance.unwrap();
-        assert_eq!(record.package_version, "5.15.2");
-        assert_eq!(record.package_build_id, "lab-package-r6-combined");
-        assert!(record.published_commit.is_none());
-        assert_eq!(record.run_id, "sandbox-20261110-161111-f88fd698");
-        assert_eq!(record.nonce, "888f7f898eff4128a7a61b31dd5e3f70");
+        assert_eq!(record.package_version, "5.16.0");
+        assert_eq!(record.package_build_id, "5.16.0-af2ca67da2fd");
+        assert_eq!(
+            record.published_commit,
+            Some("0761ab7d642176693eb33c548dfd1643f703ad31")
+        );
+        assert_eq!(record.run_id, "sandbox-20261110-164157-04be8fb5");
+        assert_eq!(record.nonce, "efe8a3ca8fd741cea8d25499651bca74");
         assert_eq!(record.scenarios.len(), 2);
-        assert!(record.environment_scope.contains("未发布实验包"));
+        assert_eq!(catalog.recorded_acceptances.len(), 2);
+        let lab = catalog.recorded_acceptances[0];
+        assert_eq!(lab.package_version, "5.15.2");
+        assert_eq!(lab.package_build_id, "lab-package-r6-combined");
+        assert!(lab.published_commit.is_none());
+        assert_eq!(lab.run_id, "sandbox-20261110-161111-f88fd698");
+        assert!(lab.environment_scope.contains("未发布实验包"));
         assert!(record.environment_scope.contains("只验收主屏时钟"));
         assert!(catalog.family.description.contains("暂不支持副屏时钟"));
         assert!(
@@ -970,17 +1072,21 @@ mod tests {
             );
             if accepted {
                 assert_eq!(item.scope, record.environment_scope);
-                assert_eq!(item.reference, Some("docs/compatibility-21h2.md"));
+                assert_eq!(item.reference, Some("docs/compatibility-release-5.16.0.md"));
             } else {
                 assert!(item.recorded_on.is_none());
                 assert!(item.reference.is_none());
             }
         }
         let export = serde_json::to_value(catalog).unwrap();
-        assert!(export["recorded_acceptance"]["published_commit"].is_null());
+        assert!(export["recorded_acceptances"][0]["published_commit"].is_null());
+        assert_eq!(
+            export["recorded_acceptances"][1],
+            export["recorded_acceptance"]
+        );
         assert_eq!(
             export["recorded_acceptance"]["executable_sha256"],
-            "8726580eb110873d76d5cb1a1839d21210aa21db965dc90627ac7955a6bdef06"
+            "477946e5d7403b337b0b19b9177ee7c256f85fc244b228d8c0cfffa0af7d72b9"
         );
         let published = RECORDED_ACCEPTANCES
             .iter()
@@ -1035,33 +1141,37 @@ mod tests {
             .unwrap();
         let catalog = support_profile(profile);
         let record = catalog.recorded_acceptance.unwrap();
-        assert_eq!(record.package_version, "5.15.1");
+        assert_eq!(record.package_version, "5.16.0");
         assert_eq!(
             record.package_manifest_sha256,
-            "7de3103f1f05859ecf6806e4f8dd192c9189a51f049480f0c02a5a705859a1f1"
+            "40989be9ef3eafc6d528224f6f37e6638f930463478b6678c185a616bdad145a"
         );
-        assert_eq!(record.run_id, "sandbox-20261109-202125-52113436");
-        assert_eq!(record.scenarios.len(), 3);
+        assert_eq!(record.run_id, "sandbox-20261110-185055-d3671190");
+        assert_eq!(record.scenarios.len(), 1);
+        assert_eq!(record.scenarios[0].scenario, ValidationScenario::MixedDpi);
+        assert_eq!(catalog.recorded_acceptances.len(), 2);
+        assert_eq!(catalog.recorded_acceptances[0].package_version, "5.15.1");
         assert_eq!(
             serde_json::to_value(&catalog.historical_evidence).unwrap(),
             serde_json::to_value(historical_evidence(profile)).unwrap()
         );
         for item in &catalog.evidence {
-            let accepted = record
-                .scenarios
-                .iter()
-                .any(|entry| entry.scenario == item.scenario);
+            let accepted = catalog.recorded_acceptances.iter().rev().find(|run| {
+                run.scenarios
+                    .iter()
+                    .any(|entry| entry.scenario == item.scenario)
+            });
             assert_eq!(
                 item.status,
-                if accepted {
+                if accepted.is_some() {
                     ValidationStatus::Tested
                 } else {
                     ValidationStatus::NotRun
                 }
             );
-            if accepted {
-                assert_eq!(item.scope, record.environment_scope);
-                assert_eq!(item.reference, Some(record.reference));
+            if let Some(run) = accepted {
+                assert_eq!(item.scope, run.environment_scope);
+                assert_eq!(item.reference, Some(run.reference));
             }
         }
         let export = serde_json::to_value(&catalog).unwrap();
@@ -1076,7 +1186,13 @@ mod tests {
             .unwrap();
         let pro = support_profile(ltsc);
         let pro_record = pro.recorded_acceptance.unwrap();
-        assert_eq!(pro_record.run_id, "sandbox-20261109-205423-3b6aa4b5");
+        assert_eq!(pro_record.run_id, "sandbox-20261110-170638-cdfefae4");
+        assert_eq!(pro_record.package_version, "5.16.0");
+        assert_eq!(pro.recorded_acceptances.len(), 2);
+        assert_eq!(
+            pro.recorded_acceptances[0].run_id,
+            "sandbox-20261109-205423-3b6aa4b5"
+        );
         assert!(pro_record.environment_scope.contains("Professional"));
         assert_eq!(pro_record.scenarios.len(), 3);
         assert_eq!(
@@ -1103,6 +1219,37 @@ mod tests {
             } else {
                 assert_eq!(item.status, ValidationStatus::NotRun);
                 assert!(item.recorded_on.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn a_partial_rerun_does_not_relabel_other_scenarios_or_discard_their_evidence() {
+        let profile = profiles()
+            .unwrap()
+            .iter()
+            .find(|profile| profile.id == "windows11-26100.1742-x64")
+            .unwrap();
+        let mut results = evidence(profile);
+        let previous = serde_json::to_value(&results).unwrap();
+        let partial = RecordedAcceptance {
+            environment_scope: "Synthetic test of a later clock-only run",
+            recorded_on: "2099-01-01",
+            reference: "synthetic-regression-fixture",
+            scenarios: &[AcceptedScenario {
+                scenario: ValidationScenario::ClockUpdateRestore,
+                detail: "Only this scenario was rerun",
+            }],
+            ..*recorded_acceptance(profile).unwrap()
+        };
+        apply_acceptance(&mut results, &partial);
+        for (index, item) in results.iter().enumerate() {
+            if item.scenario == ValidationScenario::ClockUpdateRestore {
+                assert_eq!(item.scope, partial.environment_scope);
+                assert_eq!(item.reference, Some(partial.reference));
+                assert_eq!(item.recorded_on, Some(partial.recorded_on));
+            } else {
+                assert_eq!(serde_json::to_value(item).unwrap(), previous[index]);
             }
         }
     }

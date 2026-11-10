@@ -164,6 +164,7 @@ fn same_recipe(role: Role, a: &Profile, b: &Profile) -> bool {
         }
         Role::Shell => {
             a.source.recipe == b.source.recipe
+                && a.source.interface_contract() == b.source.interface_contract()
                 && a.source.child_source_offset == b.source.child_source_offset
                 && a.source.child_vtable_rva == b.source.child_vtable_rva
                 && a.source.factory_vtable_rva == b.source.factory_vtable_rva
@@ -293,6 +294,7 @@ pub fn assemble(
     }
     let source = SourceLayout {
         recipe: taskbar.evidence.source.recipe,
+        child_interface: Some(shell.evidence.source.interface_contract()),
         host_child_offset: taskbar.evidence.source.host_child_offset,
         child_source_offset: shell.evidence.source.child_source_offset,
         child_vtable_rva: shell.evidence.source.child_vtable_rva,
@@ -346,6 +348,43 @@ mod tests {
             evidence: profile,
             basis: MatchBasis::ExactImage,
         }
+    }
+
+    #[test]
+    fn child_iid_belongs_to_shell_and_conflicting_shell_contracts_are_distinct() {
+        use super::super::ChildInterface;
+        let early = Profile::decode(include_bytes!(
+            "../../profiles/windows11-22000.318-x64-clock.json"
+        ))
+        .unwrap();
+        let mut explicit_early = early.clone();
+        explicit_early.source.child_interface = Some(ChildInterface::XamlExplorerHostChildEef8V1);
+        assert!(same_recipe(Role::Shell, &early, &explicit_early));
+        let mut late = early.clone();
+        late.source.child_interface = Some(ChildInterface::XamlExplorerHostChildEc97V1);
+        assert!(same_recipe(Role::Taskbar, &early, &late));
+        assert!(!same_recipe(Role::Shell, &early, &late));
+        let resolved = assemble(
+            &known(Role::Taskbar, &early),
+            &known(Role::Shell, &late),
+            None,
+        )
+        .unwrap();
+        assert_eq!(resolved.source.child_interface, late.source.child_interface);
+        assert_eq!(
+            resolved.source.interface_contract(),
+            ChildInterface::XamlExplorerHostChildEc97V1
+        );
+        let resolved = assemble(
+            &known(Role::Taskbar, &late),
+            &known(Role::Shell, &early),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            resolved.source.child_interface,
+            Some(ChildInterface::XamlExplorerHostChildEef8V1)
+        );
     }
 
     #[test]

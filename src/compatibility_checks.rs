@@ -593,11 +593,13 @@ fn support_catalog_keeps_recorded_scope_separate_from_built_in_support() {
                 } else {
                     ValidationStatus::Historical
                 }
-            } else if (profile.id == "windows11-22000.318-x64-clock"
-                && matches!(
-                    evidence.scenario,
-                    ValidationScenario::ModuleLayout | ValidationScenario::ClockUpdateRestore
-                ))
+            } else if (profile.id == "windows11-26200.8037-x64"
+                && evidence.scenario == ValidationScenario::MixedDpi)
+                || (profile.id == "windows11-22000.318-x64-clock"
+                    && matches!(
+                        evidence.scenario,
+                        ValidationScenario::ModuleLayout | ValidationScenario::ClockUpdateRestore
+                    ))
                 || (matches!(
                     profile.id.as_str(),
                     "windows11-26300.9818-x64"

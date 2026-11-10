@@ -15,28 +15,30 @@ from layouts import (CHILD_TABLE, EARLY_CHILD_QI_RAW_NAMES, EARLY_CHILD_QI_SYMBO
 FIXTURE = json.loads((Path(__file__).parent / 'fixtures/xfg-source-v1.json').read_text(encoding='utf-8'))
 
 
-def fixture():
+def fixture(data=FIXTURE):
     decoder = Cs(CS_ARCH_X86, CS_MODE_64)
     decoder.detail = True
     images = {}
     for role in ('taskbar', 'shell'):
         image = Image.__new__(Image)
         image.role = role
-        image.identity = copy.deepcopy(FIXTURE['host']['module'])
-        image.symbols = copy.deepcopy(FIXTURE[role]['symbols'])
-        image.bodies = {int(rva): bytes.fromhex(raw) for rva, raw in FIXTURE[role]['code'].items()}
-        image.data_blocks = {int(rva): bytes.fromhex(raw) for rva, raw in FIXTURE[role].get('data', {}).items()}
+        image.identity = copy.deepcopy(data['host']['module'])
+        image.symbols = copy.deepcopy(data[role]['symbols'])
+        image.bodies = {int(rva): bytes.fromhex(raw) for rva, raw in data[role]['code'].items()}
+        image.data_blocks = {int(rva): bytes.fromhex(raw) for rva, raw in data[role].get('data', {}).items()}
         image.function = lambda rva, image=image: list(decoder.disasm(image.bodies[rva], rva))
         image.bytes = lambda rva, count, executable=True, image=image: (image.bodies if executable else image.data_blocks)[rva][:count]
         image.section = lambda rva, count, executable: {
             'section_start': 4096, 'section_size': 0x800000, 'executable': executable}
+        image.import_slot = lambda dll, name, imports=data[role].get('imports', {}): imports[dll + '!' + name]
         images[role] = image
     host, shell = images['taskbar'], images['shell']
-    host.pointers = {1983392 + 0x3f0: 0x49790, 1996344 + 0x118: 0x52180}
+    host.pointers = {int(k): v for k, v in data['taskbar'].get('pointers',
+                    {1983392 + 0x3f0: 0x49790, 1996344 + 0x118: 0x52180}).items()}
     host.pointer = host.pointers.__getitem__
     child = shell.exact(CHILD_TABLE)
-    shell.table = {child + i * 8: e['rva'] for i, e in enumerate(FIXTURE['source']['child_vtable_entries'])}
-    shell.table.update({int(rva): target for rva, target in FIXTURE['shell']['implementation_table'].items()})
+    shell.table = {child + i * 8: e['rva'] for i, e in enumerate(data['source']['child_vtable_entries'])}
+    shell.table.update({int(rva): target for rva, target in data['shell']['implementation_table'].items()})
     implementation = shell.exact(EARLY_CHILD_QI_SYMBOLS['implementation_table'])
     shell.pe = SimpleNamespace(
         OPTIONAL_HEADER=SimpleNamespace(ImageBase=0x180000000),

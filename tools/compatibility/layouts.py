@@ -1257,7 +1257,7 @@ jmp $return_result
 """
 
 def xfg_child_query_interface(shell, child, slots, logs):
-    """Bind the early private IID to its concrete QI dispatch and owned result.
+    """Bind either reviewed private IID to its concrete QI and owned result.
 
     Public type names are shared with later versions; their GUIDs are not.
     All bodies below are complete fixed recipes except the explicitly bounded
@@ -1275,9 +1275,15 @@ def xfg_child_query_interface(shell, child, slots, logs):
         names[key] = names[key] if any(s["decorated_name"] == names[key] for s in matches) else raw_name
     targets = {key: shell.exact(name) for key, name in names.items()}
     targets["guard"] = shell.exact(XFG_DISPATCH)
-    early_iid = bytes.fromhex("32f6f8ee0d6ccb5fb6a1354819e51f3b")
-    require(shell.bytes(targets["child_iid"], 16, False) == early_iid,
-            "Early child exact named IID is not eef8f632-6c0d-5fcb-b6a1-354819e51f3b")
+    iid_contracts = {
+        bytes.fromhex("32f6f8ee0d6ccb5fb6a1354819e51f3b"):
+            ("early_private_iid_owned_query_v1", "eef8f632-6c0d-5fcb-b6a1-354819e51f3b"),
+        bytes.fromhex("d0af97ec0d5c1b589508074773c6f1e0"):
+            ("ec97_private_iid_owned_query_v1", "ec97afd0-5c0d-581b-9508-074773c6f1e0"),
+    }
+    child_iid = shell.bytes(targets["child_iid"], 16, False)
+    require(child_iid in iid_contracts, "Unknown exact named XFG child IID")
+    query_recipe, iid = iid_contracts[child_iid]
     require(slots[0]["rva"] == targets["query"], "Early child slot zero is not its exact named QI")
 
     def leaf(rva, size, label):
@@ -1314,7 +1320,11 @@ jmp $root_query
     require(table % 8 == 0 and len(sections) == 1 and sections[0].Name.rstrip(b"\0") == b".data" and
             sections[0].Characteristics == 0xc0000040, "Unknown early implementation table section")
     relocations = [(e.rva, e.type) for b in getattr(shell.pe, "DIRECTORY_ENTRY_BASERELOC", []) for e in b.entries]
-    for offset, key in ((0, "tearoff"), (0x20, "iids"), (0x30, "find")):
+    implementation_slots = [(0, "tearoff"), (0x20, "iids"), (0x30, "find")]
+    if query_recipe == "ec97_private_iid_owned_query_v1":
+        targets["destructor"] = shell.exact("??_GXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UEAAPEAXI@Z")
+        implementation_slots.append((8, "destructor"))
+    for offset, key in implementation_slots:
         location = table + offset
         require([kind for address, kind in relocations if address == location] == [10],
                 "Early implementation QI slot needs exactly one DIR64 relocation")
@@ -1350,7 +1360,7 @@ mov eax, ecx
             constructor[20].operands[0].size == 4 and constructor[20].operands[1].type == X86_OP_REG and
             constructor[20].reg_name(constructor[20].operands[1].reg) == "eax",
             "Early constructor has changed its intervening module-count update")
-    rip(constructor[20])
+    module_counter = rip(constructor[20])
     match_instruction_template(constructor[21:25], """
 mov qword ptr [r15 + 8], rcx
 lea rax, [$implementation_table]
@@ -1390,7 +1400,7 @@ mov qword ptr [rdx + 8], rax
 mov rax, rdx
 ret
 """, targets)
-    require(shell.bytes(targets["iid_array"], 32, False) == early_iid + closable_iid,
+    require(shell.bytes(targets["iid_array"], 32, False) == child_iid + closable_iid,
             "Early GetIids disagrees with the complete supported private IID pair")
     _, query = function_evidence(shell, names["root_query"], logs)
     require(len(query) == 50, "Unknown early root query_interface body")
@@ -1415,12 +1425,209 @@ ret
 mov eax, 0x80004002
 ret
 """, {})
-    return {"recipe": "early_private_iid_owned_query_v1", "iid": "eef8f632-6c0d-5fcb-b6a1-354819e51f3b",
+    return {"recipe": query_recipe, "iid": iid,
+            **({"module_counter_rva": module_counter} if query_recipe == "ec97_private_iid_owned_query_v1" else {}),
             "iid_rva": targets["child_iid"], "query_interface_rva": targets["query"],
             "root_query_interface_rva": targets["root_query"], "implementation_vtable_rva": table,
             "find_interface_rva": targets["find"], "get_local_iids_rva": targets["iids"],
             "get_local_iids_array_rva": targets["iid_array"], "abi_this_adjustment": -0x10,
             "returned_implementation_offset": 0x10, "owned_reference": True}
+
+
+def xfg_child_reference_contract(shell, slots, module_counter, logs):
+    """The ec97 13-slot variant must prove the owned QI result's release path."""
+    root_type = "?$root_implements@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@UIClosable@Foundation@67@Unon_agile@7@@impl@winrt@@"
+    root_release = shell.exact("?NonDelegatingRelease@" + root_type + "IEAAIXZ")
+    subtract = shell.exact("?subtract_reference@" + root_type + "IEAAIXZ")
+    addref = slots[1]["rva"]
+    release = slots[2]["rva"]
+    base = "winrt::impl::produce_base<winrt::Windows::Internal::Shell::XamlExplorerHost::implementation::XamlExplorerHostChildWindow,winrt::Windows::Internal::Shell::XamlExplorerHost::IXamlExplorerHostChildWindow,void>"
+    anchored_symbol(shell, ("?AddRef@?$produce_base@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostChildWindow@34567@X@impl@winrt@@UEAAIXZ", base + "::AddRef"), addref, "child_slot_1_addref")
+    anchored_symbol(shell, ("?Release@?$produce_base@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostChildWindow@34567@X@impl@winrt@@UEAAIXZ", base + "::Release"), release, "child_slot_2_release")
+
+    def leaf(rva, size, label):
+        decoder = Cs(CS_ARCH_X86, CS_MODE_64)
+        decoder.detail = True
+        code = list(decoder.disasm(shell.bytes(rva, size), rva))
+        require(sum(ins.size for ins in code) == size, "Incomplete child reference leaf")
+        logs.append({"module_role": shell.role, "symbol": label, "rva": rva,
+                     "boundary_recipe": f"exact_{size}_byte_child_reference_leaf_v1",
+                     "instructions": [instruction_record(ins) for ins in code]})
+        return code
+
+    add = leaf(addref, 48, "child AddRef")
+    require(len(add) == 14 and add[6].mnemonic == "js" and add[6].operands[0].type == X86_OP_IMM,
+            "Unknown child AddRef weak-reference branch")
+    weak_add = add[6].operands[0].imm
+    match_instruction_template(add, """
+test rcx, rcx
+lea r8, [rcx - 8]
+mov eax, 8
+cmove r8, rax
+mov rcx, qword ptr [r8]
+@retry
+test rcx, rcx
+js $weak
+lea rdx, [rcx + 1]
+mov rax, rcx
+lock cmpxchg qword ptr [r8], rdx
+mov rcx, rax
+jne @retry
+mov eax, edx
+ret
+""", {"weak": weak_add})
+    match_instruction_template(leaf(weak_add, 18, "child weak AddRef"), """
+mov edx, 1
+lock xadd dword ptr [rcx + rcx + 0x18], edx
+inc edx
+jmp $result
+""", {"result": add[-2].address})
+    match_instruction_template(leaf(release, 18, "child Release thunk"), """
+lea rax, [rcx - 0x10]
+neg rcx
+sbb rcx, rcx
+and rcx, rax
+jmp $release
+""", {"release": root_release})
+    _, release_body = bounded_evidence(shell, root_release, "child NonDelegatingRelease", logs)
+    match_instruction_template(release_body, """
+mov qword ptr [rsp + 8], rbx
+push rdi
+sub rsp, 0x20
+mov rbx, rcx
+call $subtract
+mov edi, eax
+test eax, eax
+je @destroy
+@return
+mov rbx, qword ptr [rsp + 0x30]
+mov eax, edi
+add rsp, 0x20
+pop rdi
+ret
+int3
+@destroy
+mov edx, 1
+mov r8d, edx
+xchg qword ptr [rbx + 8], r8
+test rbx, rbx
+je @return
+mov rcx, qword ptr [rbx]
+mov rax, qword ptr [rcx + 8]
+movabs r10, 0xa3b1ae513e58f270
+mov rcx, rbx
+call qword ptr [$guard]
+jmp @return
+""", {"subtract": subtract, "guard": shell.exact(XFG_DISPATCH)})
+    _, decrement = bounded_evidence(shell, subtract, "child subtract_reference", logs)
+    require(len(decrement) == 22 and decrement[-2].mnemonic == "call" and
+            decrement[-2].operands[0].type == X86_OP_IMM, "Unknown child weak control release")
+    weak_release = decrement[-2].operands[0].imm
+    match_instruction_template(decrement, """
+push rbx
+sub rsp, 0x20
+mov rax, qword ptr [rcx + 8]
+@retry
+test rax, rax
+js @weak
+lea rdx, [rax - 1]
+lock cmpxchg qword ptr [rcx + 8], rdx
+jne @retry
+mov eax, edx
+@return
+add rsp, 0x20
+pop rbx
+ret
+int3
+@weak
+lea rcx, [rax + rax]
+or ebx, 0xffffffff
+lock xadd dword ptr [rcx + 0x18], ebx
+sub ebx, 1
+je @last
+@result
+mov eax, ebx
+jmp @return
+@last
+call $weak_release
+jmp @result
+""", {"weak_release": weak_release})
+    # The final strong reference releases its weak control block. Bind the
+    # complete direct callee, including its independent weak-count decrement;
+    # the object destructor remains the concrete checked implementation vtable.
+    _, weak = bounded_evidence(shell, weak_release, "child weak control release", logs)
+    require(len(weak) == 21 and weak[11].mnemonic == "call" and weak[14].mnemonic == "call" and
+            weak[11].operands[0].type == X86_OP_IMM and weak[14].operands[0].type == X86_OP_IMM,
+            "Unknown child weak control destructor")
+    decrement_module = weak[11].operands[0].imm
+    delete = weak[14].operands[0].imm
+    require(weak[10].operands[1].type == X86_OP_MEM, "Missing child module counter")
+    counter = weak[10].address + weak[10].size + weak[10].operands[1].mem.disp
+    require(counter == module_counter, "Weak control release uses a different module counter")
+    match_instruction_template(weak, """
+mov qword ptr [rsp + 8], rbx
+push rdi
+sub rsp, 0x20
+mov rbx, rcx
+or edi, 0xffffffff
+lock xadd dword ptr [rcx + 0x1c], edi
+sub edi, 1
+jne @return
+test rcx, rcx
+je @return
+lea rcx, [$counter]
+call $decrement_module
+lea edx, [rdi + 0x20]
+mov rcx, rbx
+call $delete
+@return
+mov rbx, qword ptr [rsp + 0x30]
+mov eax, edi
+add rsp, 0x20
+pop rdi
+ret
+int3
+""", {"counter": counter, "decrement_module": decrement_module, "delete": delete})
+    _, module_release = bounded_evidence(shell, decrement_module, "child module counter release", logs)
+    require(len(module_release) == 11 and module_release[6].mnemonic == "js" and
+            module_release[6].operands[0].type == X86_OP_IMM, "Unknown module counter failure path")
+    failure = module_release[6].operands[0].imm
+    match_instruction_template(module_release, """
+sub rsp, 0x28
+or eax, 0xffffffff
+lock xadd dword ptr [rcx], eax
+sub eax, 1
+je @return
+test eax, eax
+js $failure
+@return
+add rsp, 0x28
+ret
+int3
+jmp @return
+""", {"failure": failure})
+    _, fail_body = bounded_evidence(shell, failure, "child module counter underflow", logs)
+    match_instruction_template(fail_body, """
+call qword ptr [$terminate]
+nop dword ptr [rax + rax]
+int3
+""", {"terminate": shell.import_slot("api-ms-win-crt-private-l1-1-0.dll", "_o_terminate")})
+    # The sized delete thunk reaches the CRT free import through two exact
+    # direct jumps. Never accept a call target merely because it is executable.
+    destination = delete
+    for index in range(2):
+        jump = leaf(destination, 5, f"child delete thunk {index}")
+        require(len(jump) == 1 and jump[0].mnemonic == "jmp" and
+                jump[0].operands[0].type == X86_OP_IMM, "Unknown child delete thunk")
+        destination = jump[0].operands[0].imm
+    match_instruction_template(leaf(destination, 6, "child CRT free import"),
+                               "jmp qword ptr [$free]",
+                               {"free": shell.import_slot("api-ms-win-crt-private-l1-1-0.dll", "_o_free")})
+    return {"recipe": "xfg_child_owned_reference_v1", "add_ref_rva": addref,
+            "release_rva": release, "root_release_rva": root_release,
+            "subtract_reference_rva": subtract, "weak_release_rva": weak_release,
+            "implementation_reference_offset": 8, "weak_strong_offset": 0x18,
+            "weak_count_offset": 0x1c}
 
 
 def xfg_source_layout(taskbar, shell, logs):
@@ -1485,6 +1692,9 @@ ret
         rva = struct.unpack("<Q", raw)[0] - shell.pe.OPTIONAL_HEADER.ImageBase
         slots.append({"rva": rva, "prologue": list(shell.bytes(rva, 16))})
     query_evidence = xfg_child_query_interface(shell, child, slots, logs)
+    reference_evidence = None
+    if query_evidence["iid"] == "ec97afd0-5c0d-581b-9508-074773c6f1e0":
+        reference_evidence = xfg_child_reference_contract(shell, slots, query_evidence["module_counter_rva"], logs)
     getter_rva = slots[8]["rva"]
     getter_binding = anchored_symbol(shell, (GET_CONTENT, RAW_GET_CONTENT), getter_rva,
                                      "exact_relocated_child_vtable_slot_8")
@@ -1537,7 +1747,10 @@ jmp $success
 int3
 int3
 """, {"release": shell.exact(UNKNOWN_RELEASE), "success": getter[15].address})
-    return {"recipe_candidate": "xaml_explorer_host_child_xfg_v1", "host_child_offset": 0x20,
+    contract = {}
+    if query_evidence["iid"] == "ec97afd0-5c0d-581b-9508-074773c6f1e0":
+        contract["child_interface"] = "xaml_explorer_host_child_ec97_v1"
+    return {"recipe_candidate": "xaml_explorer_host_child_xfg_v1", **contract, "host_child_offset": 0x20,
             "child_source_offset": offset - 0x10, "child_vtable_rva": child,
             "child_vtable_entries": slots,
             "evidence": {"has_focus_rva": focus_rva, "child_getter_rva": getter_rva,
@@ -1545,6 +1758,7 @@ int3
                          "implementation_source_field": offset, "implementation_field_recipe": field_recipe,
                          "symbol_bindings": {"child_getter": getter_binding, "implementation_getter": impl_binding},
                          "child_query_interface": query_evidence,
+                         **({"child_reference_contract": reference_evidence} if reference_evidence else {}),
                          "factory_absent": True, "child_table_dir64_relocations": [child + i * 8 for i in range(13)]}}
 
 

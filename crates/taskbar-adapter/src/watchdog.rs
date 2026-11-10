@@ -251,6 +251,19 @@ impl Watchdog {
                     *context.error.borrow_mut() = Some(error);
                     return false;
                 }
+                // Explorer receives the real input. Let only the retained
+                // calendar owner activate its flyout before forwarding it.
+                // Volume actions must not grant permission to steal focus.
+                if matches!(
+                    event.input,
+                    litetray_adapter_protocol::activation::Input::Pointer
+                        | litetray_adapter_protocol::activation::Input::Keyboard
+                ) && unsafe { context.alive() }
+                {
+                    unsafe {
+                        AllowSetForegroundWindow(context.process_id);
+                    }
+                }
                 publish(event)
             })
         })
