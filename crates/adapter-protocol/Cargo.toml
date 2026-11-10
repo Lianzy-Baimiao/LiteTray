@@ -8,8 +8,8 @@ publish = false
 
 [features]
 default = []
-# Adds the 26H1 notification candidate pending isolated VM validation.
-# Eight reviewed profiles are included in the default registry.
+# Adds the later 26H1 notification candidate pending isolated VM validation.
+# Nine reviewed profiles are included in the default registry.
 compatibility-lab = []
 
 [dependencies]

@@ -141,6 +141,24 @@
       "profile_id": "windows11-22000.318-x64-clock",
       "role": "shell",
       "sha256": "dc24a218229828455be50ddd5af8a0c88399b74df81c9b6d563a2f78e3e66eb8"
+    },
+    {
+      "profile_id": "windows11-28000.1-x64-notification",
+      "role": "taskbar",
+      "sha256": "9308f1cee8c8b66baff89651e1b2c9429bd5e8f52510494e5c2b0875474e2fe9",
+      "fingerprint": "61296fdef3f50c91c36f5677364fb8791878ae2e5768c182a2160747fd93ce87"
+    },
+    {
+      "profile_id": "windows11-28000.1-x64-notification",
+      "role": "shell",
+      "sha256": "54c0fe10d50aa6b0fe3c753fdab3dcf58ff26f16164510dbeaabf95193fbf29a",
+      "fingerprint": "c37b9c354ba91b5a4eb7634cee831c8daba0c3ef9bdafd6e29180f197e6b1cce"
+    },
+    {
+      "profile_id": "windows11-28000.1-x64-notification",
+      "role": "tray",
+      "sha256": "0614146181123f2e970797576cd8dcb22b735a00733c6dc853eda5d2f39e4c04",
+      "fingerprint": "79bc9be8f8a198d0604daf7db0dc0be01acf9e1aaadebbcbc9d3092993312218"
     }
   ],
   "schema": 1

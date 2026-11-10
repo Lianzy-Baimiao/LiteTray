@@ -20,6 +20,7 @@ const PROFILE_BYTES: &[&[u8]] = &[
     include_bytes!("../profiles/windows11-22000.318-x64-clock.json"),
     #[cfg(feature = "compatibility-lab")]
     include_bytes!("../profiles/lab/windows11-28000.3365-x64-notification.json"),
+    include_bytes!("../profiles/windows11-28000.1-x64-notification.json"),
 ];
 const MAX_PROFILE: usize = 64 * 1024;
 
@@ -471,8 +472,8 @@ fn decode_profiles(sources: &[&[u8]]) -> Result<Vec<Profile>, String> {
 
 /// Validated, embedded evidence only. Registry order is not a compatibility
 /// preference: callers must select an exact module identity, never a default.
-/// Default builds include eight reviewed profiles, including primary-clock-only
-/// support. `compatibility-lab` adds a 26H1 candidate pending live acceptance.
+/// Default builds include nine reviewed profiles, including primary-clock-only
+/// support. `compatibility-lab` adds the later 26H1 candidate pending acceptance.
 pub fn profiles() -> Result<&'static [Profile], String> {
     static PROFILES: OnceLock<Result<Vec<Profile>, String>> = OnceLock::new();
     PROFILES
@@ -521,7 +522,14 @@ mod tests {
     fn child_interface_is_independent_of_xfg_layout_and_keeps_old_profile_bytes() {
         for bytes in PROFILE_BYTES {
             let profile = Profile::decode(bytes).unwrap();
-            assert!(profile.source.child_interface.is_none());
+            if profile.id == "windows11-28000.1-x64-notification" {
+                assert_eq!(
+                    profile.source.child_interface,
+                    Some(ChildInterface::XamlExplorerHostChildEc97V1)
+                );
+            } else {
+                assert!(profile.source.child_interface.is_none());
+            }
             assert_eq!(
                 serde_json::to_value(&profile).unwrap(),
                 serde_json::from_slice::<serde_json::Value>(bytes).unwrap()
@@ -589,6 +597,42 @@ mod tests {
         let mut wrong = candidate.clone();
         wrong.tray_geometry = Some(TrayGeometry::DragDropHitTesting);
         assert!(wrong.validate().is_err());
+    }
+
+    #[test]
+    fn base_notification_profile_keeps_its_own_module_and_interface_contract() {
+        let candidate = Profile::decode(include_bytes!(
+            "../profiles/windows11-28000.1-x64-notification.json"
+        ))
+        .unwrap();
+        assert!(profile_for_taskbar(&candidate.taskbar.identity).is_ok());
+        assert_eq!(candidate.tray.as_ref().unwrap().name, "Taskbar.View.dll");
+        assert_eq!(
+            candidate.source.interface_contract(),
+            ChildInterface::XamlExplorerHostChildEc97V1
+        );
+        assert_eq!(
+            candidate.tray_abi,
+            Some(TrayAbi::SystemTrayCoordinatesX64V1)
+        );
+        assert_eq!(
+            candidate.tray_geometry,
+            Some(TrayGeometry::NotificationAreaBounds)
+        );
+        assert_eq!(candidate.tray_entries.as_ref().unwrap()[2].rva, 0x5006c);
+        for module in candidate.modules() {
+            assert_module_identity_requirements(module);
+        }
+        let updated = Profile::decode(include_bytes!(
+            "../profiles/lab/windows11-28000.3365-x64-notification.json"
+        ))
+        .unwrap();
+        for (base, later) in candidate.modules().into_iter().zip(updated.modules()) {
+            assert!(!base.matches(&later.sha256, &later.identity));
+        }
+        let mut mixed = candidate.clone();
+        mixed.host = updated.host;
+        assert!(mixed.validate().is_err());
     }
 
     #[test]
@@ -809,6 +853,7 @@ mod tests {
             "windows11-22000.318-x64-clock",
             #[cfg(feature = "compatibility-lab")]
             "windows11-28000.3365-x64-notification",
+            "windows11-28000.1-x64-notification",
         ];
         assert_eq!(profiles.len(), expected_ids.len());
         for id in expected_ids {
@@ -828,6 +873,10 @@ mod tests {
     #[test]
     fn promoted_vm_profiles_keep_all_module_identities_separate() {
         let candidates = [
+            (
+                "windows11-28000.1-x64-notification",
+                &include_bytes!("../profiles/windows11-28000.1-x64-notification.json")[..],
+            ),
             (
                 "windows11-26200.8037-x64",
                 &include_bytes!("../profiles/windows11-26200.8037-x64.json")[..],
@@ -869,6 +918,7 @@ mod tests {
                 "windows11-22000.318-x64-clock",
                 #[cfg(feature = "compatibility-lab")]
                 "windows11-28000.3365-x64-notification",
+                "windows11-28000.1-x64-notification",
             ]
         );
         for candidate in &candidates {

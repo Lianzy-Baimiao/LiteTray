@@ -1,14 +1,17 @@
 # Built-in taskbar compatibility evidence
 
-Version 5.16.0 contains eight default profiles, including the primary-clock-only
-21H2 implementation. The explicit `compatibility-lab` registry adds one 26H1
-candidate. Version 5.14.2 contained seven profiles. `windows11-22621.1702-x64.json` (22H2 Pro) and
+The 5.16.2 candidate contains nine default profiles, including the primary-clock-only
+21H2 implementation and the 26H1 28000.1 implementation. Its final default-package
+rerun is still pending. The explicit `compatibility-lab` registry adds only the
+28000.3365 candidate, for ten profiles in total. Version 5.16.0 had eight default
+profiles; version 5.14.2 had seven. `windows11-22621.1702-x64.json` (22H2 Pro) and
 `windows11-22631.2861-x64.json` (23H2 Pro) were promoted after independently
 installed guests passed six scoped checks and independent evidence review.
 Both use the separately implemented four-argument borrowed-element
 `system_tray_drag_drop_borrowed_coordinates_x64_v1` ABI. In 5.15.0 LTSC also uses this borrowed ABI after caller analysis found its previous owned entry only served Copilot. The remaining four retain the owned-element ABI, with consumer purpose explicitly recorded in `tray_geometry`. Exact modules/layout, primary-clock
 updates/restoration and tray preparation/stop have recorded acceptance.
-Input, replication, multiple monitors and mixed DPI remain unvalidated.
+Those older single-monitor runs do not establish input, replication,
+multiple-monitor or mixed-DPI acceptance.
 See [22H2 / 23H2 evidence](../../../docs/compatibility-22h2-23h2.md) for package
 identities, raw restoration checks and the separate default reruns.
 
@@ -98,6 +101,25 @@ acceptance record. A frozen lab EXE matches the retained Microsoft module
 bytes in a disk-only report. Installed paths, a coherent installed system,
 loaded modules and actual clock/tray behavior remain unverified. See
 [26H1 research and integration](../../../docs/windows11-coverage-next-research.md).
+
+`windows11-28000.1-x64-notification.json` separately describes the canonical
+26H1 base system, whose notification code resides in `Taskbar.View.dll`. Its
+exact module bytes, matching symbols, actual ec97 child interface, source fields
+and owned notification-area ABI have been reviewed. The actual installed and
+Explorer-loaded paths, full hashes and image sizes match those files. A frozen
+lab package on the independently installed Pro x64 single-display guest completed
+clock text/width updates and restoration, tray preparation/Stop, four primary-clock
+calendar clicks and 75 seconds of native-clock observation after normal exit,
+with the same Explorer process. These are the lab package's results; the final
+default 5.16.2 package still requires its own rerun.
+
+The base profile has its own addresses and three reviewed execution fingerprints;
+it does not reuse the later SystemTray profile or permit new implementation bytes.
+The default registry has 26 module records, 23 with non-null fingerprints. The lab
+registry adds three exact-only 3365 records. Retain all live object, thread, window
+and XamlRoot checks; matching metadata alone does not inherit acceptance. ARM64,
+26H1 multiple monitors, mixed DPI, tray replication and the complete pointer-input
+matrix remain outside these results. See [26H1 x64 evidence](../../../docs/compatibility-26h1.md).
 
 The 21H2 implementation carries a separately verified NotificationAreaHost
 route and recognizes the observed single DateTimeInnerTextBlock clock. Its

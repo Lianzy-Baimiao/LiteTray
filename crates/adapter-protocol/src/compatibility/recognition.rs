@@ -480,7 +480,7 @@ mod tests {
         );
         assert_eq!(
             entries.iter().filter(|e| e.fingerprint.is_some()).count(),
-            20
+            23
         );
         assert!(entries.iter().filter(|e| e.fingerprint.is_none()).all(|e| {
             (e.profile_id == "windows11-26300.9711-x64"
