@@ -1102,6 +1102,327 @@ jmp [$guard]
     return {"schema": 1, "module": image.identity, "symbols": entries}
 
 
+EARLY_CHILD_QI_SYMBOLS = {
+    'child_iid': '??$guid_v@UIXamlExplorerHostChildWindow@XamlExplorerHost@Shell@Internal@Windows@winrt@@@impl@winrt@@3Uguid@2@B',
+    'implementation_table': '??_7XamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@6B@',
+    'query': '?QueryInterface@?$produce_base@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostChildWindow@34567@X@impl@winrt@@UEAAHAEBUguid@3@PEAPEAX@Z',
+    'root_query': '?query_interface@?$root_implements@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@UIClosable@Foundation@67@Unon_agile@7@@impl@winrt@@AEAAHAEBUguid@3@PEAPEAX@Z',
+    'find': '?find_interface@?$implements@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@UIClosable@Foundation@67@Unon_agile@7@@winrt@@UEBAPEAXAEBUguid@2@@Z',
+    'iids': '?get_local_iids@?$implements@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@UIClosable@Foundation@67@Unon_agile@7@@winrt@@UEBA?AU?$pair@IPEBUguid@winrt@@@std@@XZ',
+    'weak': '?make_weak_ref@?$root_implements@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@UIClosable@Foundation@67@Unon_agile@7@@impl@winrt@@AEAAPEAUIWeakReferenceSource@23@XZ',
+    'constructor': '??0XamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@QEAA@PEAUHWND__@@AEBUhstring@6@@Z',
+    'tearoff': '?query_interface_tearoff@?$root_implements@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@UIClosable@Foundation@67@Unon_agile@7@@impl@winrt@@MEBAHAEBUguid@3@PEAPEAX@Z',
+    'closable_table': '??_7?$produce@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIClosable@Foundation@67@@impl@winrt@@6B@',
+}
+
+EARLY_CHILD_QI_RAW_NAMES = {
+    'root_query': 'winrt::impl::root_implements<winrt::Windows::Internal::Shell::XamlExplorerHost::implementation::XamlExplorerHostChildWindow,winrt::Windows::Internal::Shell::XamlExplorerHost::XamlExplorerHostChildWindow,winrt::Windows::Foundation::IClosable,winrt::non_agile>::query_interface',
+    'weak': 'winrt::impl::root_implements<winrt::Windows::Internal::Shell::XamlExplorerHost::implementation::XamlExplorerHostChildWindow,winrt::Windows::Internal::Shell::XamlExplorerHost::XamlExplorerHostChildWindow,winrt::Windows::Foundation::IClosable,winrt::non_agile>::make_weak_ref',
+    'constructor': 'winrt::Windows::Internal::Shell::XamlExplorerHost::implementation::XamlExplorerHostChildWindow::XamlExplorerHostChildWindow',
+}
+
+EARLY_CHILD_FIND_BODY = """
+sub rsp, 0x28
+mov r10, rdx
+mov r9, rcx
+mov rcx, r10
+lea rdx, [$child_iid]
+call $equal
+xor r8d, r8d
+test al, al
+jne @branch_0
+lea rdx, [$closable_iid]
+call $equal
+test al, al
+jne @branch_1
+@branch_2
+mov rax, r8
+add rsp, 0x28
+ret
+int3
+@branch_1
+lea rax, [r9 + 0x18]
+@branch_3
+neg r9
+sbb r8, r8
+and r8, rax
+jmp @branch_2
+@branch_0
+lea rax, [r9 + 0x10]
+jmp @branch_3
+"""
+
+EARLY_CHILD_QUERY_BODY = """
+mov qword ptr [rsp + 8], rbx
+mov qword ptr [rsp + 0x10], rsi
+push rdi
+sub rsp, 0x20
+mov rax, qword ptr [rcx]
+mov rsi, r8
+mov rdi, rdx
+mov rbx, rcx
+movabs r10, 0xc91417db5e5ee170
+mov rax, qword ptr [rax + 0x30]
+call qword ptr [$guard]
+mov qword ptr [rsi], rax
+test rax, rax
+jne @branch_0
+lea rdx, [$inspectable_iid]
+mov rcx, rdi
+call $equal
+test al, al
+jne $cold
+lea rdx, [$unknown_iid]
+call $equal
+test al, al
+jne $cold_unknown
+lea rdx, [$weak_iid]
+call $equal
+test al, al
+je $cold_tearoff
+mov rcx, rbx
+call $weak
+mov qword ptr [rsi], rax
+neg rax
+sbb eax, eax
+not eax
+and eax, 0x8007000e
+@branch_2
+mov rbx, qword ptr [rsp + 0x30]
+mov rsi, qword ptr [rsp + 0x38]
+add rsp, 0x20
+pop rdi
+ret
+int3
+@branch_0
+mov rdx, qword ptr [rbx + 8]
+@branch_1
+test rdx, rdx
+js $cold_count
+lea rcx, [rdx + 1]
+mov rax, rdx
+lock cmpxchg qword ptr [rbx + 8], rcx
+mov rdx, rax
+jne @branch_1
+xor eax, eax
+jmp @branch_2
+"""
+
+EARLY_CHILD_QUERY_COLD_BODY = """
+mov rax, qword ptr [rbx]
+movabs r10, 0xd52cb78974de0870
+mov rax, qword ptr [rax + 0x38]
+mov rcx, rbx
+call qword ptr [$guard]
+mov qword ptr [rsi], rax
+mov rdx, qword ptr [rbx + 8]
+@branch_1
+test rdx, rdx
+js @branch_0
+lea rcx, [rdx + 1]
+mov rax, rdx
+lock cmpxchg qword ptr [rbx + 8], rcx
+mov rdx, rax
+jne @branch_1
+jmp $success
+mov rax, qword ptr [rbx]
+movabs r10, 0xfe9c1eea34550970
+mov rax, qword ptr [rax + 0x18]
+mov rcx, rbx
+call qword ptr [$guard]
+mov qword ptr [rsi], rax
+mov rdx, qword ptr [rbx + 8]
+@branch_2
+test rdx, rdx
+js @branch_0
+lea rcx, [rdx + 1]
+mov rax, rdx
+lock cmpxchg qword ptr [rbx + 8], rcx
+mov rdx, rax
+jne @branch_2
+jmp $success
+@branch_0
+mov eax, 1
+lock xadd dword ptr [rdx + rdx + 0x18], eax
+jmp $success
+mov rax, qword ptr [rbx]
+movabs r10, 0xe6012f053a556b70
+mov rax, qword ptr [rax]
+mov r8, rsi
+mov rdx, rdi
+mov rcx, rbx
+call qword ptr [$guard]
+nop
+jmp $return_result
+"""
+
+def xfg_child_query_interface(shell, child, slots, logs):
+    """Bind the early private IID to its concrete QI dispatch and owned result.
+
+    Public type names are shared with later versions; their GUIDs are not.
+    All bodies below are complete fixed recipes except the explicitly bounded
+    constructor prefix that binds this ABI subobject to the implementation.
+    """
+    names = dict(EARLY_CHILD_QI_SYMBOLS)
+    # DbgHelp exposes these private methods as exact raw names on 22000.282.
+    # Accept only the finite aliases and one shared RVA; the QI jump/call and
+    # constructor table stores below independently validate their roles.
+    for key, raw_name in EARLY_CHILD_QI_RAW_NAMES.items():
+        aliases = (names[key], raw_name)
+        matches = [s for s in shell.symbols if s["decorated_name"] in aliases]
+        require(len({s["rva"] for s in matches}) == 1,
+                "Missing/ambiguous exact early QI symbol alias: " + key)
+        names[key] = names[key] if any(s["decorated_name"] == names[key] for s in matches) else raw_name
+    targets = {key: shell.exact(name) for key, name in names.items()}
+    targets["guard"] = shell.exact(XFG_DISPATCH)
+    early_iid = bytes.fromhex("32f6f8ee0d6ccb5fb6a1354819e51f3b")
+    require(shell.bytes(targets["child_iid"], 16, False) == early_iid,
+            "Early child exact named IID is not eef8f632-6c0d-5fcb-b6a1-354819e51f3b")
+    require(slots[0]["rva"] == targets["query"], "Early child slot zero is not its exact named QI")
+
+    def leaf(rva, size, label):
+        decoder = Cs(CS_ARCH_X86, CS_MODE_64)
+        decoder.detail = True
+        code = list(decoder.disasm(shell.bytes(rva, size), rva))
+        require(sum(ins.size for ins in code) == size, "Incomplete early QI leaf")
+        logs.append({"module_role": shell.role, "symbol": label, "rva": rva,
+                     "boundary_recipe": f"exact_{size}_byte_early_qi_leaf_v1",
+                     "instructions": [instruction_record(ins) for ins in code]})
+        return code
+
+    def rip(ins):
+        memory = [op.mem for op in ins.operands if op.type == X86_OP_MEM and
+                  ins.reg_name(op.mem.base) == "rip" and op.mem.index == 0 and op.mem.segment == 0]
+        require(len(memory) == 1, "Early QI operand has no unique RIP-relative target")
+        return ins.address + ins.size + memory[0].disp
+
+    def direct(ins):
+        require(len(ins.operands) == 1 and ins.operands[0].type == X86_OP_IMM,
+                "Early QI branch has no direct target")
+        return ins.operands[0].imm
+
+    match_instruction_template(leaf(targets["query"], 18, names["query"]), """
+lea rax, [rcx - 0x10]
+neg rcx
+sbb rcx, rcx
+and rcx, rax
+jmp $root_query
+""", targets)
+    table = targets["implementation_table"]
+    sections = [s for s in shell.pe.sections if s.VirtualAddress <= table and
+                table + 64 <= s.VirtualAddress + min(s.Misc_VirtualSize, s.SizeOfRawData)]
+    require(table % 8 == 0 and len(sections) == 1 and sections[0].Name.rstrip(b"\0") == b".data" and
+            sections[0].Characteristics == 0xc0000040, "Unknown early implementation table section")
+    relocations = [(e.rva, e.type) for b in getattr(shell.pe, "DIRECTORY_ENTRY_BASERELOC", []) for e in b.entries]
+    for offset, key in ((0, "tearoff"), (0x20, "iids"), (0x30, "find")):
+        location = table + offset
+        require([kind for address, kind in relocations if address == location] == [10],
+                "Early implementation QI slot needs exactly one DIR64 relocation")
+        raw = shell.pe.get_data(location, 8)
+        require(len(raw) == 8 and struct.unpack("<Q", raw)[0] - shell.pe.OPTIONAL_HEADER.ImageBase == targets[key],
+                "Early implementation slot is not its exact named QI target")
+
+    _, constructor = function_evidence(shell, names["constructor"], logs)
+    match_instruction_template(constructor[:20], """
+mov qword ptr [rsp + 8], rcx
+push rbp
+push rbx
+push rsi
+push rdi
+push r12
+push r13
+push r14
+push r15
+mov rbp, rsp
+sub rsp, 0x38
+mov rdi, r8
+mov rsi, rdx
+mov r15, rcx
+lea rax, [$child]
+mov qword ptr [rcx + 0x10], rax
+lea rax, [$closable_table]
+mov qword ptr [rcx + 0x18], rax
+mov ecx, 1
+mov eax, ecx
+""", {**targets, "child": child})
+    require(len(constructor) > 24 and constructor[20].mnemonic == "lock xadd" and
+            len(constructor[20].operands) == 2 and constructor[20].operands[0].type == X86_OP_MEM and
+            constructor[20].operands[0].size == 4 and constructor[20].operands[1].type == X86_OP_REG and
+            constructor[20].reg_name(constructor[20].operands[1].reg) == "eax",
+            "Early constructor has changed its intervening module-count update")
+    rip(constructor[20])
+    match_instruction_template(constructor[21:25], """
+mov qword ptr [r15 + 8], rcx
+lea rax, [$implementation_table]
+mov qword ptr [r15], rax
+lea rcx, [r15 + 0x20]
+""", targets)
+
+    _, find = function_evidence(shell, names["find"], logs)
+    require(len(find) == 24, "Unknown early find_interface body")
+    targets.update(equal=direct(find[5]), closable_iid=rip(find[9]))
+    closable_iid = bytes.fromhex("29a8d530a47f264083bbd75bae4ea99e")
+    require(shell.bytes(targets["closable_iid"], 16, False) == closable_iid,
+            "Early find_interface has changed its IClosable IID")
+    match_instruction_template(find, EARLY_CHILD_FIND_BODY, targets)
+    match_instruction_template(leaf(targets["equal"], 28, "early QI direct GUID equality"), """
+mov rax, qword ptr [rcx]
+sub rax, qword ptr [rdx]
+jne @different_half
+mov rax, qword ptr [rcx + 8]
+sub rax, qword ptr [rdx + 8]
+@different_half
+test rax, rax
+je @equal
+xor al, al
+ret
+int3
+@equal
+mov al, 1
+ret
+""", {})
+    iids = leaf(targets["iids"], 21, names["iids"])
+    targets["iid_array"] = rip(iids[0])
+    match_instruction_template(iids, """
+lea rax, [$iid_array]
+mov dword ptr [rdx], 2
+mov qword ptr [rdx + 8], rax
+mov rax, rdx
+ret
+""", targets)
+    require(shell.bytes(targets["iid_array"], 32, False) == early_iid + closable_iid,
+            "Early GetIids disagrees with the complete supported private IID pair")
+    _, query = function_evidence(shell, names["root_query"], logs)
+    require(len(query) == 50, "Unknown early root query_interface body")
+    for key, index, value in (
+        ("inspectable_iid", 14, "e0e286af2db16a4c9c5ad7aa65101e90"),
+        ("unknown_iid", 19, "0000000000000000c000000000000046"),
+        ("weak_iid", 23, "3800000000000000c000000000000046"),
+    ):
+        targets[key] = rip(query[index])
+        require(shell.bytes(targets[key], 16, False) == bytes.fromhex(value),
+                "Early root QI has changed a standard interface IID")
+    for key, index in (("cold", 18), ("cold_unknown", 22), ("cold_count", 42), ("cold_tearoff", 26)):
+        targets[key] = direct(query[index])
+    targets.update(success=query[48].address, return_result=query[34].address)
+    match_instruction_template(query, EARLY_CHILD_QUERY_BODY, targets)
+    _, cold = bounded_evidence(shell, targets["cold"], "early root QI cold paths", logs)
+    require(len(cold) == 42 and cold[15].address == targets["cold_unknown"] and
+            cold[30].address == targets["cold_count"] and cold[33].address == targets["cold_tearoff"],
+            "Early root QI cold branches do not enter their reviewed blocks")
+    match_instruction_template(cold, EARLY_CHILD_QUERY_COLD_BODY, targets)
+    match_instruction_template(leaf(targets["tearoff"], 6, names["tearoff"]), """
+mov eax, 0x80004002
+ret
+""", {})
+    return {"recipe": "early_private_iid_owned_query_v1", "iid": "eef8f632-6c0d-5fcb-b6a1-354819e51f3b",
+            "iid_rva": targets["child_iid"], "query_interface_rva": targets["query"],
+            "root_query_interface_rva": targets["root_query"], "implementation_vtable_rva": table,
+            "find_interface_rva": targets["find"], "get_local_iids_rva": targets["iids"],
+            "get_local_iids_array_rva": targets["iid_array"], "abi_this_adjustment": -0x10,
+            "returned_implementation_offset": 0x10, "owned_reference": True}
+
+
 def xfg_source_layout(taskbar, shell, logs):
     """Early child getter and writable table with exact relocations/targets."""
     focus_name = CONSUME_FOCUS.replace("QEBA@XZ", "QEBA_NXZ")
@@ -1163,6 +1484,7 @@ ret
         require(len(raw) == 8, "Truncated early child table slot")
         rva = struct.unpack("<Q", raw)[0] - shell.pe.OPTIONAL_HEADER.ImageBase
         slots.append({"rva": rva, "prologue": list(shell.bytes(rva, 16))})
+    query_evidence = xfg_child_query_interface(shell, child, slots, logs)
     getter_rva = slots[8]["rva"]
     getter_binding = anchored_symbol(shell, (GET_CONTENT, RAW_GET_CONTENT), getter_rva,
                                      "exact_relocated_child_vtable_slot_8")
@@ -1222,6 +1544,7 @@ int3
                          "implementation_getter_rva": impl_rva, "abi_this_adjustment": -0x10,
                          "implementation_source_field": offset, "implementation_field_recipe": field_recipe,
                          "symbol_bindings": {"child_getter": getter_binding, "implementation_getter": impl_binding},
+                         "child_query_interface": query_evidence,
                          "factory_absent": True, "child_table_dir64_relocations": [child + i * 8 for i in range(13)]}}
 
 

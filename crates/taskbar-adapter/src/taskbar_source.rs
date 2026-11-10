@@ -8,7 +8,20 @@ use litetray_adapter_protocol::compatibility::{Resolved, SourceRecipe};
 use std::{mem::size_of, ptr::null_mut};
 use windows_sys::Win32::System::Memory::*;
 use windows_sys::{Win32::Foundation::*, core::GUID};
-const IID_CHILD: GUID = GUID::from_u128(0xec97afd0_5c0d_581b_9508_074773c6f1e0);
+fn child_iid(recipe: SourceRecipe) -> GUID {
+    // These are distinct private interfaces, despite their identical names.
+    // The reviewed early QI dispatch and GetIids both identify eef8f632;
+    // slot count alone cannot identify an IID. Select only after the module and
+    // concrete vtable have matched the corresponding implementation recipe.
+    match recipe {
+        SourceRecipe::XamlExplorerHostChildV1 => {
+            GUID::from_u128(0xec97afd0_5c0d_581b_9508_074773c6f1e0)
+        }
+        SourceRecipe::XamlExplorerHostChildXfgV1 => {
+            GUID::from_u128(0xeef8f632_6c0d_5fcb_b6a1_354819e51f3b)
+        }
+    }
+}
 pub(crate) struct Source {
     pub root: Object,
     pub source: Object,
@@ -105,7 +118,8 @@ pub(crate) unsafe fn resolve(hwnd: HWND, plan: &Resolved) -> Result<Source, Stri
         inspect::check_region(raw, size_of::<usize>(), 0, false)?;
         let table = inspect::pointer(raw)?;
         validate_child_vtable(plan, shell, table)?;
-        let child = Object::query_borrowed(raw as *mut _, &IID_CHILD)?;
+        let child = Object::query_borrowed(raw as *mut _, &child_iid(plan.source.recipe))
+            .map_err(|error| format!("Taskbar child interface: {error}"))?;
         if inspect::pointer(child.raw() as usize)? != table {
             return Err("子宿主接口身份变化".into());
         }
@@ -118,7 +132,8 @@ pub(crate) unsafe fn resolve(hwnd: HWND, plan: &Resolved) -> Result<Source, Stri
         let table = inspect::pointer(source)?;
         inspect::check_region(table, 3 * size_of::<usize>(), 0, false)?;
         inspect::check_region(inspect::pointer(table)?, 1, 0, true)?;
-        let source = Object::query_borrowed(source as *mut _, &IID_IDesktopWindowXamlSource)?;
+        let source = Object::query_borrowed(source as *mut _, &IID_IDesktopWindowXamlSource)
+            .map_err(|error| format!("Taskbar DesktopWindowXamlSource interface: {error}"))?;
         let mut content = null_mut();
         xaml::check(
             (source.table::<IDesktopWindowXamlSource_Vtbl>().Content)(source.raw(), &mut content),

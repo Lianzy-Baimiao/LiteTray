@@ -84,7 +84,7 @@
       "904776": "48895c2420574883ec20488b09488bfa483b0a741d4885c9740a48833a000f85840d1a0032c0488b5c24484883c4205fc3ccb001ebf0",
       "2612180": "41b99f1307804c8d051f404100ba45000000488bcfe8c6bbe6ffcc",
       "2612162": "488d4c2430e87425e2ff90e968f1e5ffcccc",
-      "1575216": "488d41f048f7d9481bc94823c8e9c27e",
+      "1575216": "488d41f048f7d9481bc94823c8e9c27ef5ff",
       "300848": "4885c94c8d41f8b8080000004c0f44c0",
       "886096": "488d41f048f7d9481bc94823c8e9a601",
       "3301536": "488d41f048f7d9481bc94823c8e97e07",
@@ -95,7 +95,14 @@
       "903872": "48895424104883ec28488d41f048f7d9",
       "4237984": "4883ec28488d414c41b85c0000004885",
       "4238192": "4883ec28488d41f048f7d9481bc94823",
-      "264944": "4c8bdc49895b1049897318574883ec20"
+      "264944": "4c8bdc49895b1049897318574883ec20",
+      "886788": "48895c24084889742410574883ec20488b01498bf0488bfa488bd949ba70e15e5edb1714c9488b4030ff15951859004889064885c07567488d15366e5f00488bcfe8f61a000084c00f85ce401a00488d15bf745f00e8e21a000084c00f85f7401a00488d15bb745f00e8ce1a000084c00f8430411a00488bcbe80a30000048890648f7d81bc0f7d0250e000780488b5c2430488b7424384883c4205fc3cc488b53084885d20f88eb401a00488d4a01488bc2f0480fb14b08488bd075e533c0ebcc",
+      "897728": "4883ec284c8bd24c8bc9498bca488d15fc4b5f00e867f0ffff4533c084c07528488d15d94b5f00e854f0ffff84c07509498bc04883c428c3cc498d411849f7d94d1bc04c23c0ebe8498d4110ebef",
+      "2607392": "488b0349ba7008de7489b72cd5488b4038488bcbff158ed73e00488906488b53084885d27854488d4a01488bc2f0480fb14b08488bd075e9e964bfe5ff488b0349ba70095534ea1e9cfe488b4018488bcbff1551d73e00488906488b53084885d27817488d4a01488bc2f0480fb14b08488bd075e9e927bfe5ffb801000000f00fc1441218e917bfe5ff488b0349ba706b553a052f01e6488b004c8bc6488bd7488bcbff15ffd63e0090e9c2bee5ff",
+      "897984": "48894c2408555356574154415541564157488bec4883ec38498bf8488bf24c8bf9488d0538056d0048894110488d05f5046d0048894118b9010000008bc1f00fc1059a856d0049894f08488d05dfce6c00498907498d4f20e8730200004533ed4d896f284d896f304d8d77384d892e4d8d67404d892c24488b0fe871f6ffff498947484989775045886f5845896f5c4d896f604d896f684d896f70498b5720488d4d50e858010000488d45504c3bf00f8407201a004d392e0f85f01f1a00488b4d50498bc54889455049890e4885c00f85f01f1a00498b0e488b0149ba7082d970908e31f3498b5750488b4018ff1515ec580085c00f88d91f1a00498b0e488b0149ba7069595a63b658fe498bd4488b4020ff15f0eb580085c00f88bc1f1a00488d05916c6d00488945f0f048ff05856c6d004c392d766c6d000f848c000000488d5558488d0d656c6d00e858aa090090f048ff0d5f6c6d00488b5558488d4d60e802010000904c396d587409488d4d58e80a4cfcff488b4d60488b0149ba7032db50078e98b7b201488b4038ff1575eb580085c0785aba08000000498b0c2448ff15d9a273000f1f44000090488d4d60e8ca4bfcff90498bc74883c438415f415e415d415c5f5e5b5dc3ccf048ff0de46b6d00488d05a5a90900488945e84c8d45e8488d5558e8e490f8ffe968ffffff8bc8e89466240090",
+      "893760": "488b01482b027508488b4108482b42084885c0740432c0c3ccb001c3",
+      "1609472": "488d05118b5000c7020200000048894208488bc2c3",
+      "1603248": "b802400080c3cccc7129d914433f9ca6"
     },
     "symbols": [
       {
@@ -133,8 +140,70 @@
       {
         "rva": 8042784,
         "decorated_name": "??_7?$produce@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostChildWindow@34567@@impl@winrt@@6B@"
+      },
+      {
+        "rva": 7143120,
+        "decorated_name": "??$guid_v@UIXamlExplorerHostChildWindow@XamlExplorerHost@Shell@Internal@Windows@winrt@@@impl@winrt@@3Uguid@2@B"
+      },
+      {
+        "rva": 8028912,
+        "decorated_name": "??_7XamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@6B@"
+      },
+      {
+        "rva": 1575216,
+        "decorated_name": "?QueryInterface@?$produce_base@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIXamlExplorerHostChildWindow@34567@X@impl@winrt@@UEAAHAEBUguid@3@PEAPEAX@Z"
+      },
+      {
+        "rva": 886788,
+        "decorated_name": "?query_interface@?$root_implements@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@UIClosable@Foundation@67@Unon_agile@7@@impl@winrt@@AEAAHAEBUguid@3@PEAPEAX@Z"
+      },
+      {
+        "rva": 897728,
+        "decorated_name": "?find_interface@?$implements@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@UIClosable@Foundation@67@Unon_agile@7@@winrt@@UEBAPEAXAEBUguid@2@@Z"
+      },
+      {
+        "rva": 1609472,
+        "decorated_name": "?get_local_iids@?$implements@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@UIClosable@Foundation@67@Unon_agile@7@@winrt@@UEBA?AU?$pair@IPEBUguid@winrt@@@std@@XZ"
+      },
+      {
+        "rva": 899212,
+        "decorated_name": "?make_weak_ref@?$root_implements@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@UIClosable@Foundation@67@Unon_agile@7@@impl@winrt@@AEAAPEAUIWeakReferenceSource@23@XZ"
+      },
+      {
+        "rva": 897984,
+        "decorated_name": "??0XamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@QEAA@PEAUHWND__@@AEBUhstring@6@@Z"
+      },
+      {
+        "rva": 898704,
+        "decorated_name": "??0DesktopWindowXamlSource@Hosting@Xaml@UI@Windows@winrt@@QEAA@XZ"
+      },
+      {
+        "rva": 1603248,
+        "decorated_name": "?query_interface_tearoff@?$root_implements@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@U134567@UIClosable@Foundation@67@Unon_agile@7@@impl@winrt@@MEBAHAEBUguid@3@PEAPEAX@Z"
+      },
+      {
+        "rva": 8042728,
+        "decorated_name": "??_7?$produce@UXamlExplorerHostChildWindow@implementation@XamlExplorerHost@Shell@Internal@Windows@winrt@@UIClosable@Foundation@67@@impl@winrt@@6B@"
       }
-    ]
+    ],
+    "data": {
+      "7143120": "32f6f8ee0d6ccb5fb6a1354819e51f3b",
+      "7143104": "29a8d530a47f264083bbd75bae4ea99e",
+      "6887960": "32f6f8ee0d6ccb5fb6a1354819e51f3b29a8d530a47f264083bbd75bae4ea99e",
+      "7140984": "e0e286af2db16a4c9c5ad7aa65101e90",
+      "7142680": "0000000000000000c000000000000046",
+      "7142696": "3800000000000000c000000000000046"
+    },
+    "implementation_table": {
+      "8028912": 1603248,
+      "8028920": 324496,
+      "8028928": 1603088,
+      "8028936": 347648,
+      "8028944": 1609472,
+      "8028952": 4216272,
+      "8028960": 897728,
+      "8028968": 347072
+    }
   },
   "source": {
     "recipe_candidate": "xaml_explorer_host_child_xfg_v1",
@@ -440,6 +509,20 @@
           "anchor": "early_child_vtable_getter_direct_call",
           "uses_raw_alias": true
         }
+      },
+      "child_query_interface": {
+        "recipe": "early_private_iid_owned_query_v1",
+        "iid": "eef8f632-6c0d-5fcb-b6a1-354819e51f3b",
+        "iid_rva": 7143120,
+        "query_interface_rva": 1575216,
+        "root_query_interface_rva": 886788,
+        "implementation_vtable_rva": 8028912,
+        "find_interface_rva": 897728,
+        "get_local_iids_rva": 1609472,
+        "get_local_iids_array_rva": 6887960,
+        "abi_this_adjustment": -16,
+        "returned_implementation_offset": 16,
+        "owned_reference": true
       },
       "factory_absent": true,
       "child_table_dir64_relocations": [
