@@ -723,6 +723,37 @@ const RECORDED_ACCEPTANCES: &[RecordedAcceptance] = &[
             detail: "通过 Windows 设置将副屏从 100% 改为 125%，实读 DPI 96/96→96/120→96/96；两屏托管文字和 240 DIP 宽度自动恢复，显示布局恢复，正常退出后原生时钟结构恢复并观察到 75 秒跨分钟走时，Explorer 未重启。未测物理插拔、休眠、其他缩放比例或托盘复制。",
         }],
     },
+    RecordedAcceptance {
+        profile_id: "windows11-28000.1-x64-notification",
+        recipe_sha256: "9c78c1468d10688c531a209e6dfccd8a10b6866495d165e0e70152ecb93b883a",
+        package_version: "5.16.1",
+        package_build_id: "5.16.1-5dc517dab70f",
+        published_commit: None,
+        package_manifest_sha256: "35afe0bcdff0479a370d4a8368060f72b8b7aee317e07b331a8bfc836b54e50b",
+        executable_sha256: "a6537eaa984328d22e9c9109f77e03eda3ca935e46876fa7279411b30b23ce06",
+        adapter_sha256: "f5ddb6bae2bc3e2977a66cc43dded0def2a64690db0fe3660821a9df05b4c49b",
+        popup_sha256: "b565724ef34551cfd28ca0682c24ffc50306ba33c111fa75bc64da0182481a2b",
+        run_id: "sandbox-20261110-224027-782c4b5d",
+        nonce: "db768217108544b191e8d99daafef808",
+        archive_sha256: "6dc2f59a79dc38834ff88a49e3e5d06aa6a6501c04d1188f3f3ad03af1d76441",
+        environment_scope: "基于 5.16.1 开发源码冻结的 compatibility-lab 实验包，未发布；独立 Windows 11 Pro 26H1 28000.1 x64 单屏 WHPX 虚拟机，1280×800、DPI 96、Medium 普通权限。四次主屏日历点击另有通过记录，不代表完整输入矩阵。此记录不是正式 5.16.1、最终默认包、当前会话或 28000.3365 的验收。",
+        recorded_on: "2026-11-10",
+        reference: "docs/compatibility-26h1.md",
+        scenarios: &[
+            AcceptedScenario {
+                scenario: ValidationScenario::ModuleLayout,
+                detail: "前置五项命令及本轮真实主屏事务通过；三份实际加载模块、ec97 子接口、任务栏窗口/线程归属和分离式时钟结构匹配。隔离时钟自测 179 项通过；它不代替 Explorer 内的实际检查。",
+            },
+            AcceptedScenario {
+                scenario: ValidationScenario::ClockUpdateRestore,
+                detail: "三帧文字与宽度 63→240→320→320→63 读回通过，停止后完整原文、节点、可见性和尺寸恢复。后台应用正常退出码 0；随后两次原生时间从 10∶41 PM 变为 10∶42 PM，观察相隔 75.294936 秒。原 Explorer、显示布局不变，工作进程确认退出。该观察不等于逐帧绘制或每秒刷新验收。",
+            },
+            AcceptedScenario {
+                scenario: ValidationScenario::TrayPrepareStop,
+                detail: "实际通知区域表面与三个坐标入口准备、停止通过，清理收到确认。未激活托盘复制，未验收副屏、菜单、悬停或滚轮音量。",
+            },
+        ],
+    },
 ];
 
 fn recorded_recipe_digest(profile: &Profile) -> String {
@@ -843,7 +874,7 @@ mod tests {
                     if module_index == 2 && item.scenario == ValidationScenario::ClockUpdateRestore
                     {
                         item.status
-                            == evidence(original)
+                            == historical_evidence(original)
                                 .into_iter()
                                 .find(|previous| previous.scenario == item.scenario)
                                 .unwrap()
@@ -1224,6 +1255,94 @@ mod tests {
     }
 
     #[test]
+    fn base_26h1_acceptance_keeps_lab_identity_and_limited_scope() {
+        let profile = profiles()
+            .unwrap()
+            .iter()
+            .find(|profile| profile.id == "windows11-28000.1-x64-notification")
+            .unwrap();
+        let catalog = support_profile(profile);
+        let record = catalog.recorded_acceptance.unwrap();
+        assert_eq!(
+            recorded_recipe_digest(profile),
+            "9c78c1468d10688c531a209e6dfccd8a10b6866495d165e0e70152ecb93b883a"
+        );
+        assert_eq!(catalog.recorded_acceptances.len(), 1);
+        assert_eq!(record.package_version, "5.16.1");
+        assert_eq!(record.package_build_id, "5.16.1-5dc517dab70f");
+        assert_eq!(record.published_commit, None);
+        assert_eq!(record.run_id, "sandbox-20261110-224027-782c4b5d");
+        assert_eq!(record.nonce, "db768217108544b191e8d99daafef808");
+        assert_eq!(
+            record.archive_sha256,
+            "6dc2f59a79dc38834ff88a49e3e5d06aa6a6501c04d1188f3f3ad03af1d76441"
+        );
+        assert_eq!(
+            record.package_manifest_sha256,
+            "35afe0bcdff0479a370d4a8368060f72b8b7aee317e07b331a8bfc836b54e50b"
+        );
+        assert_eq!(
+            record.executable_sha256,
+            "a6537eaa984328d22e9c9109f77e03eda3ca935e46876fa7279411b30b23ce06"
+        );
+        assert_eq!(
+            record.adapter_sha256,
+            "f5ddb6bae2bc3e2977a66cc43dded0def2a64690db0fe3660821a9df05b4c49b"
+        );
+        assert_eq!(
+            record.popup_sha256,
+            "b565724ef34551cfd28ca0682c24ffc50306ba33c111fa75bc64da0182481a2b"
+        );
+        assert!(record.environment_scope.contains("compatibility-lab"));
+        assert!(
+            catalog.historical_evidence.iter().all(|item| {
+                item.status == ValidationStatus::NotRun && item.recorded_on.is_none()
+            })
+        );
+        assert_eq!(record.scenarios.len(), 3);
+        for item in &catalog.evidence {
+            let tested = matches!(
+                item.scenario,
+                ValidationScenario::ModuleLayout
+                    | ValidationScenario::ClockUpdateRestore
+                    | ValidationScenario::TrayPrepareStop
+            );
+            assert_eq!(
+                item.status,
+                if tested {
+                    ValidationStatus::Tested
+                } else {
+                    ValidationStatus::NotRun
+                }
+            );
+            assert_eq!(item.recorded_on, tested.then_some("2026-11-10"));
+            assert_eq!(
+                item.reference,
+                tested.then_some("docs/compatibility-26h1.md")
+            );
+        }
+        let exported = serde_json::to_value(&catalog).unwrap();
+        assert_eq!(
+            exported["recorded_acceptance"]["package_build_id"],
+            "5.16.1-5dc517dab70f"
+        );
+        assert_eq!(
+            exported["recorded_acceptances"].as_array().unwrap().len(),
+            1
+        );
+        let later = Profile::decode(include_bytes!(
+            "../crates/adapter-protocol/profiles/lab/windows11-28000.3365-x64-notification.json"
+        ))
+        .unwrap();
+        assert!(recorded_acceptances(&later).is_empty());
+        assert!(evidence(&later).iter().all(|item| {
+            item.status == ValidationStatus::NotRun
+                && item.recorded_on.is_none()
+                && item.reference.is_none()
+        }));
+    }
+
+    #[test]
     fn a_partial_rerun_does_not_relabel_other_scenarios_or_discard_their_evidence() {
         let profile = profiles()
             .unwrap()
@@ -1255,36 +1374,57 @@ mod tests {
     }
 
     #[test]
-    fn published_acceptance_binds_entire_recipe_except_label() {
-        let original = profiles()
-            .unwrap()
-            .iter()
-            .find(|profile| profile.id == "windows11-26200.8037-x64")
-            .unwrap();
-        let mut renamed = original.clone();
-        renamed.system_label = "same module implementation, clearer label".into();
-        assert!(recorded_acceptance(&renamed).is_some());
-        for change in 0..10 {
-            let mut profile = original.clone();
-            match change {
-                0 => profile.schema += 1,
-                1 => profile.id = "new-profile-with-existing-layout".into(),
-                2 => profile.taskbar.sha256 = "0".repeat(64),
-                3 => profile.shell.identity.timestamp ^= 1,
-                4 => profile.tray.as_mut().unwrap().sha256 = "0".repeat(64),
-                5 => {
-                    profile.host.element_offset = profile.host.element_offset.map(|value| value + 8)
-                }
-                6 => profile.source.child_vtable_rva += 8,
-                7 => profile.tray_abi = Some(TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1),
-                8 => {
-                    profile.tray_geometry = Some(
+    fn recorded_acceptance_binds_entire_recipe_except_label() {
+        for id in [
+            "windows11-26200.8037-x64",
+            "windows11-28000.1-x64-notification",
+        ] {
+            let original = profiles()
+                .unwrap()
+                .iter()
+                .find(|profile| profile.id == id)
+                .unwrap();
+            let mut renamed = original.clone();
+            renamed.system_label = "same module implementation, clearer label".into();
+            assert!(recorded_acceptance(&renamed).is_some());
+            for change in 0..11 {
+                let mut profile = original.clone();
+                match change {
+                    0 => profile.schema += 1,
+                    1 => profile.id = "new-profile-with-existing-layout".into(),
+                    2 => profile.taskbar.sha256 = "0".repeat(64),
+                    3 => profile.shell.identity.timestamp ^= 1,
+                    4 => profile.tray.as_mut().unwrap().sha256 = "0".repeat(64),
+                    5 => {
+                        profile.host.element_offset =
+                            profile.host.element_offset.map(|value| value + 8)
+                    }
+                    6 => profile.source.child_vtable_rva += 8,
+                    7 => {
+                        profile.tray_abi = Some(TrayAbi::SystemTrayDragDropBorrowedCoordinatesX64V1)
+                    }
+                    8 => profile.tray_geometry = Some(
                         litetray_adapter_protocol::compatibility::TrayGeometry::DragDropHitTesting,
-                    )
+                    ),
+                    9 => profile.tray_entries.as_mut().unwrap()[0].prologue[0] ^= 1,
+                    _ => {
+                        use litetray_adapter_protocol::compatibility::ChildInterface;
+                        profile.source.child_interface =
+                            Some(match profile.source.interface_contract() {
+                                ChildInterface::XamlExplorerHostChildEef8V1 => {
+                                    ChildInterface::XamlExplorerHostChildEc97V1
+                                }
+                                ChildInterface::XamlExplorerHostChildEc97V1 => {
+                                    ChildInterface::XamlExplorerHostChildEef8V1
+                                }
+                            });
+                    }
                 }
-                _ => profile.tray_entries.as_mut().unwrap()[0].prologue[0] ^= 1,
+                assert!(
+                    recorded_acceptance(&profile).is_none(),
+                    "{id} change {change}"
+                );
             }
-            assert!(recorded_acceptance(&profile).is_none(), "change {change}");
         }
     }
 

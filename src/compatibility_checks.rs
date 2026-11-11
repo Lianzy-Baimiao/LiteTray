@@ -608,6 +608,7 @@ fn support_catalog_keeps_recorded_scope_separate_from_built_in_support() {
                         | "windows11-26100.1742-x64"
                         | "windows11-22621.1702-x64"
                         | "windows11-22631.2861-x64"
+                        | "windows11-28000.1-x64-notification"
                 ) && matches!(
                     evidence.scenario,
                     ValidationScenario::ModuleLayout

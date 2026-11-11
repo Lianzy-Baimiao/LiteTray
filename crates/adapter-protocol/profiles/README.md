@@ -1,8 +1,8 @@
 # Built-in taskbar compatibility evidence
 
-The 5.16.2 candidate contains nine default profiles, including the primary-clock-only
-21H2 implementation and the 26H1 28000.1 implementation. Its final default-package
-rerun is still pending. The explicit `compatibility-lab` registry adds only the
+Version 5.16.2 contains nine default profiles, including the primary-clock-only
+21H2 implementation and the 26H1 28000.1 implementation. The final default package
+has passed the separately recorded 26H1 single-primary-clock runtime checks. The explicit `compatibility-lab` registry adds only the
 28000.3365 candidate, for ten profiles in total. Version 5.16.0 had eight default
 profiles; version 5.14.2 had seven. `windows11-22621.1702-x64.json` (22H2 Pro) and
 `windows11-22631.2861-x64.json` (23H2 Pro) were promoted after independently
@@ -110,8 +110,12 @@ Explorer-loaded paths, full hashes and image sizes match those files. A frozen
 lab package on the independently installed Pro x64 single-display guest completed
 clock text/width updates and restoration, tray preparation/Stop, four primary-clock
 calendar clicks and 75 seconds of native-clock observation after normal exit,
-with the same Explorer process. These are the lab package's results; the final
-default 5.16.2 package still requires its own rerun.
+with the same Explorer process. The final default 5.16.2 package completed its own
+fresh run on 2026-11-11 with the same bounded scope; 355 independent checks bind
+the actual default build, frozen binaries and raw VM results. Its BuildId is
+`5.16.2-493425352b4b`. The embedded acceptance catalog retains the exact historical
+lab run; final default evidence is documented separately without rewriting that
+history or claiming complete pointer-input coverage.
 
 The base profile has its own addresses and three reviewed execution fingerprints;
 it does not reuse the later SystemTray profile or permit new implementation bytes.
