@@ -100,6 +100,7 @@ $documents += @('docs/startup-weather-5.16.3.md')
 $documents += @('docs/proxy-settings-5.16.4.md')
 $documents += @('docs/diagnostic-responsiveness-5.16.4.md')
 $documents += @('docs/explorer-safety-audit-2026-11-14.md')
+$documents += @('docs/explorer-recheck-5.16.5-2026-11-14.md')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null

@@ -441,6 +441,9 @@ impl Session {
         for (_, input) in &self.inputs {
             input.suspend();
         }
+        if let Some(interaction) = &self.interaction {
+            interaction.deactivate();
+        }
         let mut errors = Vec::new();
         for (id, input) in self.inputs.iter_mut().rev() {
             if let Err(error) = input.detach() {

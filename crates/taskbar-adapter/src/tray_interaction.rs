@@ -35,6 +35,9 @@ use windows_sys::Win32::{
 #[path = "tray_recovery_checks.rs"]
 mod recovery_checks;
 pub(crate) use recovery_checks::run as check_recovery;
+#[path = "tray_stop_checks.rs"]
+mod stop_checks;
+pub(crate) use stop_checks::run as check_stop_callbacks;
 #[path = "tray_menu_lifecycle_checks.rs"]
 mod menu_lifecycle_checks;
 pub(crate) use menu_lifecycle_checks::run as check_inactive_menus;
@@ -164,19 +167,36 @@ impl Runtime {
         self.started.set(true);
         Ok(())
     }
-    pub fn stop(&self) -> Result<(), String> {
-        if !self.started.get() || self.restored.get() {
-            return Ok(());
-        }
+    /// Disable dispatch and positioning before another component's native
+    /// restoration can pump messages. Keep menus and model owners for stop.
+    pub fn deactivate(&self) {
         self.active.set(false);
-        hooks::suspend()?;
+        if !self.started.get() || self.restored.get() {
+            return;
+        }
         self.last.set(None);
         if let Ok(mut overflow) = OVERFLOW.lock() {
             *overflow = None;
         }
-        RUNTIME.with(|state| {
-            state.borrow_mut().take();
+        let previous = RUNTIME.with(|state| {
+            let mut state = state.borrow_mut();
+            if state
+                .as_ref()
+                .is_some_and(|value| std::ptr::eq(value.as_ref(), self))
+            {
+                state.take()
+            } else {
+                None
+            }
         });
+        drop(previous);
+    }
+    pub fn stop(&self) -> Result<(), String> {
+        if !self.started.get() || self.restored.get() {
+            return Ok(());
+        }
+        self.deactivate();
+        hooks::suspend()?;
         restore_menus()?;
         // Attaching the primary last restores the shell's per-item owner.
         if let Some(primary) = self.hosts.iter().find(|h| !h.secondary) {
@@ -257,10 +277,12 @@ impl Runtime {
         Ok(())
     }
     fn arm_overflow(&self, index: usize, message: &MSG) {
-        if !matches!(
-            message.message,
-            WM_LBUTTONDOWN | WM_LBUTTONUP | WM_POINTERDOWN | WM_POINTERUP | WM_KEYDOWN
-        ) {
+        if !self.active.get()
+            || !matches!(
+                message.message,
+                WM_LBUTTONDOWN | WM_LBUTTONUP | WM_POINTERDOWN | WM_POINTERUP | WM_KEYDOWN
+            )
+        {
             return;
         }
         let host = &self.hosts[index];

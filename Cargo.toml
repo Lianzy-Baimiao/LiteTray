@@ -1,6 +1,6 @@
 [package]
 name = "litetray"
-version = "5.16.5"
+version = "5.16.6"
 edition = "2024"
 rust-version = "1.88"
 description = "Native Windows taskbar, clock, calendar and weather companion"
