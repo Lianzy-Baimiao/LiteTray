@@ -665,6 +665,7 @@ pub(crate) fn self_test() -> Result<serde_json::Value, String> {
         ];
         checks.extend(crate::tray_interaction::check_context_target()?);
         checks.extend(crate::tray_interaction::check_inactive_menus()?);
+        checks.extend(crate::tray_interaction::check_proxy_options()?);
         checks.extend(crate::lifecycle_checks::run()?);
         checks.extend(crate::clock_style_checks::run()?);
         checks.extend(crate::clock_text_checks::run()?);

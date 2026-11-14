@@ -61,14 +61,20 @@ impl Recovery {
             self.phase = Phase::Restoring;
         }
     }
+    pub fn is_stable(&self, now: u64) -> bool {
+        matches!(self.phase, Phase::Running { since } if now.checked_sub(since).is_some_and(|elapsed| elapsed >= STABLE_MILLIS))
+    }
     pub fn healthy(&mut self, now: u64) {
-        if let Phase::Running { since } = self.phase
-            && now
-                .checked_sub(since)
-                .is_some_and(|elapsed| elapsed >= STABLE_MILLIS)
-        {
+        if self.is_stable(now) {
             self.failures = 0;
             self.reason = None;
+        }
+    }
+    pub fn suspend(&mut self, reason: &str) {
+        if matches!(self.phase, Phase::Waiting { .. }) {
+            self.failures = MAX_FAILURES;
+            self.reason = Some(reason.chars().take(1024).collect());
+            self.phase = Phase::Suspended;
         }
     }
     pub fn restored(&mut self, now: u64) {

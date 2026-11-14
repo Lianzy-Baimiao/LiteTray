@@ -37,6 +37,34 @@ pub(crate) struct Library {
     // later SetWindowsHookEx roundtrip into another process.
     _file: File,
 }
+/// Hash/copy/verify on a worker; retain its deny-write handle until loading.
+pub(crate) struct Prepared {
+    path: PathBuf,
+    file: File,
+    pub(crate) sha256: String,
+}
+impl Prepared {
+    pub(crate) fn load(self) -> Result<Library, String> {
+        let module = unsafe {
+            LoadLibraryExW(
+                wide_path(&self.path).as_ptr(),
+                null_mut(),
+                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
+            )
+        };
+        if module.is_null() {
+            return Err(format!(
+                "加载内容校验后的 DLL 失败（{}）：{}",
+                self.path.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(Library {
+            module,
+            _file: self.file,
+        })
+    }
+}
 impl Library {
     pub(crate) fn handle(&self) -> HMODULE {
         self.module
@@ -52,27 +80,13 @@ pub(crate) fn load(kind: Kind) -> Result<Library, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     load_from(exe.parent().ok_or("程序目录无效")?, kind)
 }
+pub(crate) fn prepare_current(kind: Kind) -> Result<Prepared, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    prepare(exe.parent().ok_or("程序目录无效")?, kind)
+}
 
 fn load_from(directory: &Path, kind: Kind) -> Result<Library, String> {
-    let (path, file) = prepare(directory, kind)?;
-    let module = unsafe {
-        LoadLibraryExW(
-            wide_path(&path).as_ptr(),
-            null_mut(),
-            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
-        )
-    };
-    if module.is_null() {
-        return Err(format!(
-            "加载内容校验后的 DLL 失败（{}）：{}",
-            path.display(),
-            std::io::Error::last_os_error()
-        ));
-    }
-    Ok(Library {
-        module,
-        _file: file,
-    })
+    prepare(directory, kind)?.load()
 }
 
 fn wide_path(path: &Path) -> Vec<u16> {
@@ -134,7 +148,7 @@ fn validate_image(bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn prepare(directory: &Path, kind: Kind) -> Result<(PathBuf, File), String> {
+fn prepare(directory: &Path, kind: Kind) -> Result<Prepared, String> {
     let source = directory.join(format!("{}.dll", kind.stem()));
     // One handle and one byte buffer supply both the hash and the copy.
     let mut original = open_regular(&source)?;
@@ -156,7 +170,11 @@ fn prepare(directory: &Path, kind: Kind) -> Result<(PathBuf, File), String> {
             path.display()
         ));
     }
-    Ok((path, file))
+    Ok(Prepared {
+        path,
+        file,
+        sha256: digest,
+    })
 }
 
 struct Pending(PathBuf);

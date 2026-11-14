@@ -117,15 +117,15 @@ pub(crate) fn restore_menus() -> Result<(), String> {
     })
 }
 pub(crate) fn prepare_menus(
-    resolve: impl FnOnce() -> Result<(Object, Object), String>,
+    resolve: impl FnOnce() -> Result<(Object, Object, bool), String>,
 ) -> Result<Option<Object>, String> {
     let _busy = MenuBusy::enter()?;
-    let (menu, root) = resolve()?;
+    let (menu, root, copied_root) = resolve()?;
     MENUS.with(|menus| {
         menus
             .try_borrow_mut()
             .map_err(|_| "托盘菜单准备正在进行".to_string())?
-            .prepare(&menu, &root)
+            .prepare(&menu, &root, copied_root)
     })
 }
 #[cfg(test)]
@@ -741,7 +741,7 @@ fn shared_target(element: &Object) -> Result<bool, String> {
         }
         node = unsafe { Object::owned(parent)? };
     }
-    Ok(false)
+    Err("菜单祖先深度超限，无法确认原生显示安全性".into())
 }
 pub(crate) fn check_context_target() -> Result<Vec<&'static str>, String> {
     // A normal taskbar context menu enters the same ancestry guard, starting
@@ -755,6 +755,19 @@ pub(crate) fn check_context_target() -> Result<Vec<&'static str>, String> {
     Ok(vec![
         "native_context_menu_framework_element_ancestry_does_not_crash",
     ])
+}
+pub(crate) fn check_context_limit(target: &Object) -> Result<(), String> {
+    // An unmounted tree has no populated native parent chain. Verify the
+    // fixture's real source attachment before asserting the bounded verdict.
+    let _root = xaml::root(target)?;
+    match shared_target(target) {
+        Err(error) if error == "菜单祖先深度超限，无法确认原生显示安全性" => {
+            Ok(())
+        }
+        result => Err(format!(
+            "已连接的 35 层原生菜单目标未被判为无法确认：{result:?}"
+        )),
+    }
 }
 pub(crate) fn check_context_ancestry(
     target: &Object,
@@ -776,6 +789,44 @@ pub(crate) fn check_context_ancestry(
     } else {
         "native_ordinary_taskbar_menu_nested_target_is_not_redirected"
     })
+}
+pub(crate) fn copied_root<'a>(
+    root: &Object,
+    copies: impl Iterator<Item = &'a Object>,
+) -> Result<bool, String> {
+    for copy in copies {
+        if same_object(root, copy)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+fn rejected_show(error: &str) -> i32 {
+    trace(
+        "menu_suppressed",
+        serde_json::json!({"error": error.chars().take(600).collect::<String>()}),
+    );
+    // No native ShowAt ran. Keep the established no-op HRESULT rather than
+    // introducing an unchecked WinRT exception at a shell call site.
+    S_OK
+}
+unsafe fn show_proxy(proxy: &Object, target: *mut c_void, options: Option<*mut c_void>) -> i32 {
+    let base = match proxy.query(if options.is_some() {
+        &IID_IFlyoutBase5
+    } else {
+        &IID_IFlyoutBase
+    }) {
+        Ok(base) => base,
+        Err(error) => return rejected_show(&error),
+    };
+    unsafe {
+        match options {
+            Some(options) => {
+                (base.table::<IFlyoutBase5_Vtbl>().ShowAt)(base.raw(), target, options)
+            }
+            None => (base.table::<IFlyoutBase_Vtbl>().ShowAt)(base.raw(), target),
+        }
+    }
 }
 unsafe fn show(
     original: &AtomicUsize,
@@ -800,31 +851,38 @@ unsafe fn show(
         };
         // Menu hooks outlive a session. A stopped adapter must not query or
         // redirect system menus, including callbacks from its former proxies.
-        if runtime().is_none() {
+        let Some(active) = runtime() else {
             return call();
-        }
+        };
         let Ok(element) = Object::query_borrowed(target, &IID_IFrameworkElement) else {
             return call();
         };
-        if !shared_target(&element).unwrap_or(false) {
-            return call();
+        match shared_target(&element) {
+            Ok(false) => return call(),
+            Err(error) => return rejected_show(&error),
+            Ok(true) => {}
         }
         let prepared = prepare_menus(|| {
             let menu = Object::query_borrowed(this, &IID_IFlyoutBase)?;
             let root = xaml::root(&element)?;
-            Ok((menu, root))
+            let copied = copied_root(
+                &root,
+                active
+                    .hosts
+                    .iter()
+                    .filter(|host| host.secondary)
+                    .map(|host| &host.root),
+            )?;
+            if !active.active.get() {
+                return Err("菜单会话已停止".into());
+            }
+            Ok((menu, root, copied))
         });
         match prepared {
             Ok(None) => call(),
-            Ok(Some(proxy)) => {
-                let base = match proxy.query(&IID_IFlyoutBase) {
-                    Ok(base) => base,
-                    Err(_) => return 0,
-                };
-                (base.table::<IFlyoutBase_Vtbl>().ShowAt)(base.raw(), element.raw())
-            }
+            Ok(Some(proxy)) => show_proxy(&proxy, target, options),
             // Never let a known cross-island menu reach the crashing native call.
-            Err(_) => 0,
+            Err(error) => rejected_show(&error),
         }
     }
 }
@@ -889,6 +947,9 @@ pub(crate) fn install(
 #[cfg(test)]
 #[path = "tray_interaction_checks.rs"]
 mod checks;
+#[path = "tray_flyout_options_checks.rs"]
+mod flyout_options_checks;
+pub(crate) use flyout_options_checks::run as check_proxy_options;
 #[cfg(test)]
 mod tests {
     use super::*;

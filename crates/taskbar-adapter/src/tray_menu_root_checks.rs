@@ -6,6 +6,12 @@ use litetray_adapter_protocol::clock::{Frame, Owner, Style, Text};
 use windows_sys::Win32::{System::Threading::GetCurrentProcessId, UI::WindowsAndMessaging::*};
 
 fn fixture(owner: &Owner) -> Result<ModelFixture, String> {
+    fixture_markup(
+        owner,
+        r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Name="MenuTarget" Width="200" Height="60"/>"#,
+    )
+}
+fn fixture_markup(owner: &Owner, markup: &str) -> Result<ModelFixture, String> {
     let frame = Frame {
         text: Text {
             top: "12:34:56".into(),
@@ -24,11 +30,7 @@ fn fixture(owner: &Owner) -> Result<ModelFixture, String> {
             bottom_style: Default::default(),
         },
     };
-    let fixture = ModelFixture::new(
-        owner.clone(),
-        frame,
-        r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Name="MenuTarget" Width="200" Height="60"/>"#,
-    )?;
+    let fixture = ModelFixture::new(owner.clone(), frame, markup)?;
     let mut message: MSG = unsafe { std::mem::zeroed() };
     unsafe {
         while PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE) != 0 {
@@ -108,7 +110,7 @@ pub(crate) fn run() -> Result<Vec<&'static str>, String> {
         require(root_is(&menu, expected)?, "fixture native menu root")?;
         let command = first(&menu)?;
         let mut menus = Menus::default();
-        let prepared = menus.prepare(&menu, &secondary)?;
+        let prepared = menus.prepare(&menu, &secondary, true)?;
         require(
             root_is(&menu, expected)?,
             if initially_rooted {
@@ -128,6 +130,10 @@ pub(crate) fn run() -> Result<Vec<&'static str>, String> {
                 && same_object(&first(&proxy)?, &command)?,
             "native command borrowed by proxy",
         )?;
+        require(
+            menus.prepare(&proxy, &primary, false).is_err(),
+            "cached secondary proxy cannot reach native ShowAt on primary root",
+        )?;
         menus.retire()?;
         require(
             root_is(&menu, expected)?
@@ -139,10 +145,10 @@ pub(crate) fn run() -> Result<Vec<&'static str>, String> {
             count(&items(&proxy)?)? == 0,
             "retired proxy releases command",
         )?;
-        let primary_prepared = menus.prepare(&menu, &primary)?;
+        let primary_prepared = menus.prepare(&menu, &primary, false)?;
         require(
-            primary_prepared.is_none() == initially_rooted,
-            "primary uses its native menu or a fresh root-specific proxy",
+            primary_prepared.is_none(),
+            "primary uses its native cache including first-use initialization",
         )?;
         menus.retire()?;
         require(
@@ -150,10 +156,58 @@ pub(crate) fn run() -> Result<Vec<&'static str>, String> {
             "primary return remains idempotent",
         )?;
     }
+    let flyout = load(
+        r#"<Flyout xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"><TextBlock Text="Native content"/></Flyout>"#,
+    )?;
+    let mut menus = Menus::default();
+    require(
+        menus.prepare(&flyout, &primary, false)?.is_none(),
+        "unrooted native ordinary Flyout passes through",
+    )?;
+    require(
+        root_is(&flyout, None)?,
+        "preparation does not set native Flyout root",
+    )?;
+    require(
+        menus.prepare(&flyout, &secondary, true).is_err(),
+        "unrooted cross-root ordinary Flyout remains protected",
+    )?;
+    let base = flyout.query(&IID_IFlyoutBase6)?;
+    unsafe {
+        check(
+            (base.table::<IFlyoutBase6_Vtbl>().SetXamlRoot)(base.raw(), primary.raw()),
+            "Initialize private ordinary Flyout root",
+        )?;
+    }
+    require(
+        menus.prepare(&flyout, &primary, false)?.is_none(),
+        "ordinary Flyout uses its own root",
+    )?;
+    require(
+        menus.prepare(&flyout, &secondary, true).is_err() && root_is(&flyout, Some(&primary))?,
+        "mismatched ordinary Flyout remains protected without replacing root",
+    )?;
+    require(
+        crate::tray_interaction::copied_root(&secondary, [&secondary].into_iter())?
+            && !crate::tray_interaction::copied_root(&primary, [&secondary].into_iter())?,
+        "native primary outside selected copies is classified correctly",
+    )?;
+    let markup = format!(
+        r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Name="MainStack" Width="200" Height="60">{}<Grid x:Name="DeepTarget"/>{}</Grid>"#,
+        "<Grid>".repeat(34),
+        "</Grid>".repeat(34)
+    );
+    let deep_fixture = fixture_markup(&owner, &markup)?;
+    crate::tray_interaction::check_context_limit(&deep_fixture.find("DeepTarget")?)?;
     Ok(vec![
         "secondary_first_use_preserves_unrooted_native_cached_menu",
         "secondary_menu_preserves_original_primary_xaml_root",
         "menu_stop_returns_native_commands_and_retires_secondary_proxy",
         "primary_menu_preparation_preserves_root_after_secondary_session_stop",
+        "native_unrooted_ordinary_flyout_uses_original_first_show",
+        "ordinary_flyout_cross_root_rejected_without_root_mutation",
+        "native_primary_outside_copied_scope_is_not_a_secondary_proxy",
+        "cached_proxy_rejects_a_different_native_xaml_root",
+        "native_menu_ancestry_limit_cannot_authorize_original_show",
     ])
 }

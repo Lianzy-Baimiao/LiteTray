@@ -112,11 +112,13 @@ fn menu(callback: impl Fn() + 'static) -> Object {
 }
 fn restoration_fixture(callback: impl Fn() + 'static) -> Menus {
     let root = menu(|| {});
+    let proxy = menu(callback);
+    let home = Loan::capture(&root, &proxy).unwrap();
     Menus {
         proxies: vec![Proxy {
             root: root.clone(),
-            menu: menu(callback),
-            home: Some(root),
+            menu: proxy,
+            home: Some(home),
         }],
     }
 }
@@ -135,7 +137,7 @@ fn native_hide_reentry_is_rejected_without_borrowing_the_restoring_menus() {
         // The catch is only in this fixture. Production native callbacks have
         // no unwind boundary; the process-level regression below covers that.
         match catch_unwind(AssertUnwindSafe(|| {
-            prepare_menus(|| Ok((nested.clone(), nested.clone())))
+            prepare_menus(|| Ok((nested.clone(), nested.clone(), true)))
         })) {
             Ok(result) => observed_rejection.set(result.is_err()),
             Err(_) => observed_panic.set(true),
@@ -159,7 +161,7 @@ fn native_hide_reentry_is_rejected_without_borrowing_the_restoring_menus() {
         assert!(
             prepare_menus(|| {
                 resolved.set(true);
-                Ok((menu.clone(), menu))
+                Ok((menu.clone(), menu, true))
             })
             .is_err()
         );
@@ -257,11 +259,13 @@ fn preparation_resolver_reentry_is_rejected_and_errors_reopen_the_gate() {
 #[test]
 fn stopping_the_menu_session_releases_its_retired_root() {
     let root = menu(|| {});
+    let proxy = menu(|| {});
+    let home = Loan::capture(&menu(|| {}), &proxy).unwrap();
     let fixture = Menus {
         proxies: vec![Proxy {
             root: root.clone(),
-            menu: menu(|| {}),
-            home: Some(menu(|| {})),
+            menu: proxy,
+            home: Some(home),
         }],
     };
     with_test_menus(fixture, || {
@@ -284,7 +288,7 @@ fn failed_native_hide_retains_command_home_and_root_until_retry() {
         proxies: vec![Proxy {
             root: root.clone(),
             menu: proxy.clone(),
-            home: Some(home.clone()),
+            home: Some(Loan::capture(&home, &proxy).unwrap()),
         }],
     };
     with_test_menus(fixture, || {
@@ -314,7 +318,7 @@ fn native_hide_reentry_child() {
     }
     let nested = menu(|| {});
     let fixture = restoration_fixture(move || {
-        assert!(prepare_menus(|| Ok((nested.clone(), nested.clone()))).is_err());
+        assert!(prepare_menus(|| Ok((nested.clone(), nested.clone(), true))).is_err());
     });
     with_test_menus(fixture, || restore_menus().unwrap());
 }

@@ -4,6 +4,7 @@ mod ui;
 
 fn main() {
     let result = run();
+    litetray::taskbar_safety::flush(std::time::Duration::from_millis(200));
     litetray::event_log::flush(std::time::Duration::from_millis(100));
     if let Err(error) = result {
         eprintln!("LiteTray: {error}");
