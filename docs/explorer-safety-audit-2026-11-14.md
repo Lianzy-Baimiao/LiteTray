@@ -1,6 +1,6 @@
 # Explorer 生命周期与未完成功能审计（2026-11-14）
 
-本轮先发布 [v5.16.4](https://github.com/Lianzy-Baimiao/LiteTray/releases/tag/v5.16.4)，再从发布提交 `af641d978a4a8c286cddb7700ee87a21eaa9c165` 建立独立工作目录调查和修复，最终代码归入 `main`。**下述安全修复属于未发布的后续代码，不在已发布的 5.16.4 安装包内。**
+本轮先发布 [v5.16.4](https://github.com/Lianzy-Baimiao/LiteTray/releases/tag/v5.16.4)，再从发布提交 `af641d978a4a8c286cddb7700ee87a21eaa9c165` 建立独立工作目录调查和修复，最终代码归入 `main`。**下述安全修复归入 [v5.16.5](https://github.com/Lianzy-Baimiao/LiteTray/releases/tag/v5.16.5)，5.16.4 安装包不包含这些后续修复。**
 
 5.16.4 的安装包和便携包已公开，上传后的大小和 GitHub SHA-256 均与本地产物一致。发布提交的 Windows、candidate-tool CI 最终均通过；Windows 首轮有一次设置冷导航耗时失败，同一提交重跑后通过，失败日志保留，没有修改耗时标准。
 
