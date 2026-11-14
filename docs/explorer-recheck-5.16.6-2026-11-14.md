@@ -1,6 +1,6 @@
 # 清理旧版本后的 Explorer 复查（2026-11-14）
 
-复查又确认了两条组件内部恢复早于会话停用的路径：托盘模型刷新失败，以及原生时钟部分写入失败。修复位于 **5.16.6 之后的 main**；已经发布、当前安装运行的 [5.16.6](https://github.com/Lianzy-Baimiao/LiteTray/releases/tag/v5.16.6) 不包含本次后续修复。
+复查又确认了两条组件内部恢复早于会话停用的路径：托盘模型刷新失败，以及原生时钟部分写入失败。修复归入 [5.16.7](https://github.com/Lianzy-Baimiao/LiteTray/releases/tag/v5.16.7)；此前发布的 [5.16.6](https://github.com/Lianzy-Baimiao/LiteTray/releases/tag/v5.16.6) 不包含这两条后续修复。下方 22:40 的现场采样记录来自当时仍在运行的 5.16.6，属于历史观察。
 
 5.16.6 已处理正常 `Session::stop` 的顺序，但不能阻止组件在返回错误之前自行恢复属性。真实 XAML setter 会同步回调，回调仍可能进入活跃的菜单、坐标或 overflow 定位逻辑。本轮复现了恢复期间不应发生的定位参数改写，没有制造一次真实 Explorer 崩溃，也没有把它归因到历史通知点击故障。
 
@@ -21,6 +21,8 @@
 安装版原有 195 项原生检查通过，因此原有检查未覆盖本轮两条内部回滚路径。新增 7 项检查后，最终 Release 适配器在两个独立私有进程中各 **202 项通过**，均为 `explorer_accessed=false`，退出码 0。
 
 `cargo fmt --all -- --check`、适配器 all-targets 的 **40 项测试**、适配器 all-targets Clippy（`-D warnings`）以及 Release 构建通过。原有隔离子进程入口仍按原规则 ignored，由父测试调用。所有本机构建串行执行，使用 `tools/Invoke-Cargo.ps1`、`--locked --offline -j 1`；没有改动耗时标准。
+
+修复提交 `dd08e5e6c38aa6eaa4e417963c764c2886037947` 的 [完整 Windows CI](https://github.com/Lianzy-Baimiao/LiteTray/actions/runs/43606521362) 通过：workspace 381 项通过，原有 13 项 ignored 保留；额外兼容性与后台检查 70 项通过；202 项隔离原生检查、格式检查、workspace Clippy、Release 构建及异常回调检查也通过。
 
 可重复运行的隔离自检入口（调用与本轮相同的 `--self-test-clock`）：
 
