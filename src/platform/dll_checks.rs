@@ -144,22 +144,39 @@ fn replacement_child() {
 
     let source = directory.join("litetray_taskbar_adapter.dll");
     std::fs::copy(&first, &source).unwrap();
-    let current = load_from(&directory, Kind::Taskbar).unwrap();
-    assert_eq!(value(current.handle()), 1);
+    let worker_directory = directory.clone();
+    let prepared = std::thread::spawn(move || prepare(&worker_directory, Kind::Taskbar).unwrap())
+        .join()
+        .unwrap();
+    assert_eq!(
+        prepared.sha256,
+        format!("{:x}", Sha256::digest(std::fs::read(&first).unwrap()))
+    );
     std::fs::copy(&second, &source).unwrap();
+    let current = prepared.load().unwrap();
+    assert_eq!(
+        value(current.handle()),
+        1,
+        "worker-verified bytes and their identity survive source replacement"
+    );
     let updated = load_from(&directory, Kind::Taskbar).unwrap();
     assert_ne!(current.handle(), updated.handle());
     assert_eq!(value(current.handle()), 1);
     assert_eq!(value(updated.handle()), 2);
-    let (path, locked) = prepare(&directory, Kind::Taskbar).unwrap();
+    let prepared = prepare(&directory, Kind::Taskbar).unwrap();
+    let path = &prepared.path;
+    assert_eq!(
+        prepared.sha256,
+        format!("{:x}", Sha256::digest(std::fs::read(&second).unwrap()))
+    );
     assert_eq!(
         path.parent().unwrap(),
         directory,
         "same-installation boundary is preserved"
     );
-    assert!(OpenOptions::new().write(true).open(&path).is_err());
-    assert!(std::fs::rename(&path, directory.join("renamed.dll")).is_err());
-    drop(locked);
+    assert!(OpenOptions::new().write(true).open(path).is_err());
+    assert!(std::fs::rename(path, directory.join("renamed.dll")).is_err());
+    drop(prepared);
     drop(updated);
     drop(current);
 
@@ -183,8 +200,7 @@ fn replacement_child() {
             let gate = gate.clone();
             std::thread::spawn(move || {
                 gate.wait();
-                let (path, _file) = prepare(&directory, Kind::Popup).unwrap();
-                path
+                prepare(&directory, Kind::Popup).unwrap().path
             })
         })
         .collect();

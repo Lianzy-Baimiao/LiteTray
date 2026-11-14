@@ -21,6 +21,9 @@ pub enum RestoreProgress {
 }
 
 pub trait Session {
+    fn fault(&self) {}
+    fn healthy(&self) {}
+    fn restored(&self) {}
     /// A live capability limitation, e.g. clock running while tray is pending.
     fn notice(&self) -> Option<&str> {
         None
@@ -29,6 +32,11 @@ pub trait Session {
     /// Read-only comparison with the display/taskbar snapshot used at connect.
     /// An inconclusive observation must return false.
     fn environment_matches(&self) -> bool;
+    /// Observe the originally retained native process, without a message/RPC.
+    /// An exited process is distinct from a normal display topology change.
+    fn process_exited(&self) -> bool {
+        false
+    }
     /// Success proves restoration, or that the retained native process exited.
     fn stop(&self) -> Result<(), String>;
     /// One bounded periodic step. A native transport can acknowledge Stop and
@@ -47,11 +55,43 @@ pub struct ConnectFailure<S> {
     pub error: String,
     /// Keep a session whose Start may have executed until stop confirms restore.
     pub pending: Option<S>,
+    pub suspended: bool,
+}
+#[derive(Debug)]
+pub struct PreparationFailure {
+    pub error: String,
+    pub suspended: bool,
+}
+impl PreparationFailure {
+    pub fn temporary(error: String) -> Self {
+        Self {
+            error,
+            suspended: false,
+        }
+    }
+    pub fn suspended(error: String) -> Self {
+        Self {
+            error,
+            suspended: true,
+        }
+    }
+}
+impl From<String> for PreparationFailure {
+    fn from(error: String) -> Self {
+        Self::temporary(error)
+    }
+}
+impl From<&str> for PreparationFailure {
+    fn from(error: &str) -> Self {
+        Self::temporary(error.into())
+    }
 }
 pub trait Backend {
     type Prepared;
     type Session: Session;
-    fn prepare(&self, config: &Config) -> Receiver<Result<Self::Prepared, String>>;
+    fn prepare(&self, config: &Config) -> Receiver<Result<Self::Prepared, PreparationFailure>>;
+    /// User intent only; schedule any durable reset in the next worker.
+    fn retry(&self) {}
     fn connect(
         &self,
         prepared: Self::Prepared,
@@ -60,7 +100,7 @@ pub trait Backend {
 }
 struct Pending<P> {
     revision: u64,
-    result: Receiver<Result<P, String>>,
+    result: Receiver<Result<P, PreparationFailure>>,
 }
 struct Driver<B: Backend> {
     config: Config,
@@ -176,6 +216,9 @@ impl<B: Backend> Service<B> {
                 return driver.stop(now);
             }
             if !driver.enabled || changed {
+                if !driver.enabled {
+                    self.backend.retry();
+                }
                 driver.enabled = true;
                 driver.restart(now, "显示范围或点击设置已改变");
             }
@@ -199,6 +242,8 @@ impl<B: Backend> Service<B> {
     }
     pub fn retry(&self, now: u64) -> Result<(), String> {
         self.with_driver(now, |driver| {
+            self.backend.retry();
+            driver.revision = driver.revision.wrapping_add(1);
             driver.recovery.retry(now);
             // Never enable a manually disabled service just by retrying restore.
             Ok(())
@@ -214,7 +259,7 @@ impl<B: Backend> Service<B> {
             let invalidated = self.invalidated.replace(false);
             let check_devices = self.devices_changed.replace(false);
             if invalidated && driver.enabled {
-                driver.restart(now, "任务栏或显示环境已变化");
+                driver.environment_changed(now, "任务栏或显示环境已变化");
             } else if check_devices
                 && driver.enabled
                 && matches!(driver.recovery.phase(), Phase::Running { .. })
@@ -223,7 +268,7 @@ impl<B: Backend> Service<B> {
                 if connection.environment_matches() {
                     crate::event_log::record("devices unchanged", "taskbar session retained");
                 } else {
-                    driver.restart(now, "设备通知后任务栏或显示器拓扑已变化");
+                    driver.environment_changed(now, "设备通知后任务栏或显示器拓扑已变化");
                 }
             } else if check_devices && driver.enabled && !invalidated {
                 // A preflight worker may already hold the old topology. Keep
@@ -316,6 +361,28 @@ impl<B: Backend> Service<B> {
     }
 }
 impl<B: Backend> Driver<B> {
+    fn environment_changed(&mut self, now: u64, reason: &str) {
+        crate::event_log::record("restart", reason);
+        self.revision = self.revision.wrapping_add(1);
+        // Observe the retained process before a TaskbarCreated notification
+        // turns its exit into an ordinary route invalidation. This does not
+        // diagnose a crash: repeated short-lived exits are enough to suspend.
+        if self
+            .connection
+            .as_ref()
+            .is_some_and(Session::process_exited)
+        {
+            if let Some(connection) = &self.connection {
+                connection.fault();
+            }
+            self.recovery.fault("任务栏进程在接入后退出，正在确认恢复");
+        }
+        self.recovery
+            .environment_changed(now, self.connection.is_some(), reason);
+        if self.recovery.phase() != Phase::RestoreBlocked {
+            self.restoration_check_after = None;
+        }
+    }
     fn restart(&mut self, now: u64, reason: &str) {
         crate::event_log::record("restart", reason);
         self.revision = self.revision.wrapping_add(1);
@@ -341,6 +408,7 @@ impl<B: Backend> Driver<B> {
                 connection.stop().map(|()| RestoreProgress::Confirmed)
             };
             if let Err(error) = result {
+                connection.fault();
                 crate::event_log::record("restore failed", &error);
                 self.recovery.restore_failed(&error);
                 if self.recovery.phase() == Phase::RestoreBlocked {
@@ -356,6 +424,9 @@ impl<B: Backend> Driver<B> {
         Ok(())
     }
     fn finish_restoration(&mut self, now: u64) {
+        if let Some(connection) = &self.connection {
+            connection.restored();
+        }
         self.connection.take();
         self.restoration_check_after = None;
         crate::event_log::record("restored", "native clock and tray state confirmed");
@@ -387,8 +458,14 @@ impl<B: Backend> Driver<B> {
             let frame =
                 clock::frame_with_weather(&self.config.clock, self.weather.as_ref(), wall_time);
             match connection.update(&frame) {
-                Ok(()) => self.recovery.healthy(now),
+                Ok(()) => {
+                    self.recovery.healthy(now);
+                    if self.recovery.is_stable(now) {
+                        connection.healthy();
+                    }
+                }
                 Err(error) => {
+                    connection.fault();
                     crate::event_log::record("session fault", &error);
                     self.recovery.fault(&error);
                     // The failed native call already spent this dispatch's
@@ -407,9 +484,9 @@ impl<B: Backend> Driver<B> {
             .and_then(|pending| match pending.result.try_recv() {
                 Ok(result) => Some(result),
                 Err(TryRecvError::Empty) => None,
-                Err(TryRecvError::Disconnected) => {
-                    Some(Err("系统兼容性检查线程已结束但未返回结果".into()))
-                }
+                Err(TryRecvError::Disconnected) => Some(Err(PreparationFailure::temporary(
+                    "系统兼容性检查线程已结束但未返回结果".into(),
+                ))),
             });
         if let Some(completed) = completed {
             let pending = self.pending.take().expect("polled pending worker");
@@ -421,8 +498,9 @@ impl<B: Backend> Driver<B> {
                 let frame =
                     clock::frame_with_weather(&self.config.clock, self.weather.as_ref(), wall_time);
                 let connected = completed
-                    .map_err(|error| ConnectFailure {
-                        error,
+                    .map_err(|failure| ConnectFailure {
+                        error: failure.error,
+                        suspended: failure.suspended,
                         pending: None,
                     })
                     .and_then(|prepared| backend.connect(prepared, &frame));
@@ -442,7 +520,11 @@ impl<B: Backend> Driver<B> {
                             // obligation, then yield before the next RPC.
                         } else {
                             crate::event_log::record("connect failed", &failure.error);
-                            self.recovery.connect_failed(now, &failure.error);
+                            if failure.suspended {
+                                self.recovery.suspend(&failure.error);
+                            } else {
+                                self.recovery.connect_failed(now, &failure.error);
+                            }
                         }
                     }
                 }
@@ -470,9 +552,13 @@ mod tests {
         rc::Rc,
         sync::mpsc::{self, Sender},
     };
-    type Preparation = (u64, Sender<Result<u64, String>>);
+    type Preparation = (u64, Sender<Result<u64, PreparationFailure>>);
     #[derive(Default)]
     struct NativeState {
+        retries: Cell<usize>,
+        faults: Cell<usize>,
+        healthy: Cell<usize>,
+        confirmations: Cell<usize>,
         prepared: Cell<usize>,
         senders: RefCell<VecDeque<Preparation>>,
         route_generation: Cell<u64>,
@@ -487,6 +573,7 @@ mod tests {
         restoration_checks: Cell<usize>,
         environment_changed: Cell<bool>,
         environment_checks: Cell<usize>,
+        process_exited: Cell<bool>,
         notice: RefCell<Option<String>>,
     }
     struct Fake(Rc<NativeState>);
@@ -494,7 +581,10 @@ mod tests {
     impl Backend for Fake {
         type Prepared = u64;
         type Session = Lease;
-        fn prepare(&self, _: &Config) -> Receiver<Result<u64, String>> {
+        fn retry(&self) {
+            self.0.retries.set(self.0.retries.get() + 1);
+        }
+        fn prepare(&self, _: &Config) -> Receiver<Result<u64, PreparationFailure>> {
             let (tx, rx) = mpsc::channel();
             self.0.prepared.set(self.0.prepared.get() + 1);
             self.0
@@ -512,6 +602,7 @@ mod tests {
                 Err(ConnectFailure {
                     error: "Start response lost".into(),
                     pending: Some(lease),
+                    suspended: false,
                 })
             } else {
                 Ok(lease)
@@ -519,6 +610,15 @@ mod tests {
         }
     }
     impl Session for Lease {
+        fn fault(&self) {
+            self.0.faults.set(self.0.faults.get() + 1);
+        }
+        fn healthy(&self) {
+            self.0.healthy.set(self.0.healthy.get() + 1);
+        }
+        fn restored(&self) {
+            self.0.confirmations.set(self.0.confirmations.get() + 1);
+        }
         fn notice(&self) -> Option<&str> {
             // A fixture flag is sufficient; the user-facing reason originates
             // in real negotiation, tested through compatibility::Report.
@@ -533,6 +633,9 @@ mod tests {
                 .environment_checks
                 .set(self.0.environment_checks.get() + 1);
             !self.0.environment_changed.get()
+        }
+        fn process_exited(&self) -> bool {
+            self.0.process_exited.get()
         }
         fn update(&self, frame: &Frame) -> Result<(), String> {
             if self.0.fail_update.get() {
@@ -572,7 +675,12 @@ mod tests {
     }
     fn complete(native: &NativeState, result: Result<(), String>) {
         let (route, tx) = native.senders.borrow_mut().pop_front().unwrap();
-        tx.send(result.map(|()| route)).unwrap();
+        tx.send(
+            result
+                .map(|()| route)
+                .map_err(PreparationFailure::temporary),
+        )
+        .unwrap();
     }
     fn connect(service: &Service<Fake>, native: &NativeState) {
         service.tick(0, time(0)).unwrap();
@@ -719,6 +827,112 @@ mod tests {
         assert_eq!(native.connects.get(), 1);
         native.notice.borrow_mut().take();
         assert!(service.snapshot().reason.is_none());
+    }
+
+    #[test]
+    fn explorer_restart_notifications_cannot_erase_short_lived_process_exit_failures() {
+        let (service, native, _) = fixture();
+        connect(&service, &native);
+        let mut now = 10;
+        for failure in 1..=3 {
+            native.process_exited.set(true);
+            service.invalidate();
+            service.tick(now, time(now as i64 / 1000)).unwrap();
+            if failure == 3 {
+                assert_eq!(
+                    service.snapshot().status,
+                    Status::Suspended,
+                    "TaskbarCreated notifications reset the observed process-exit failure budget"
+                );
+                break;
+            }
+            native.process_exited.set(false);
+            now += 10_000;
+            service.tick(now, time(now as i64 / 1000)).unwrap();
+            complete(&native, Ok(()));
+            service.tick(now + 1, time(now as i64 / 1000)).unwrap();
+            assert_eq!(service.snapshot().status, Status::Running);
+            now += 10;
+        }
+        assert_eq!(native.connects.get(), 3);
+        assert_eq!(native.stops.get(), 3);
+        let preparations = native.prepared.get();
+        native.process_exited.set(false);
+        for _ in 0..5 {
+            service.invalidate();
+            now += 10_000;
+            service.tick(now, time(now as i64 / 1000)).unwrap();
+            assert_eq!(service.snapshot().status, Status::Suspended);
+        }
+        assert_eq!(native.prepared.get(), preparations);
+        service.retry(now).unwrap();
+        service.tick(now, time(now as i64 / 1000)).unwrap();
+        complete(&native, Ok(()));
+        service.tick(now + 1, time(now as i64 / 1000)).unwrap();
+        assert_eq!(service.snapshot().status, Status::Running);
+    }
+
+    #[test]
+    fn ordinary_display_changes_do_not_count_as_process_exit_failures() {
+        let (service, native, _) = fixture();
+        connect(&service, &native);
+        let mut now = 10;
+        for _ in 0..5 {
+            service.invalidate();
+            service.tick(now, time(0)).unwrap();
+            assert_eq!(service.snapshot().status, Status::Waiting);
+            now += 10_000;
+            service.tick(now, time(0)).unwrap();
+            complete(&native, Ok(()));
+            service.tick(now + 1, time(0)).unwrap();
+            assert_eq!(service.snapshot().status, Status::Running);
+            now += 10;
+        }
+        assert_eq!(native.connects.get(), 6);
+        assert_eq!(native.stops.get(), 5);
+    }
+
+    #[test]
+    fn environment_notifications_keep_connection_backoff_and_suspension() {
+        let (service, native, _) = fixture();
+        for now in [0, 1001, 6002] {
+            service.tick(now, time(0)).unwrap();
+            complete(&native, Err("no taskbar".into()));
+            service.tick(now + 1, time(0)).unwrap();
+            let attempts = native.prepared.get();
+            for delta in [10, 20, 100] {
+                service.invalidate();
+                service.tick(now + delta, time(0)).unwrap();
+                assert_eq!(native.prepared.get(), attempts);
+            }
+        }
+        assert_eq!(service.snapshot().status, Status::Suspended);
+        service.invalidate();
+        service.tick(90_000, time(90)).unwrap();
+        assert_eq!(service.snapshot().status, Status::Suspended);
+        assert_eq!(native.prepared.get(), 3);
+    }
+
+    #[test]
+    fn environment_notifications_keep_blocked_restore_budget_and_read_only_deadline() {
+        let (service, native, _) = fixture();
+        connect(&service, &native);
+        native.fail_update.set(true);
+        native.fail_restore.set(true);
+        for now in 10..=13 {
+            service.tick(now, time(0)).unwrap();
+        }
+        assert_eq!(service.snapshot().status, Status::RestoreBlocked);
+        assert_eq!(native.stops.get(), 3);
+        native.restored.set(true);
+        service.invalidate();
+        service.tick(14, time(0)).unwrap();
+        assert_eq!(service.snapshot().status, Status::RestoreBlocked);
+        assert_eq!(native.restoration_checks.get(), 0);
+        service.tick(5013, time(5)).unwrap();
+        assert_eq!(service.snapshot().status, Status::Waiting);
+        assert_eq!(native.stops.get(), 3);
+        assert_eq!(native.restoration_checks.get(), 1);
     }
     #[test]
     fn tray_can_stay_enabled_when_clock_is_disabled() {
@@ -1034,5 +1248,63 @@ mod tests {
         service.retry(90000).unwrap();
         service.tick(90000, time(90)).unwrap();
         assert_eq!(native.prepared.get(), 4);
+    }
+    #[test]
+    fn persistent_preflight_pause_is_immediate_and_environment_events_cannot_reset_it() {
+        let (service, native, config) = fixture();
+        service.tick(0, time(0)).unwrap();
+        let (_, tx) = native.senders.borrow_mut().pop_front().unwrap();
+        tx.send(Err(PreparationFailure::suspended(
+            "durable failure budget exhausted".into(),
+        )))
+        .unwrap();
+        service.tick(1, time(0)).unwrap();
+        assert_eq!(service.snapshot().status, Status::Suspended);
+        for now in [10, 10_000, 90_000] {
+            service.invalidate();
+            service.devices_changed();
+            service.tick(now, time(0)).unwrap();
+        }
+        service.configure(config, 90_001).unwrap();
+        assert_eq!(native.prepared.get(), 1);
+        assert_eq!(native.connects.get(), 0);
+        assert_eq!(native.retries.get(), 0);
+        service.retry(90_002).unwrap();
+        service.tick(90_002, time(0)).unwrap();
+        complete(&native, Ok(()));
+        service.tick(90_003, time(0)).unwrap();
+        assert_eq!(native.retries.get(), 1);
+        assert_eq!(service.snapshot().status, Status::Running);
+    }
+    #[test]
+    fn explicit_retry_discards_an_older_preflight_pause_before_consuming_the_new_permit() {
+        let (service, native, _) = fixture();
+        service.tick(0, time(0)).unwrap();
+        service.retry(10).unwrap();
+        let (_, tx) = native.senders.borrow_mut().pop_front().unwrap();
+        tx.send(Err(PreparationFailure::suspended("stale pause".into())))
+            .unwrap();
+        service.tick(11, time(0)).unwrap();
+        assert_eq!(native.prepared.get(), 2);
+        complete(&native, Ok(()));
+        service.tick(12, time(0)).unwrap();
+        assert_eq!(native.retries.get(), 1);
+        assert_eq!(native.connects.get(), 1);
+        assert_eq!(service.snapshot().status, Status::Running);
+    }
+    #[test]
+    fn durable_health_fault_and_restore_callbacks_follow_the_real_service_lifetime() {
+        let (service, native, _) = fixture();
+        connect(&service, &native);
+        service.tick(60_000, time(60)).unwrap();
+        assert_eq!(native.healthy.get(), 0);
+        service.tick(60_001, time(60)).unwrap();
+        assert_eq!(native.healthy.get(), 1);
+        native.fail_update.set(true);
+        service.tick(60_002, time(60)).unwrap();
+        assert_eq!(native.faults.get(), 1);
+        assert_eq!(native.confirmations.get(), 0);
+        service.tick(60_003, time(60)).unwrap();
+        assert_eq!(native.confirmations.get(), 1);
     }
 }

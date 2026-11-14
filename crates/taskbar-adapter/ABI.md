@@ -24,6 +24,10 @@ DispatchMessageW 作用域保存真实任务栏根，涵盖鼠标、pointer、�
 
 MinHook 的 fallible C API 建立跳板；会话停止时恢复输入和 SystemTray 入口，但跳板不释放，避免已进入的回调执行释放后代码。IFlyoutBase.ShowAt（slot14）及 IFlyoutBase5.ShowAt(options)（slot12）从自建 MenuFlyout/Flyout 的公开 ABI 读取，常驻 guard 只处理共享系统图标子树。锁定其他 XamlRoot 的缓存菜单把原生 command items 借给目标 island 的代理，下次交互或停止时归还；失败时抑制已知会崩溃的跨根调用。为保护此前显示过的缓存菜单，guard 随固定加载的 DLL 保留。鼠标按住期间不重新附着 ItemsSource，以免吞掉按下或拖动。
 
+菜单准备与恢复共用 RAII 重入门，在 COM 查询之前取得。复制根首次使用也保留原生缓存菜单的根；原生/未管理目标上的 null 根允许系统原入口完成首次初始化。代理只允许自己的根，普通 Flyout 的不同根内容代理继续拒绝。祖先遍历超过 32 层视为无法确认，不能等同于普通目标并放行。实际调用代理 ShowAt 时转发原目标接口指针、原 options 和实际 HRESULT；被 guard 拒绝而没有调用 ShowAt 的路径保持原有 S_OK 无操作语义，并写入最多 32 项的内存诊断，不额外向 Shell 引入 HRESULT 异常。停用的常驻 guard 原样转发系统调用。
+
+`Loan` 在首次 Clear 前拥有原菜单、两侧集合和全部命令引用。所有 Clear/Append 都核对 HRESULT；失败的返回保留归还责任，重试读取实际命令前缀，避免重复追加。原集合出现新的原生命令或被整体替换时尊重系统重建；无法证明已重建的自有命令乱序继续保留。命令最多 256 项、代理根最多 32 个；失败路径通过有界身份集合避免二次方 COM 查询。停止只有在命令归还确认后才释放旧根缓存。相关宿主的持久接入许可与退出排空规则见 [安全审计](../../docs/explorer-safety-audit-2026-11-14.md)。
+
 只读检查现在同时返回物理矩形、模型身份、HitTest/Enabled/Opacity 和最多 32 项最近坐标转换；不记录键盘字符或应用消息正文。这些诊断和独立窗口回归不等于真实 QQNT 悬停、系统左键弹层或拖放已经验收。
 
 宽度 0 表示 Auto，在原生端设置 Width=NaN；所有权比较已有 NaN 判等支持。固定 80–600 宽度保持兼容，Tick 不计算或重设宽度。watchdog 窗口类按所属线程与回调地址区分，防止 Explorer 中尚被固定加载的旧 DLL 与新 DLL 混用窗口过程；主机仍验证端点进程、线程和类型前缀。

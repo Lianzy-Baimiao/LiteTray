@@ -4,7 +4,8 @@
 use crate::{
     config::{ClickAction, Config},
     platform::{diagnostics, wide},
-    taskbar_service::{self, ConnectFailure},
+    taskbar_safety::{Journal, Permit},
+    taskbar_service::{self, ConnectFailure, PreparationFailure},
 };
 use litetray_adapter_protocol::{
     HostLayout, MAX_REQUEST, VERSION,
@@ -17,6 +18,10 @@ use std::{
     cell::{Cell, RefCell},
     ptr::{null, null_mut},
     rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use windows_sys::Win32::{
     Foundation::*,
@@ -32,42 +37,104 @@ pub use live_checks::{
 };
 pub struct Native {
     main: HWND,
+    journal: Journal,
+    retry: Arc<AtomicBool>,
 }
 pub type Service = taskbar_service::Service<Native>;
 pub fn service(main: HWND, config: Config, now: u64) -> Result<Service, String> {
-    Service::new(Native { main }, config, now)
+    Service::new(
+        Native {
+            main,
+            journal: crate::taskbar_safety::for_process(
+                crate::config::data_dir().join("taskbar-safety.json"),
+            )?,
+            retry: Arc::new(AtomicBool::new(false)),
+        },
+        config,
+        now,
+    )
 }
 impl taskbar_service::Backend for Native {
     type Prepared = Preflight;
     type Session = Connection;
-    fn prepare(&self, config: &Config) -> std::sync::mpsc::Receiver<Result<Preflight, String>> {
+    fn prepare(
+        &self,
+        config: &Config,
+    ) -> std::sync::mpsc::Receiver<Result<Preflight, PreparationFailure>> {
         let config = config.clone();
+        let journal = self.journal.clone();
+        let retry = self.retry.swap(false, Ordering::AcqRel);
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(preflight(&config));
+            let prepared = (|| {
+                let mut prepared = preflight(&config).map_err(PreparationFailure::temporary)?;
+                let image = super::dll::prepare_current(super::dll::Kind::Taskbar)
+                    .map_err(PreparationFailure::temporary)?;
+                let key = crate::taskbar_safety::identity(
+                    &image.sha256,
+                    &prepared.layout,
+                    prepared.clocks,
+                    prepared.mirror_icons,
+                )
+                .map_err(PreparationFailure::suspended)?;
+                prepared.permit = Some(
+                    journal
+                        .arm(&key, retry)
+                        .map_err(PreparationFailure::suspended)?,
+                );
+                prepared.image = Some(image);
+                Ok(prepared)
+            })();
+            let _ = tx.send(prepared);
         });
         rx
+    }
+    fn retry(&self) {
+        self.retry.store(true, Ordering::Release);
     }
     fn connect(
         &self,
         prepared: Preflight,
         frame: &Frame,
     ) -> Result<Connection, ConnectFailure<Connection>> {
+        if prepared.permit.is_none() || prepared.image.is_none() {
+            return Err(ConnectFailure {
+                error: "安全检查尚未完成，任务栏接入已暂停，请重试".into(),
+                pending: None,
+                suspended: true,
+            });
+        }
         let connection =
             Connection::prepare(self.main, prepared).map_err(|error| ConnectFailure {
                 error,
                 pending: None,
+                suspended: false,
             })?;
         if let Err(error) = connection.start(frame.clone()) {
+            connection.record_fault();
             return Err(ConnectFailure {
                 error,
                 pending: Some(connection),
+                suspended: false,
             });
         }
         Ok(connection)
     }
 }
 impl taskbar_service::Session for Connection {
+    fn fault(&self) {
+        self.record_fault();
+    }
+    fn healthy(&self) {
+        if let Some(permit) = &self.permit {
+            permit.healthy();
+        }
+    }
+    fn restored(&self) {
+        if self.restored.get() {
+            self.confirm_restored();
+        }
+    }
     fn notice(&self) -> Option<&str> {
         self.notice.as_deref()
     }
@@ -78,6 +145,9 @@ impl taskbar_service::Session for Connection {
                     .as_ref()
                     == Some(original)
             })
+    }
+    fn process_exited(&self) -> bool {
+        unsafe { WaitForSingleObject(self.process, 0) == WAIT_OBJECT_0 }
     }
     fn update(&self, frame: &Frame) -> Result<(), String> {
         self.update(frame.clone())
@@ -106,6 +176,8 @@ pub struct Preflight {
     mirror_icons: bool,
     notice: Option<String>,
     environment: Option<super::taskbar_environment::Environment>,
+    image: Option<super::dll::Prepared>,
+    permit: Option<Permit>,
 }
 pub fn preflight(config: &Config) -> Result<Preflight, String> {
     let system = std::env::var_os("SystemRoot")
@@ -141,6 +213,8 @@ pub fn preflight(config: &Config) -> Result<Preflight, String> {
         mirror_icons: capabilities.tray,
         notice: capabilities.notice,
         environment,
+        image: None,
+        permit: None,
     })
 }
 struct Context {
@@ -166,6 +240,7 @@ pub struct Connection {
     stop_sent: Cell<bool>,
     notice: Option<String>,
     environment: Option<super::taskbar_environment::Environment>,
+    permit: Option<Permit>,
 }
 struct Call<'a>(&'a Cell<bool>);
 impl Drop for Call<'_> {
@@ -189,6 +264,7 @@ impl Drop for Hook {
 impl Connection {
     fn prepare(main: HWND, preflight: Preflight) -> Result<Self, String> {
         unsafe {
+            let image = preflight.image;
             let route = preflight.routes.first().ok_or("没有时钟目标")?;
             let (pid, tid, taskbar) = (route.process_id, route.thread_id, route.window as HWND);
             let nonce = std::time::SystemTime::now()
@@ -237,6 +313,7 @@ impl Connection {
                 stop_sent: Cell::new(false),
                 notice: preflight.notice,
                 environment: preflight.environment,
+                permit: preflight.permit,
             };
             let class = wide(RECEIVER_CLASS);
             let instance = GetModuleHandleW(null());
@@ -282,7 +359,10 @@ impl Connection {
             request.plan()?;
             let mut hook = Hook {
                 hook: null_mut(),
-                module: super::dll::load(super::dll::Kind::Taskbar)?,
+                module: match image {
+                    Some(image) => image.load()?,
+                    None => super::dll::load(super::dll::Kind::Taskbar)?,
+                },
             };
             let entry =
                 GetProcAddress(hook.module.handle(), c"LiteTrayCallWndProc".as_ptr().cast())
@@ -293,6 +373,11 @@ impl Connection {
                 || WaitForSingleObject(connection.process, 0) != WAIT_TIMEOUT
             {
                 return Err("任务栏已重启，请重试".into());
+            }
+            // The worker's durable receipt exists before the first call that
+            // can load our adapter into the retained native process.
+            if let Some(permit) = &connection.permit {
+                permit.mark_used();
             }
             hook.hook = SetWindowsHookExW(
                 WH_CALLWNDPROC,
@@ -468,12 +553,27 @@ impl Connection {
             }
         };
         if let Err(error) = self.command_with_timeout(change, PERIODIC_RPC_MILLIS) {
+            self.record_fault();
             self.context.active.set(false);
             *self.failure.borrow_mut() = Some(error.clone());
             return Err(error);
         }
         *self.last.borrow_mut() = Some(frame);
         Ok(())
+    }
+    fn record_fault(&self) {
+        if let Some(permit) = &self.permit {
+            permit.fault();
+        }
+    }
+    fn confirm_restored(&self) {
+        if let Some(permit) = &self.permit {
+            if unsafe { WaitForSingleObject(self.process, 0) } == WAIT_OBJECT_0 {
+                permit.fault();
+            }
+            permit.restored();
+        }
+        self.restored.set(true);
     }
     pub fn stop(&self) -> Result<(), String> {
         let _call = self.enter()?;
@@ -483,7 +583,7 @@ impl Connection {
             return Ok(());
         }
         if unsafe { WaitForSingleObject(self.process, 0) } == WAIT_OBJECT_0 {
-            self.restored.set(true);
+            self.confirm_restored();
             return Ok(());
         }
         self.command(Change::Stop)
@@ -497,7 +597,7 @@ impl Connection {
                 "任务栏尚未确认恢复完成，当前状态为 {status:?}，连接继续保留"
             ));
         }
-        self.restored.set(true);
+        self.confirm_restored();
         Ok(())
     }
     fn restore_step(&self) -> Result<taskbar_service::RestoreProgress, String> {
@@ -506,7 +606,7 @@ impl Connection {
         self.context.active.set(false);
         self.context.pending.borrow_mut().take();
         if self.restored.get() || unsafe { WaitForSingleObject(self.process, 0) } == WAIT_OBJECT_0 {
-            self.restored.set(true);
+            self.confirm_restored();
             return Ok(RestoreProgress::Confirmed);
         }
         if !self.stop_sent.get() {
@@ -523,7 +623,7 @@ impl Connection {
                 "任务栏尚未确认恢复完成，当前状态为 {status:?}，连接继续保留"
             ));
         }
-        self.restored.set(true);
+        self.confirm_restored();
         Ok(RestoreProgress::Confirmed)
     }
     fn restoration_confirmed(&self) -> bool {
@@ -541,7 +641,7 @@ impl Connection {
         {
             self.context.active.set(false);
             self.context.pending.borrow_mut().take();
-            self.restored.set(true);
+            self.confirm_restored();
             return true;
         }
         false
@@ -559,7 +659,9 @@ impl Connection {
 }
 impl Drop for Connection {
     fn drop(&mut self) {
-        let _ = self.stop();
+        if self.stop().is_err() {
+            self.record_fault();
+        }
         unsafe {
             if !self.receiver.is_null() {
                 SetWindowLongPtrW(self.receiver, GWLP_USERDATA, 0);
@@ -807,6 +909,7 @@ mod restoration_checks {
                         stop_sent: Cell::new(false),
                         notice: None,
                         environment: None,
+                        permit: None,
                     }),
                     hwnd,
                     state,
@@ -824,6 +927,42 @@ mod restoration_checks {
                 DestroyWindow(self.hwnd);
             }
         }
+    }
+
+    #[test]
+    fn production_backend_refuses_unarmed_preflight_before_loading_or_hooking_native_code() {
+        let fixture = Fixture::new();
+        let path = std::env::temp_dir().join(format!(
+            "litetray-unarmed-preflight-{}.json",
+            std::process::id()
+        ));
+        let existed = path.exists();
+        let native = Native {
+            main: fixture.hwnd,
+            journal: Journal::new(path.clone()),
+            retry: Arc::new(AtomicBool::new(false)),
+        };
+        let prepared = Preflight {
+            layout: fixture.connection().context.request.layout.clone(),
+            routes: vec![],
+            custom_calendar: false,
+            volume_scroll: false,
+            volume_mute: false,
+            source: None,
+            clocks: true,
+            mirror_icons: false,
+            notice: None,
+            environment: None,
+            image: None,
+            permit: None,
+        };
+        let frame = crate::clock::frame(&Config::default().clock, "", chrono::Local::now());
+        let Err(failure) = taskbar_service::Backend::connect(&native, prepared, &frame) else {
+            panic!("unarmed preflight reached native activation");
+        };
+        assert!(failure.suspended);
+        assert!(failure.pending.is_none());
+        assert_eq!(path.exists(), existed);
     }
 
     #[test]
@@ -902,7 +1041,7 @@ mod restoration_checks {
         impl taskbar_service::Backend for Backend {
             type Prepared = ();
             type Session = Connection;
-            fn prepare(&self, _: &Config) -> mpsc::Receiver<Result<(), String>> {
+            fn prepare(&self, _: &Config) -> mpsc::Receiver<Result<(), PreparationFailure>> {
                 let (tx, rx) = mpsc::channel();
                 let _ = tx.send(Ok(()));
                 rx
@@ -918,6 +1057,7 @@ mod restoration_checks {
                     Err(error) => Err(ConnectFailure {
                         error,
                         pending: Some(connection),
+                        suspended: false,
                     }),
                 }
             }
@@ -1076,6 +1216,76 @@ mod restoration_checks {
             2,
             "Drop preserves the confirmation"
         );
+    }
+
+    #[test]
+    fn retained_process_exit_observation_never_sends_a_native_command() {
+        use std::{
+            io::Write,
+            os::windows::{io::AsRawHandle, process::CommandExt},
+            process::{Command, Stdio},
+            time::{Duration, Instant},
+        };
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "platform::taskbar_clock::restoration_checks::retained_process_observation_child",
+                "--ignored",
+                "--test-threads=1",
+            ])
+            .env("LITETRAY_PROCESS_OBSERVATION_CHILD", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .unwrap();
+        let mut fixture = Fixture::new();
+        let mut retained = null_mut();
+        unsafe {
+            assert_ne!(
+                DuplicateHandle(
+                    GetCurrentProcess(),
+                    child.as_raw_handle(),
+                    GetCurrentProcess(),
+                    &mut retained,
+                    0,
+                    0,
+                    DUPLICATE_SAME_ACCESS,
+                ),
+                0
+            );
+            let connection = fixture.connection.as_mut().unwrap();
+            CloseHandle(connection.process);
+            connection.process = retained;
+        }
+        assert!(!taskbar_service::Session::process_exited(
+            fixture.connection()
+        ));
+        child.stdin.take().unwrap().write_all(b"x").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while child.try_wait().unwrap().is_none() {
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                let _ = child.wait();
+                panic!("isolated process observation child exceeded its deadline");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(taskbar_service::Session::process_exited(
+            fixture.connection()
+        ));
+        assert_eq!(fixture.state.commands.get(), 0);
+        assert_eq!(fixture.state.queries.get(), 0);
+    }
+
+    #[test]
+    #[ignore = "only invoked by the isolated retained-process observation test"]
+    fn retained_process_observation_child() {
+        use std::io::Read;
+        if std::env::var("LITETRAY_PROCESS_OBSERVATION_CHILD").as_deref() == Ok("1") {
+            std::io::stdin().read_exact(&mut [0; 1]).unwrap();
+        }
     }
     #[test]
     fn periodic_restore_ack_and_confirmation_are_separate_and_keep_the_lease() {
@@ -1295,6 +1505,7 @@ mod activation_checks {
                 stop_sent: Cell::new(false),
                 environment: None,
                 notice: None,
+                permit: None,
             };
             let accepted = connection.take_activation();
             CloseHandle(connection.process);
