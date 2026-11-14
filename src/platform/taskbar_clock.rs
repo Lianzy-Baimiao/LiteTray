@@ -79,6 +79,9 @@ impl taskbar_service::Session for Connection {
                     == Some(original)
             })
     }
+    fn process_exited(&self) -> bool {
+        unsafe { WaitForSingleObject(self.process, 0) == WAIT_OBJECT_0 }
+    }
     fn update(&self, frame: &Frame) -> Result<(), String> {
         self.update(frame.clone())
     }
@@ -1076,6 +1079,76 @@ mod restoration_checks {
             2,
             "Drop preserves the confirmation"
         );
+    }
+
+    #[test]
+    fn retained_process_exit_observation_never_sends_a_native_command() {
+        use std::{
+            io::Write,
+            os::windows::{io::AsRawHandle, process::CommandExt},
+            process::{Command, Stdio},
+            time::{Duration, Instant},
+        };
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "platform::taskbar_clock::restoration_checks::retained_process_observation_child",
+                "--ignored",
+                "--test-threads=1",
+            ])
+            .env("LITETRAY_PROCESS_OBSERVATION_CHILD", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .unwrap();
+        let mut fixture = Fixture::new();
+        let mut retained = null_mut();
+        unsafe {
+            assert_ne!(
+                DuplicateHandle(
+                    GetCurrentProcess(),
+                    child.as_raw_handle(),
+                    GetCurrentProcess(),
+                    &mut retained,
+                    0,
+                    0,
+                    DUPLICATE_SAME_ACCESS,
+                ),
+                0
+            );
+            let connection = fixture.connection.as_mut().unwrap();
+            CloseHandle(connection.process);
+            connection.process = retained;
+        }
+        assert!(!taskbar_service::Session::process_exited(
+            fixture.connection()
+        ));
+        child.stdin.take().unwrap().write_all(b"x").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while child.try_wait().unwrap().is_none() {
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                let _ = child.wait();
+                panic!("isolated process observation child exceeded its deadline");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(taskbar_service::Session::process_exited(
+            fixture.connection()
+        ));
+        assert_eq!(fixture.state.commands.get(), 0);
+        assert_eq!(fixture.state.queries.get(), 0);
+    }
+
+    #[test]
+    #[ignore = "only invoked by the isolated retained-process observation test"]
+    fn retained_process_observation_child() {
+        use std::io::Read;
+        if std::env::var("LITETRAY_PROCESS_OBSERVATION_CHILD").as_deref() == Ok("1") {
+            std::io::stdin().read_exact(&mut [0; 1]).unwrap();
+        }
     }
     #[test]
     fn periodic_restore_ack_and_confirmation_are_separate_and_keep_the_lease() {

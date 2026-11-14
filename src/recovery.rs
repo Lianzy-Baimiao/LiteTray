@@ -100,6 +100,24 @@ impl Recovery {
             self.wait_or_suspend(now);
         }
     }
+    /// Environmental notifications invalidate routes, but are not an explicit
+    /// user retry. Preserve failure/backoff and unresolved restore budgets.
+    pub fn environment_changed(&mut self, now: u64, connected: bool, reason: &str) {
+        if matches!(self.phase, Phase::Suspended | Phase::RestoreBlocked) {
+            return;
+        }
+        if connected {
+            if self.phase != Phase::Restoring {
+                self.restore_failures = 0;
+            }
+            self.phase = Phase::Restoring;
+        } else if !matches!(self.phase, Phase::Waiting { .. }) {
+            self.phase = Phase::Waiting { until: now };
+        }
+        if self.failures == 0 {
+            self.reason = Some(reason.chars().take(1024).collect());
+        }
+    }
     fn wait_or_suspend(&mut self, now: u64) {
         self.phase = if self.failures >= MAX_FAILURES {
             Phase::Suspended

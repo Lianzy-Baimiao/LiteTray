@@ -91,6 +91,14 @@ pub(crate) struct Menus {
     proxies: Vec<Proxy>,
 }
 impl Menus {
+    /// Stop owns the complete proxy cache. After command restoration succeeds,
+    /// release roots from discarded islands instead of retaining their trees
+    /// for the lifetime of the pinned adapter module.
+    pub(crate) fn retire(&mut self) -> Result<(), String> {
+        self.restore()?;
+        self.proxies.clear();
+        Ok(())
+    }
     pub fn is_proxy(&self, menu: &Object) -> bool {
         self.proxies
             .iter()
@@ -140,10 +148,11 @@ impl Menus {
             if !existing.is_null() && same_object(&Object::owned(existing)?, root)? {
                 return Ok(None);
             }
-            if (base.table::<IFlyoutBase6_Vtbl>().SetXamlRoot)(base.raw(), root.raw()) >= 0 {
-                return Ok(None);
-            }
         }
+        // A fresh cached shell menu can accept SetXamlRoot, but that would
+        // permanently attach it to the first copied island. Preserve its
+        // native root even before first show so stopping can safely pass the
+        // original call through on the primary taskbar.
         let index = match self
             .proxies
             .iter()
@@ -175,6 +184,11 @@ impl Menus {
         Ok(Some(proxy.menu.clone()))
     }
 }
+#[cfg(test)]
+#[path = "tray_menu_reentry_checks.rs"]
+mod reentry_checks;
+#[path = "tray_menu_root_checks.rs"]
+mod root_checks;
 pub(crate) fn self_test() -> Result<Vec<&'static str>, String> {
     let source = load(
         r#"<MenuFlyout xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"><MenuFlyoutItem Text="Native command"/><MenuFlyoutSeparator/><MenuFlyoutItem Text="Second command"/></MenuFlyout>"#,
@@ -213,9 +227,11 @@ pub(crate) fn self_test() -> Result<Vec<&'static str>, String> {
     if count(&a)? != 3 || count(&b)? != 0 {
         return Err("菜单归还失败".into());
     }
-    Ok(vec![
+    let mut checks = vec![
         "native_menu_borrow_preserves_command_identity_and_order",
         "native_menu_conflicting_target_rejected",
         "native_menu_items_returned_without_duplicates",
-    ])
+    ];
+    checks.extend(root_checks::run()?);
+    Ok(checks)
 }

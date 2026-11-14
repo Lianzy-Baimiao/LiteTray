@@ -29,6 +29,11 @@ pub trait Session {
     /// Read-only comparison with the display/taskbar snapshot used at connect.
     /// An inconclusive observation must return false.
     fn environment_matches(&self) -> bool;
+    /// Observe the originally retained native process, without a message/RPC.
+    /// An exited process is distinct from a normal display topology change.
+    fn process_exited(&self) -> bool {
+        false
+    }
     /// Success proves restoration, or that the retained native process exited.
     fn stop(&self) -> Result<(), String>;
     /// One bounded periodic step. A native transport can acknowledge Stop and
@@ -214,7 +219,7 @@ impl<B: Backend> Service<B> {
             let invalidated = self.invalidated.replace(false);
             let check_devices = self.devices_changed.replace(false);
             if invalidated && driver.enabled {
-                driver.restart(now, "任务栏或显示环境已变化");
+                driver.environment_changed(now, "任务栏或显示环境已变化");
             } else if check_devices
                 && driver.enabled
                 && matches!(driver.recovery.phase(), Phase::Running { .. })
@@ -223,7 +228,7 @@ impl<B: Backend> Service<B> {
                 if connection.environment_matches() {
                     crate::event_log::record("devices unchanged", "taskbar session retained");
                 } else {
-                    driver.restart(now, "设备通知后任务栏或显示器拓扑已变化");
+                    driver.environment_changed(now, "设备通知后任务栏或显示器拓扑已变化");
                 }
             } else if check_devices && driver.enabled && !invalidated {
                 // A preflight worker may already hold the old topology. Keep
@@ -316,6 +321,25 @@ impl<B: Backend> Service<B> {
     }
 }
 impl<B: Backend> Driver<B> {
+    fn environment_changed(&mut self, now: u64, reason: &str) {
+        crate::event_log::record("restart", reason);
+        self.revision = self.revision.wrapping_add(1);
+        // Observe the retained process before a TaskbarCreated notification
+        // turns its exit into an ordinary route invalidation. This does not
+        // diagnose a crash: repeated short-lived exits are enough to suspend.
+        if self
+            .connection
+            .as_ref()
+            .is_some_and(Session::process_exited)
+        {
+            self.recovery.fault("任务栏进程在接入后退出，正在确认恢复");
+        }
+        self.recovery
+            .environment_changed(now, self.connection.is_some(), reason);
+        if self.recovery.phase() != Phase::RestoreBlocked {
+            self.restoration_check_after = None;
+        }
+    }
     fn restart(&mut self, now: u64, reason: &str) {
         crate::event_log::record("restart", reason);
         self.revision = self.revision.wrapping_add(1);
@@ -487,6 +511,7 @@ mod tests {
         restoration_checks: Cell<usize>,
         environment_changed: Cell<bool>,
         environment_checks: Cell<usize>,
+        process_exited: Cell<bool>,
         notice: RefCell<Option<String>>,
     }
     struct Fake(Rc<NativeState>);
@@ -533,6 +558,9 @@ mod tests {
                 .environment_checks
                 .set(self.0.environment_checks.get() + 1);
             !self.0.environment_changed.get()
+        }
+        fn process_exited(&self) -> bool {
+            self.0.process_exited.get()
         }
         fn update(&self, frame: &Frame) -> Result<(), String> {
             if self.0.fail_update.get() {
@@ -719,6 +747,112 @@ mod tests {
         assert_eq!(native.connects.get(), 1);
         native.notice.borrow_mut().take();
         assert!(service.snapshot().reason.is_none());
+    }
+
+    #[test]
+    fn explorer_restart_notifications_cannot_erase_short_lived_process_exit_failures() {
+        let (service, native, _) = fixture();
+        connect(&service, &native);
+        let mut now = 10;
+        for failure in 1..=3 {
+            native.process_exited.set(true);
+            service.invalidate();
+            service.tick(now, time(now as i64 / 1000)).unwrap();
+            if failure == 3 {
+                assert_eq!(
+                    service.snapshot().status,
+                    Status::Suspended,
+                    "TaskbarCreated notifications reset the observed process-exit failure budget"
+                );
+                break;
+            }
+            native.process_exited.set(false);
+            now += 10_000;
+            service.tick(now, time(now as i64 / 1000)).unwrap();
+            complete(&native, Ok(()));
+            service.tick(now + 1, time(now as i64 / 1000)).unwrap();
+            assert_eq!(service.snapshot().status, Status::Running);
+            now += 10;
+        }
+        assert_eq!(native.connects.get(), 3);
+        assert_eq!(native.stops.get(), 3);
+        let preparations = native.prepared.get();
+        native.process_exited.set(false);
+        for _ in 0..5 {
+            service.invalidate();
+            now += 10_000;
+            service.tick(now, time(now as i64 / 1000)).unwrap();
+            assert_eq!(service.snapshot().status, Status::Suspended);
+        }
+        assert_eq!(native.prepared.get(), preparations);
+        service.retry(now).unwrap();
+        service.tick(now, time(now as i64 / 1000)).unwrap();
+        complete(&native, Ok(()));
+        service.tick(now + 1, time(now as i64 / 1000)).unwrap();
+        assert_eq!(service.snapshot().status, Status::Running);
+    }
+
+    #[test]
+    fn ordinary_display_changes_do_not_count_as_process_exit_failures() {
+        let (service, native, _) = fixture();
+        connect(&service, &native);
+        let mut now = 10;
+        for _ in 0..5 {
+            service.invalidate();
+            service.tick(now, time(0)).unwrap();
+            assert_eq!(service.snapshot().status, Status::Waiting);
+            now += 10_000;
+            service.tick(now, time(0)).unwrap();
+            complete(&native, Ok(()));
+            service.tick(now + 1, time(0)).unwrap();
+            assert_eq!(service.snapshot().status, Status::Running);
+            now += 10;
+        }
+        assert_eq!(native.connects.get(), 6);
+        assert_eq!(native.stops.get(), 5);
+    }
+
+    #[test]
+    fn environment_notifications_keep_connection_backoff_and_suspension() {
+        let (service, native, _) = fixture();
+        for now in [0, 1001, 6002] {
+            service.tick(now, time(0)).unwrap();
+            complete(&native, Err("no taskbar".into()));
+            service.tick(now + 1, time(0)).unwrap();
+            let attempts = native.prepared.get();
+            for delta in [10, 20, 100] {
+                service.invalidate();
+                service.tick(now + delta, time(0)).unwrap();
+                assert_eq!(native.prepared.get(), attempts);
+            }
+        }
+        assert_eq!(service.snapshot().status, Status::Suspended);
+        service.invalidate();
+        service.tick(90_000, time(90)).unwrap();
+        assert_eq!(service.snapshot().status, Status::Suspended);
+        assert_eq!(native.prepared.get(), 3);
+    }
+
+    #[test]
+    fn environment_notifications_keep_blocked_restore_budget_and_read_only_deadline() {
+        let (service, native, _) = fixture();
+        connect(&service, &native);
+        native.fail_update.set(true);
+        native.fail_restore.set(true);
+        for now in 10..=13 {
+            service.tick(now, time(0)).unwrap();
+        }
+        assert_eq!(service.snapshot().status, Status::RestoreBlocked);
+        assert_eq!(native.stops.get(), 3);
+        native.restored.set(true);
+        service.invalidate();
+        service.tick(14, time(0)).unwrap();
+        assert_eq!(service.snapshot().status, Status::RestoreBlocked);
+        assert_eq!(native.restoration_checks.get(), 0);
+        service.tick(5013, time(5)).unwrap();
+        assert_eq!(service.snapshot().status, Status::Waiting);
+        assert_eq!(native.stops.get(), 3);
+        assert_eq!(native.restoration_checks.get(), 1);
     }
     #[test]
     fn tray_can_stay_enabled_when_clock_is_disabled() {

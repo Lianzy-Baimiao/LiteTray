@@ -35,6 +35,9 @@ use windows_sys::Win32::{
 #[path = "tray_recovery_checks.rs"]
 mod recovery_checks;
 pub(crate) use recovery_checks::run as check_recovery;
+#[path = "tray_menu_lifecycle_checks.rs"]
+mod menu_lifecycle_checks;
+pub(crate) use menu_lifecycle_checks::run as check_inactive_menus;
 
 #[derive(Clone, Copy)]
 struct PopupAnchor {
@@ -90,6 +93,55 @@ fn runtime() -> Option<Rc<Runtime>> {
         .with(|state| state.borrow().clone())
         .filter(|r| r.active.get())
 }
+struct MenuBusy;
+impl MenuBusy {
+    fn enter() -> Result<Self, String> {
+        if MENU_BUSY.with(|busy| busy.replace(true)) {
+            return Err("托盘菜单正在处理原生回调".into());
+        }
+        Ok(Self)
+    }
+}
+impl Drop for MenuBusy {
+    fn drop(&mut self) {
+        MENU_BUSY.with(|busy| busy.set(false));
+    }
+}
+pub(crate) fn restore_menus() -> Result<(), String> {
+    let _busy = MenuBusy::enter()?;
+    MENUS.with(|menus| {
+        menus
+            .try_borrow_mut()
+            .map_err(|_| "托盘菜单恢复正在进行".to_string())?
+            .retire()
+    })
+}
+pub(crate) fn prepare_menus(
+    resolve: impl FnOnce() -> Result<(Object, Object), String>,
+) -> Result<Option<Object>, String> {
+    let _busy = MenuBusy::enter()?;
+    let (menu, root) = resolve()?;
+    MENUS.with(|menus| {
+        menus
+            .try_borrow_mut()
+            .map_err(|_| "托盘菜单准备正在进行".to_string())?
+            .prepare(&menu, &root)
+    })
+}
+#[cfg(test)]
+pub(crate) fn with_test_menus<T>(menus: Menus, apply: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Menus>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            MENU_BUSY.with(|busy| busy.set(false));
+            MENUS.with(|menus| {
+                menus.replace(self.0.take().unwrap());
+            });
+        }
+    }
+    let _restore = Restore(Some(MENUS.with(|state| state.replace(menus))));
+    apply()
+}
 impl Runtime {
     pub fn new(hosts: Vec<Host>) -> Rc<Self> {
         Rc::new(Self {
@@ -125,7 +177,7 @@ impl Runtime {
         RUNTIME.with(|state| {
             state.borrow_mut().take();
         });
-        MENUS.with(|menus| menus.borrow_mut().restore())?;
+        restore_menus()?;
         // Attaching the primary last restores the shell's per-item owner.
         if let Some(primary) = self.hosts.iter().find(|h| !h.secondary) {
             // Active coordinates must match the capture, but stopping after a
@@ -746,21 +798,22 @@ unsafe fn show(
                 original(this, target)
             }
         };
+        // Menu hooks outlive a session. A stopped adapter must not query or
+        // redirect system menus, including callbacks from its former proxies.
+        if runtime().is_none() {
+            return call();
+        }
         let Ok(element) = Object::query_borrowed(target, &IID_IFrameworkElement) else {
             return call();
         };
         if !shared_target(&element).unwrap_or(false) {
             return call();
         }
-        if MENU_BUSY.with(|busy| busy.replace(true)) {
-            return 0;
-        }
-        let prepared = (|| {
+        let prepared = prepare_menus(|| {
             let menu = Object::query_borrowed(this, &IID_IFlyoutBase)?;
             let root = xaml::root(&element)?;
-            MENUS.with(|menus| menus.borrow_mut().prepare(&menu, &root))
-        })();
-        MENU_BUSY.with(|busy| busy.set(false));
+            Ok((menu, root))
+        });
         match prepared {
             Ok(None) => call(),
             Ok(Some(proxy)) => {
