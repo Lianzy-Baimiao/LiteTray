@@ -11,9 +11,14 @@ mod icons;
 mod navigation_timing;
 mod page;
 mod panel;
+#[cfg(test)]
+mod proxy_checks;
+mod proxy_settings;
 mod quick_agenda;
 mod settings;
 mod settings_open;
+#[cfg(test)]
+mod startup_checks;
 mod typography;
 #[cfg(test)]
 mod update_checks;
@@ -77,7 +82,7 @@ const UPDATE: u16 = 31;
 const OPEN_RELEASE: u16 = 32;
 const EXIT: u16 = 33;
 const CALENDAR: u16 = 34;
-const PAGES: [&str; 12] = [
+const PAGES: [&str; 13] = [
     "日历与天气",
     "时钟显示",
     "多屏托盘",
@@ -90,6 +95,7 @@ const PAGES: [&str; 12] = [
     "闹钟与专注",
     "天气格式",
     "兼容性",
+    "代理设置",
 ];
 fn revision_label() -> String {
     if i18n::english() {
@@ -124,10 +130,17 @@ enum Event {
     Diagnostics(Result<std::path::PathBuf, String>),
     Compatibility(Result<Box<compatibility::Snapshot>, String>),
     CompatibilityExport(Result<std::path::PathBuf, String>),
-    Weather(Box<(config::WeatherConfig, weather::WeatherResult)>),
+    Weather(
+        Box<(
+            config::WeatherConfig,
+            config::ProxyConfig,
+            weather::WeatherResult,
+        )>,
+    ),
     Update(Result<UpdateStatus, String>),
     Holidays(i32, holidays::Outcome),
     Location(u64, Result<Vec<location::Place>, String>),
+    ProxyTest(u64, config::ProxyConfig, Result<Duration, String>),
 }
 struct App {
     hwnd: HWND,
@@ -165,6 +178,7 @@ struct App {
     taskbar_status: Option<String>,
     weather: Option<weather::WeatherResult>,
     location: weather_location::State,
+    proxy_test: proxy_settings::State,
     update: Option<UpdateStatus>,
     migration_source: Option<Vec<u8>>,
     migration: Option<migration::Report>,
@@ -190,6 +204,7 @@ fn secondary_page() -> usize {
         Some("clock") => 2,
         Some("weather-format") => 11,
         Some("appearance") => 5,
+        Some("proxy") => 13,
         _ => 0,
     }
 }
@@ -251,6 +266,14 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             CloseHandle(mutex);
             return result;
         }
+        // An unchanged enabled preference can outlive a portable directory or
+        // an installer upgrade. Only the primary, normal profile repairs HKCU.
+        let startup_error =
+            if config.start_with_windows && std::env::var_os("LITETRAY_DATA_DIR").is_none() {
+                startup::set_enabled(true).err()
+            } else {
+                None
+            };
         let _ = RoInitialize(RO_INIT_SINGLETHREADED);
         let controls = INITCOMMONCONTROLSEX {
             dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
@@ -342,10 +365,13 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
             calendar: None,
             saved: config.clone(),
             draft: config,
-            status: String::new(),
+            status: startup_error
+                .map(|error| format!("开机启动项未更新：{error}"))
+                .unwrap_or_default(),
             taskbar_status: None,
             weather: None,
             location: Default::default(),
+            proxy_test: Default::default(),
             update: None,
             migration_source: None,
             migration: None,
@@ -927,21 +953,22 @@ impl App {
                     (0, 132),
                     (8, 170),
                     (9, 208),
-                    (1, 290),
-                    (7, 328),
-                    (10, 366),
-                    (2, 404),
-                    (3, 442),
-                    (4, 530),
-                    (11, 568),
-                    (5, 606),
-                    (6, 644),
+                    (1, 278),
+                    (7, 316),
+                    (10, 354),
+                    (2, 392),
+                    (3, 430),
+                    (4, 498),
+                    (12, 536),
+                    (11, 574),
+                    (5, 612),
+                    (6, 650),
                 ] {
                     self.button(PAGES[i], NAV + i as u16, 16, y, 208);
                 }
                 self.label("日常", 28, 108, 170, 22);
-                self.label("任务栏", 28, 260, 170, 22);
-                self.label("应用", 28, 500, 170, 22);
+                self.label("任务栏", 28, 248, 170, 22);
+                self.label("应用", 28, 468, 170, 22);
                 self.label(&revision_label(), 24, height - 90, 165, 50);
                 let heading =
                     self.control("STATIC", "", 901, SS_LEFT as u32, 224, 30, width - 250, 42);
@@ -974,6 +1001,7 @@ impl App {
                 "专注计时、定时提醒与最近提醒记录。",
                 "组合天气属性，决定任务栏里 %weather% 的显示内容。",
                 "看看这台电脑能使用哪些任务栏功能。",
+                "选择 LiteTray 联网时使用的代理，并测试连接。",
             ];
             set_text(self.field(902), descriptions[self.page]);
             let c = self.draft.clone();
@@ -1003,6 +1031,7 @@ impl App {
                     1 => self.clock_settings(&c, width),
                     10 => self.weather_format_settings(&c, width),
                     11 => self.compatibility_settings(width),
+                    12 => self.proxy_settings(&c, width),
                     2 => self.tray_settings(&c, width),
                     3 => self.weather_settings(&c, width),
                     4 => self.general_settings(&c, width),
@@ -1057,7 +1086,7 @@ impl App {
                     SW_SHOWNA
                 },
             );
-            if ((1..8).contains(&self.page) || matches!(self.page, 10 | 11)) && !reused {
+            if ((1..8).contains(&self.page) || matches!(self.page, 10..=12)) && !reused {
                 page::finish(self.page_host);
             }
             self.update_views();
@@ -1125,6 +1154,7 @@ impl App {
                 };
             }
             10 => c.clock.weather_format = self.text(settings::WEATHER_FORMAT),
+            12 => c.proxy = self.collect_proxy()?,
             2 => {
                 c.tray.scope = match self.selected(301) {
                     0 => MonitorScope::All,
@@ -1322,7 +1352,9 @@ impl App {
             self.draft.validate()?;
 
             let old = self.saved.clone();
-            if old.start_with_windows != self.draft.start_with_windows {
+            if self.draft.start_with_windows
+                || old.start_with_windows != self.draft.start_with_windows
+            {
                 startup::set_enabled(self.draft.start_with_windows)?;
             }
             if let Err(error) = config::save(&config::data_dir().join("config.json"), &self.draft) {
@@ -1437,23 +1469,31 @@ impl App {
             if self.weather_busy || !self.saved.weather.enabled {
                 return;
             }
+            let config = self.saved.weather.clone();
+            let proxy = self.saved.proxy.clone();
+            let client = match http::Client::with_proxy(config.timeout_seconds, &proxy) {
+                Ok(client) => client,
+                Err(error) => {
+                    self.set_status(tr(&error));
+                    return;
+                }
+            };
             self.weather_busy = true;
             self.next_weather = Instant::now()
                 + Duration::from_secs(self.saved.weather.refresh_minutes as u64 * 60);
-            let config = self.saved.weather.clone();
             let sender = self.tx.clone();
             let window = self.hwnd as usize;
             let engine = self.engine.clone();
             thread::spawn(move || {
                 let result = engine.lock().unwrap_or_else(|p| p.into_inner()).refresh(
-                    &http::Client::new(config.timeout_seconds),
+                    &client,
                     &credentials::WindowsSecrets,
                     &config,
                     &config::data_dir().join("weather-cache.json"),
                     Utc::now(),
                     force,
                 );
-                let _ = sender.send(Event::Weather(Box::new((config, result))));
+                let _ = sender.send(Event::Weather(Box::new((config, proxy, result))));
                 PostMessageW(window as HWND, WM_RESULT, 0, 0);
             });
         }
@@ -1471,6 +1511,13 @@ impl App {
                 self.set_status(e);
                 return;
             }
+            let client = match http::Client::with_proxy(15, &self.saved.proxy) {
+                Ok(client) => client,
+                Err(error) => {
+                    self.set_status(tr(&error));
+                    return;
+                }
+            };
             self.update_busy = true;
             self.set_status("正在连接 GitHub 检查更新…");
             set_text(self.field(608), "正在检查 GitHub Releases 与 Tags…");
@@ -1478,7 +1525,7 @@ impl App {
             let sender = self.tx.clone();
             let window = self.hwnd as usize;
             thread::spawn(move || {
-                let result = update::check_current(&http::Client::new(15), &config);
+                let result = update::check_current(&client, &config);
                 let _ = sender.send(Event::Update(result));
                 PostMessageW(window as HWND, WM_RESULT, 0, 0);
             });
@@ -1502,6 +1549,9 @@ impl App {
                         }
                     }
                     Event::Location(serial, result) => self.receive_location(serial, result),
+                    Event::ProxyTest(serial, proxy, result) => {
+                        self.receive_proxy_test(serial, proxy, result)
+                    }
                     Event::Holidays(year, result) => {
                         self.holiday_active = None;
                         self.holidays.borrow_mut().apply(year, result);
@@ -1509,10 +1559,11 @@ impl App {
                         self.start_next_holiday();
                     }
                     Event::Weather(response) => {
-                        let (request_config, result) = *response;
+                        let (request_config, request_proxy, result) = *response;
                         self.weather_busy = false;
                         if serde_json::to_value(&request_config).ok()
                             != serde_json::to_value(&self.saved.weather).ok()
+                            || request_proxy != self.saved.proxy
                         {
                             self.start_weather(true);
                             continue;
@@ -1889,6 +1940,9 @@ impl App {
                 return false;
             }
             match id {
+                proxy_settings::TEST if self.page == proxy_settings::PAGE => {
+                    self.start_proxy_test();
+                }
                 settings::HOME_CLOCK_ACTION if self.page == 0 => {
                     let state = self
                         .taskbar
@@ -2558,6 +2612,15 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 }
                 WM_COMMAND => {
                     let id = (w & 0xffff) as u16;
+                    if app.page == proxy_settings::PAGE
+                        && (((w >> 16) as u32 == CBN_SELCHANGE
+                            && matches!(id, proxy_settings::MODE | proxy_settings::PROTOCOL))
+                            || ((w >> 16) as u32 == EN_CHANGE
+                                && matches!(id, proxy_settings::HOST | proxy_settings::PORT)))
+                    {
+                        app.proxy_input_changed();
+                        return Some(0);
+                    }
                     if app.page == 10
                         && (w >> 16) as u32 == CBN_SELCHANGE
                         && matches!(
@@ -2975,6 +3038,7 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                     let icons: [&str; PAGES.len()] = [
                         "\u{e787}", "\u{e823}", "\u{e7f4}", "\u{e753}", "\u{e713}", "\u{e946}",
                         "\u{e8b5}", "\u{e790}", "\u{e8fd}", "\u{e916}", "\u{e753}", "\u{e73e}",
+                        "\u{e774}",
                     ];
                     let icon_font = make_font(s(17), 400, "Segoe MDL2 Assets");
                     design::text(

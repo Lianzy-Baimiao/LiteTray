@@ -19,16 +19,26 @@ impl App {
         if self.holiday_active.is_some() {
             return;
         }
-        let Some(year) = self.holiday_queue.pop_first() else {
+        let Some(year) = self.holiday_queue.first().copied() else {
             return;
         };
+        let client = match http::Client::with_proxy(8, &self.saved.proxy) {
+            Ok(client) => client,
+            Err(error) => {
+                unsafe {
+                    self.set_status(tr(&error));
+                }
+                return;
+            }
+        };
+        self.holiday_queue.pop_first();
         self.holiday_active = Some(year);
         let seed = self.holidays.borrow().seed(year);
         let sender = self.tx.clone();
         let window = self.hwnd as usize;
         let path = config::data_dir().join("holidays");
         thread::spawn(move || {
-            let result = holidays::refresh(&http::Client::new(8), &path, year, seed, Utc::now());
+            let result = holidays::refresh(&client, &path, year, seed, Utc::now());
             let _ = sender.send(Event::Holidays(year, result));
             unsafe {
                 PostMessageW(window as HWND, WM_RESULT, 0, 0);

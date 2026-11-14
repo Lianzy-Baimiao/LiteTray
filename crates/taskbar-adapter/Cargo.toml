@@ -17,6 +17,7 @@ compatibility-lab = ["litetray-adapter-protocol/compatibility-lab"]
 serde_json = "1.0"
 sha2 = "0.10"
 litetray-adapter-protocol = { path = "../adapter-protocol" }
+litetray-event-log = { path = "../event-log" }
 windows-link = "0.2"
 windows-core = "0.62"
 windows-collections = "0.3"

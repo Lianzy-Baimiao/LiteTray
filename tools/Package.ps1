@@ -96,6 +96,9 @@ $documents += @('crates/adapter-protocol/profiles/windows11-22000.318-x64-clock.
 $documents += @('docs/compatibility-child-contracts.md','docs/compatibility-release-5.16.0.md','docs/windows11-arm64-test-environment.md')
 $documents += @('docs/compatibility-release-5.16.1.md')
 $documents += @('crates/adapter-protocol/profiles/windows11-28000.1-x64-notification.json','docs/compatibility-26h1.md')
+$documents += @('docs/startup-weather-5.16.3.md')
+$documents += @('docs/proxy-settings-5.16.4.md')
+$documents += @('docs/diagnostic-responsiveness-5.16.4.md')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null

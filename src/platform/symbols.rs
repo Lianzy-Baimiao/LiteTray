@@ -55,7 +55,7 @@ pub fn prepare(module: &Path, import_cache: Option<&Path>) -> Result<SymbolMap, 
             "https://msdl.microsoft.com/download/symbols/{}/{}/{}",
             identity.pdb_name, identity.pdb_key, identity.pdb_name
         );
-        let bytes = crate::http::Client::new(30).download_symbols(&url)?;
+        let bytes = crate::http::Client::from_saved_settings(30)?.download_symbols(&url)?;
         config::atomic_write(&pdb, &bytes)?;
     }
     unsafe {

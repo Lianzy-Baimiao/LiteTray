@@ -26,6 +26,8 @@
 
 ## 天气来源
 
+“代理设置”提供跟随系统、直接连接、手动代理三种模式。手动代理选择 HTTP / HTTPS / SOCKS5，再分别填写服务器（如 `127.0.0.1`）与端口（如 `7890`），点击“测试连接”检查 Open-Meteo 可达性；点击“保存设置”后用于所有应用联网功能。多数本机代理软件使用 HTTP，天气服务本身是 HTTPS 不代表应选 HTTPS 代理。操作说明见[代理设置](proxy-settings-5.16.4.md)。
+
 | 来源 | 认证 | 数据用途 |
 | --- | --- | --- |
 | Open-Meteo | 常规非商业免费接口无需 Key | 当前预估与三日预报 |
@@ -76,7 +78,7 @@
 
 常用参数：`--settings`、`--calendar`、`--background`、`--clock-preview`、`--diagnose [file]`、`--weather-check [file]`、`--check-updates`、`--preview-windhawk <profile.json> [new-report.json]`。原生开发检查与只读探测参数见 `--help`。
 
-`--show-secondary [calendar|agenda|timers|clock|appearance]` 在副屏显示指定页面，不激活窗口，不改保存的配置。日常打开请使用 `--settings` 或托盘入口。
+`--show-secondary [calendar|agenda|timers|clock|appearance|weather-format|proxy]` 在副屏显示指定页面，不激活窗口，不改保存的配置。日常打开请使用 `--settings` 或托盘入口。
 
 `cargo run --example tray_windows -- 60` 可记录 60 秒实际弹窗的进程、窗口类和几何，不读取窗口内容、不移动鼠标。重定向为 JSONL 后，用 `tools/Test-TrayPopupPlacement.ps1 -ReportPath <file>` 检查副屏悬停观测；没有真实悬停样本返回 INCONCLUSIVE，不能视为通过。
 

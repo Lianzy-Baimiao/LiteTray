@@ -3,7 +3,9 @@
 mod ui;
 
 fn main() {
-    if let Err(error) = run() {
+    let result = run();
+    litetray::event_log::flush(std::time::Duration::from_millis(100));
+    if let Err(error) = result {
         eprintln!("LiteTray: {error}");
         #[cfg(windows)]
         if !std::env::args().any(|a| {
@@ -253,7 +255,7 @@ fn run() -> Result<(), String> {
         }
         Some("--weather-check") => {
             let result = weather::Engine::default().refresh(
-                &http::Client::new(config.weather.timeout_seconds),
+                &http::Client::with_proxy(config.weather.timeout_seconds, &config.proxy)?,
                 &platform::credentials::WindowsSecrets,
                 &config.weather,
                 &config::data_dir().join("weather-cache.json"),
@@ -268,13 +270,16 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         Some("--check-updates") => {
-            let result = update::check_current(&http::Client::new(15), &config.updates)?;
+            let result = update::check_current(
+                &http::Client::with_proxy(15, &config.proxy)?,
+                &config.updates,
+            )?;
             println!("{}", result.text());
             Ok(())
         }
         Some("--help") => {
             println!(
-                "LiteTray [--settings | --calendar | --clock-preview | --background | --show-secondary [calendar|agenda|timers|clock|weather-format|appearance] | --diagnose [file] | --compatibility-report <new-report.json> [--system-root <Windows-directory>] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-app-icon | --self-test-clock | --self-test-shell-source | --self-test-preview-recovery | --test-secondary-clock <report.json> | --test-secondary-tray <report.json> | --test-taskbar-compatibility <new-report.json> [--clock-only] (LIVE primary takeover and restore; isolated test systems only) | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
+                "LiteTray [--settings | --calendar | --clock-preview | --background | --show-secondary [calendar|agenda|timers|clock|weather-format|appearance|proxy] | --diagnose [file] | --compatibility-report <new-report.json> [--system-root <Windows-directory>] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-app-icon | --self-test-clock | --self-test-shell-source | --self-test-preview-recovery | --test-secondary-clock <report.json> | --test-secondary-tray <report.json> | --test-taskbar-compatibility <new-report.json> [--clock-only] (LIVE primary takeover and restore; isolated test systems only) | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
             );
             Ok(())
         }

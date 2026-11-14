@@ -1966,7 +1966,7 @@ fn settings_pages_fit_the_minimum_window_without_outer_scrollbars() {
             SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
         );
         let mut failures = vec![];
-        for page in [1, 2, 3, 4, 5, 6, 7] {
+        for page in [1, 2, 3, 4, 5, 6, 7, 12] {
             app.page = page;
             app.render();
             let mut bounds: RECT = std::mem::zeroed();
@@ -3226,7 +3226,7 @@ fn compatibility_snapshot_for_check() -> compatibility::Snapshot {
     }
 }
 
-unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path) -> App {
+pub(super) unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path) -> App {
     unsafe {
         let _ = RoInitialize(RO_INIT_SINGLETHREADED);
         InitCommonControlsEx(&INITCOMMONCONTROLSEX {
@@ -3342,6 +3342,7 @@ unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path) -> App {
             taskbar_status: None,
             weather: None,
             location: Default::default(),
+            proxy_test: Default::default(),
             update: None,
             migration_source: None,
             migration: None,
@@ -3625,6 +3626,49 @@ fn render_settings_artifacts() {
             }
             SetThreadDpiAwarenessContext(previous_dpi);
         }
+    });
+}
+
+#[test]
+#[ignore = "Renders only the proxy page on a non-input desktop; set LITETRAY_RENDER_DIR"]
+fn render_proxy_settings_artifacts() {
+    on_isolated_desktop(|| unsafe {
+        let output = std::path::PathBuf::from(std::env::var_os("LITETRAY_RENDER_DIR").unwrap());
+        std::fs::create_dir_all(&output).unwrap();
+        let previous_dpi = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        for language in [Language::ZhCn, Language::En] {
+            for dark in [false, true] {
+                let mut app = app_for_check(dark, 120, &output.join("unused-proxy-agenda.json"));
+                app.saved.language = language;
+                app.draft.language = language;
+                app.draft.proxy.mode = config::ProxyMode::Manual;
+                app.saved.proxy = app.draft.proxy.clone();
+                app.page = proxy_settings::PAGE;
+                app.status.clear();
+                app.recreate_resources();
+                SetWindowPos(
+                    app.hwnd,
+                    null_mut(),
+                    0,
+                    0,
+                    app.scale(1060),
+                    app.scale(820),
+                    SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
+                );
+                app.render();
+                write_window(
+                    app.hwnd,
+                    &output.join(format!(
+                        "proxy-{}-{}.bmp",
+                        if language == Language::En { "en" } else { "zh" },
+                        if dark { "dark" } else { "light" }
+                    )),
+                );
+                DestroyWindow(app.hwnd);
+                app.release_resources();
+            }
+        }
+        SetThreadDpiAwarenessContext(previous_dpi);
     });
 }
 

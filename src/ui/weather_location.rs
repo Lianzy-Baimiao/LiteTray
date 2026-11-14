@@ -128,6 +128,14 @@ impl App {
     }
     pub(super) unsafe fn start_location(&mut self, nearby: bool) {
         unsafe {
+            let client = match http::Client::with_proxy(8, &self.saved.proxy) {
+                Ok(client) => client,
+                Err(error) => {
+                    self.location.message = tr(&error).into();
+                    self.sync_location_controls();
+                    return;
+                }
+            };
             self.location.query = self.text(QUERY);
             let pending = match self.location.begin(nearby, &self.draft.weather) {
                 Ok(pending) => pending,
@@ -141,7 +149,6 @@ impl App {
             let sender = self.tx.clone();
             let window = self.hwnd as usize;
             thread::spawn(move || {
-                let client = http::Client::new(8);
                 let result = if nearby {
                     location::nearby(&client).map(|place| vec![place])
                 } else {

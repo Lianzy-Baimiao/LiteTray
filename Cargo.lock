@@ -531,10 +531,11 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
 name = "litetray"
-version = "5.16.2"
+version = "5.16.4"
 dependencies = [
  "chrono",
  "litetray-adapter-protocol",
+ "litetray-event-log",
  "semver",
  "serde",
  "serde_json",
@@ -558,6 +559,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "litetray-event-log"
+version = "0.1.0"
+
+[[package]]
 name = "litetray-popup-hook"
 version = "0.1.0"
 dependencies = [
@@ -571,6 +576,7 @@ name = "litetray-taskbar-adapter"
 version = "0.1.0"
 dependencies = [
  "litetray-adapter-protocol",
+ "litetray-event-log",
  "minhook",
  "serde_json",
  "sha2",
@@ -1150,6 +1156,7 @@ dependencies = [
  "serde_json",
  "ureq-proto",
  "utf8-zero",
+ "winreg",
 ]
 
 [[package]]
@@ -1377,6 +1384,16 @@ name = "winnow"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c3b93199df0ab874cdf0c6a94f0a0dc3423fe41f1cafb62b8bd7b1deb277aef"
+
+[[package]]
+name = "winreg"
+version = "0.56.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
+dependencies = [
+ "cfg-if",
+ "windows-sys",
+]
 
 [[package]]
 name = "winresource"

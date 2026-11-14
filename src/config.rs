@@ -3,6 +3,8 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+mod proxy;
+pub use proxy::{ProxyConfig, ProxyMode, ProxyProtocol};
 
 pub const SCHEMA_VERSION: u32 = 1;
 
@@ -13,6 +15,7 @@ pub struct Config {
     pub clock: ClockConfig,
     pub tray: TrayConfig,
     pub weather: WeatherConfig,
+    pub proxy: ProxyConfig,
     pub updates: UpdateConfig,
     pub appearance: Appearance,
     pub language: crate::i18n::Language,
@@ -26,6 +29,7 @@ impl Default for Config {
             clock: ClockConfig::default(),
             tray: TrayConfig::default(),
             weather: WeatherConfig::default(),
+            proxy: ProxyConfig::default(),
             updates: UpdateConfig::default(),
             appearance: Appearance::System,
             language: crate::i18n::Language::System,
@@ -223,6 +227,7 @@ impl Default for UpdateConfig {
 
 impl Config {
     pub fn validate(&self) -> Result<(), String> {
+        self.proxy.validate()?;
         if self.schema_version != SCHEMA_VERSION {
             return Err(format!(
                 "不支持配置版本 {}；当前支持 {}",

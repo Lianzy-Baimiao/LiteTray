@@ -24,6 +24,7 @@ use windows_sys::Win32::{
     UI::WindowsAndMessaging::*,
 };
 pub const WM_ACTIVATED: u32 = WM_APP + 12;
+const PERIODIC_RPC_MILLIS: u32 = 250;
 #[path = "taskbar_live_checks.rs"]
 mod live_checks;
 pub use live_checks::{
@@ -83,6 +84,9 @@ impl taskbar_service::Session for Connection {
     }
     fn stop(&self) -> Result<(), String> {
         self.stop()
+    }
+    fn restore_step(&self) -> Result<taskbar_service::RestoreProgress, String> {
+        self.restore_step()
     }
     fn restoration_confirmed(&self) -> bool {
         self.restoration_confirmed()
@@ -159,6 +163,7 @@ pub struct Connection {
     busy: Cell<bool>,
     failure: RefCell<Option<String>>,
     restored: Cell<bool>,
+    stop_sent: Cell<bool>,
     notice: Option<String>,
     environment: Option<super::taskbar_environment::Environment>,
 }
@@ -229,6 +234,7 @@ impl Connection {
                 busy: Cell::new(false),
                 failure: RefCell::new(None),
                 restored: Cell::new(false),
+                stop_sent: Cell::new(false),
                 notice: preflight.notice,
                 environment: preflight.environment,
             };
@@ -383,6 +389,9 @@ impl Connection {
         }
     }
     fn command(&self, change: Change) -> Result<(), String> {
+        self.command_with_timeout(change, 1500)
+    }
+    fn command_with_timeout(&self, change: Change, timeout: u32) -> Result<(), String> {
         self.verify_endpoint()?;
         let sequence = self
             .sequence
@@ -407,7 +416,7 @@ impl Connection {
                 self.receiver,
                 COMMAND_TAG,
                 &bytes,
-                1500,
+                timeout,
             )
         }? != 1
         {
@@ -416,9 +425,20 @@ impl Connection {
         Ok(())
     }
     pub fn status(&self) -> Result<SessionStatus, String> {
+        self.status_with_timeout(1000)
+    }
+    fn status_with_timeout(&self, timeout: u32) -> Result<SessionStatus, String> {
         self.verify_endpoint()?;
         let bytes = serde_json::to_vec(&self.context.request.owner).map_err(|e| e.to_string())?;
-        let status = unsafe { send(self.endpoint.get(), self.receiver, STATUS_TAG, &bytes, 1000) }?;
+        let status = unsafe {
+            send(
+                self.endpoint.get(),
+                self.receiver,
+                STATUS_TAG,
+                &bytes,
+                timeout,
+            )
+        }?;
         SessionStatus::from_code(status as i32)
     }
     fn enter(&self) -> Result<Call<'_>, String> {
@@ -447,7 +467,7 @@ impl Connection {
                 },
             }
         };
-        if let Err(error) = self.command(change) {
+        if let Err(error) = self.command_with_timeout(change, PERIODIC_RPC_MILLIS) {
             self.context.active.set(false);
             *self.failure.borrow_mut() = Some(error.clone());
             return Err(error);
@@ -468,6 +488,7 @@ impl Connection {
         }
         self.command(Change::Stop)
             .map_err(|error| format!("发送任务栏停止命令失败：{error}"))?;
+        self.stop_sent.set(true);
         let status = self
             .status()
             .map_err(|error| format!("确认任务栏恢复状态失败：{error}"))?;
@@ -478,6 +499,32 @@ impl Connection {
         }
         self.restored.set(true);
         Ok(())
+    }
+    fn restore_step(&self) -> Result<taskbar_service::RestoreProgress, String> {
+        use taskbar_service::RestoreProgress;
+        let _call = self.enter()?;
+        self.context.active.set(false);
+        self.context.pending.borrow_mut().take();
+        if self.restored.get() || unsafe { WaitForSingleObject(self.process, 0) } == WAIT_OBJECT_0 {
+            self.restored.set(true);
+            return Ok(RestoreProgress::Confirmed);
+        }
+        if !self.stop_sent.get() {
+            self.command_with_timeout(Change::Stop, PERIODIC_RPC_MILLIS)
+                .map_err(|error| format!("发送任务栏停止命令失败：{error}"))?;
+            self.stop_sent.set(true);
+            return Ok(RestoreProgress::Pending);
+        }
+        let status = self
+            .status_with_timeout(PERIODIC_RPC_MILLIS)
+            .map_err(|error| format!("确认任务栏恢复状态失败：{error}"))?;
+        if status != SessionStatus::Closed {
+            return Err(format!(
+                "任务栏尚未确认恢复完成，当前状态为 {status:?}，连接继续保留"
+            ));
+        }
+        self.restored.set(true);
+        Ok(RestoreProgress::Confirmed)
     }
     fn restoration_confirmed(&self) -> bool {
         let Ok(_call) = self.enter() else {
@@ -490,7 +537,7 @@ impl Connection {
         // retained restore obligation. Only the original process exiting or
         // its authenticated session reporting Closed proves completion.
         if unsafe { WaitForSingleObject(self.process, 0) } == WAIT_OBJECT_0
-            || self.status() == Ok(SessionStatus::Closed)
+            || self.status_with_timeout(PERIODIC_RPC_MILLIS) == Ok(SessionStatus::Closed)
         {
             self.context.active.set(false);
             self.context.pending.borrow_mut().take();
@@ -757,6 +804,7 @@ mod restoration_checks {
                         busy: Cell::new(false),
                         failure: RefCell::new(None),
                         restored: Cell::new(false),
+                        stop_sent: Cell::new(false),
                         notice: None,
                         environment: None,
                     }),
@@ -776,6 +824,205 @@ mod restoration_checks {
                 DestroyWindow(self.hwnd);
             }
         }
+    }
+
+    #[test]
+    fn stalled_endpoint_cannot_combine_tick_and_stop_waits_in_one_ui_dispatch() {
+        use std::{
+            sync::{
+                Arc,
+                atomic::{AtomicBool, AtomicUsize, Ordering},
+                mpsc,
+            },
+            time::{Duration, Instant},
+        };
+        struct Control {
+            stall_next_tick: AtomicBool,
+            stops: AtomicUsize,
+            entered: mpsc::Sender<()>,
+        }
+        struct Endpoint {
+            control: Arc<Control>,
+            gate: RefCell<Option<mpsc::Receiver<()>>>,
+            closed: Cell<bool>,
+        }
+        unsafe extern "system" fn procedure(
+            hwnd: HWND,
+            message: u32,
+            w: WPARAM,
+            l: LPARAM,
+        ) -> LRESULT {
+            unsafe {
+                if message == WM_CLOSE {
+                    DestroyWindow(hwnd);
+                    PostQuitMessage(0);
+                    return 0;
+                }
+                let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Endpoint;
+                if message == WM_COPYDATA
+                    && let Some(state) = state.as_ref()
+                {
+                    let copy = &*(l as *const COPYDATASTRUCT);
+                    if copy.dwData == STATUS_TAG {
+                        return if state.closed.get() {
+                            SessionStatus::Closed as LRESULT
+                        } else {
+                            SessionStatus::Active as LRESULT
+                        };
+                    }
+                    if copy.dwData == COMMAND_TAG {
+                        let bytes =
+                            std::slice::from_raw_parts(copy.lpData.cast(), copy.cbData as usize);
+                        let Ok(command) = Command::decode(bytes) else {
+                            return 0;
+                        };
+                        match command.change {
+                            Change::Stop => {
+                                state.control.stops.fetch_add(1, Ordering::Relaxed);
+                                state.closed.set(true);
+                            }
+                            Change::Tick { .. } | Change::Update { .. } | Change::Heartbeat
+                                if state.control.stall_next_tick.swap(false, Ordering::Relaxed) =>
+                            {
+                                let gate = state.gate.borrow_mut().take();
+                                let _ = state.control.entered.send(());
+                                if let Some(gate) = gate {
+                                    let _ = gate.recv_timeout(Duration::from_secs(5));
+                                }
+                            }
+                            _ => {}
+                        }
+                        return 1;
+                    }
+                }
+                DefWindowProcW(hwnd, message, w, l)
+            }
+        }
+        struct Backend(RefCell<Option<Connection>>);
+        impl taskbar_service::Backend for Backend {
+            type Prepared = ();
+            type Session = Connection;
+            fn prepare(&self, _: &Config) -> mpsc::Receiver<Result<(), String>> {
+                let (tx, rx) = mpsc::channel();
+                let _ = tx.send(Ok(()));
+                rx
+            }
+            fn connect(
+                &self,
+                _: (),
+                frame: &Frame,
+            ) -> Result<Connection, ConnectFailure<Connection>> {
+                let connection = self.0.borrow_mut().take().unwrap();
+                match connection.start(frame.clone()) {
+                    Ok(()) => Ok(connection),
+                    Err(error) => Err(ConnectFailure {
+                        error,
+                        pending: Some(connection),
+                    }),
+                }
+            }
+        }
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let control = Arc::new(Control {
+            stall_next_tick: AtomicBool::new(false),
+            stops: AtomicUsize::new(0),
+            entered: entered_tx,
+        });
+        let thread_control = control.clone();
+        let endpoint_thread = std::thread::spawn(move || unsafe {
+            let tid = GetCurrentThreadId();
+            let class = wide(&format!("LiteTray.ClockWatchdog.v1.{tid}.StalledTest"));
+            let instance = GetModuleHandleW(null());
+            assert_ne!(
+                RegisterClassW(&WNDCLASSW {
+                    lpfnWndProc: Some(procedure),
+                    hInstance: instance,
+                    lpszClassName: class.as_ptr(),
+                    ..std::mem::zeroed()
+                }),
+                0
+            );
+            let hwnd = CreateWindowExW(
+                0,
+                class.as_ptr(),
+                null(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                HWND_MESSAGE,
+                null_mut(),
+                instance,
+                null(),
+            );
+            assert!(!hwnd.is_null());
+            let state = Box::new(Endpoint {
+                control: thread_control,
+                gate: RefCell::new(Some(release_rx)),
+                closed: Cell::new(false),
+            });
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, &*state as *const Endpoint as isize);
+            ready_tx.send((hwnd as usize, tid)).unwrap();
+            let mut message = std::mem::zeroed();
+            while GetMessageW(&mut message, null_mut(), 0, 0) > 0 {
+                DispatchMessageW(&message);
+            }
+            UnregisterClassW(class.as_ptr(), instance);
+        });
+        let (endpoint, tid) = ready_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let mut fixture = Fixture::new();
+        let mut connection = fixture.connection.take().unwrap();
+        connection.endpoint.set(endpoint as HWND);
+        Rc::get_mut(&mut connection.context).unwrap().tid = tid;
+        let mut config = Config::default();
+        config.tray.clock_enabled = true;
+        let service =
+            taskbar_service::Service::new(Backend(RefCell::new(Some(connection))), config, 0)
+                .unwrap();
+        let wall_time = chrono::Local::now();
+        service.tick(0, wall_time).unwrap();
+        service.tick(1, wall_time).unwrap();
+        assert_eq!(service.snapshot().status, taskbar_service::Status::Running);
+        control.stall_next_tick.store(true, Ordering::Relaxed);
+        let started = Instant::now();
+        service.tick(20, wall_time).unwrap();
+        let elapsed = started.elapsed();
+        let entered = entered_rx.try_recv().is_ok();
+        let phase_after_fault = service.snapshot().status;
+        let _ = release_tx.send(());
+        service.tick(40, wall_time).unwrap();
+        let phase_after_stop_ack = service.snapshot().status;
+        service.tick(41, wall_time).unwrap();
+        let phase_after_confirmation = service.snapshot().status;
+        let periodic_stops = control.stops.load(Ordering::Relaxed);
+        let stopped = service.stop(1000);
+        drop(service);
+        drop(fixture);
+        unsafe { PostMessageW(endpoint as HWND, WM_CLOSE, 0, 0) };
+        endpoint_thread.join().unwrap();
+        stopped.unwrap();
+        assert!(
+            entered,
+            "the real cross-thread WM_COPYDATA endpoint must stall"
+        );
+        assert_eq!(phase_after_fault, taskbar_service::Status::Restoring);
+        assert_eq!(phase_after_stop_ack, taskbar_service::Status::Restoring);
+        assert_eq!(phase_after_confirmation, taskbar_service::Status::Waiting);
+        assert_eq!(
+            periodic_stops, 1,
+            "the acknowledged Stop must not be repeated for its confirmation"
+        );
+        eprintln!(
+            "stalled periodic dispatch: {:.1}ms",
+            elapsed.as_secs_f64() * 1000.0
+        );
+        assert!(
+            elapsed < Duration::from_millis(600),
+            "one periodic UI dispatch waited {elapsed:?}; a failed Tick must yield before a bounded restoration step"
+        );
     }
     #[test]
     fn blocked_transport_requires_closed_and_cached_confirmation_never_writes_stop() {
@@ -828,6 +1075,49 @@ mod restoration_checks {
             fixture.state.commands.get(),
             2,
             "Drop preserves the confirmation"
+        );
+    }
+    #[test]
+    fn periodic_restore_ack_and_confirmation_are_separate_and_keep_the_lease() {
+        use taskbar_service::RestoreProgress;
+        let mut fixture = Fixture::new();
+        fixture
+            .state
+            .status
+            .set(SessionStatus::Restoring as LRESULT);
+        assert_eq!(
+            fixture.connection().restore_step(),
+            Ok(RestoreProgress::Pending)
+        );
+        assert_eq!(fixture.state.commands.get(), 1);
+        assert_eq!(
+            fixture.state.queries.get(),
+            0,
+            "Stop must yield before querying"
+        );
+        assert!(
+            !fixture.connection().restored.get(),
+            "an acknowledged command is not restoration proof"
+        );
+        assert!(fixture.connection().restore_step().is_err());
+        assert_eq!(
+            fixture.state.commands.get(),
+            1,
+            "confirmation must not repeat Stop"
+        );
+        assert_eq!(fixture.state.queries.get(), 1);
+        fixture.state.status.set(SessionStatus::Closed as LRESULT);
+        assert_eq!(
+            fixture.connection().restore_step(),
+            Ok(RestoreProgress::Confirmed)
+        );
+        assert!(fixture.connection().restored.get());
+        assert_eq!(fixture.state.queries.get(), 2);
+        fixture.connection.take();
+        assert_eq!(
+            fixture.state.commands.get(),
+            1,
+            "Drop preserves terminal confirmation"
         );
     }
     #[test]
@@ -1002,6 +1292,7 @@ mod activation_checks {
                 busy: Cell::new(false),
                 failure: RefCell::new(None),
                 restored: Cell::new(false),
+                stop_sent: Cell::new(false),
                 environment: None,
                 notice: None,
             };

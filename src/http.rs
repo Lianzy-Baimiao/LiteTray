@@ -65,8 +65,46 @@ impl Client {
         Err("Microsoft 符号服务器重定向过多".into())
     }
     pub fn new(timeout_seconds: u64) -> Self {
+        Self::build(timeout_seconds, ureq::Proxy::try_from_env())
+    }
+
+    pub fn with_proxy(
+        timeout_seconds: u64,
+        config: &crate::config::ProxyConfig,
+    ) -> Result<Self, String> {
+        use crate::config::{ProxyMode, ProxyProtocol};
+        config.validate()?;
+        let proxy = match config.mode {
+            ProxyMode::System => ureq::Proxy::try_from_env(),
+            ProxyMode::Direct => None,
+            ProxyMode::Manual => {
+                let protocol = match config.protocol {
+                    ProxyProtocol::Http => ureq::ProxyProtocol::Http,
+                    ProxyProtocol::Https => ureq::ProxyProtocol::Https,
+                    ProxyProtocol::Socks5 => ureq::ProxyProtocol::Socks5,
+                };
+                Some(
+                    ureq::Proxy::builder(protocol)
+                        .host(&config.canonical_host()?)
+                        .port(config.port)
+                        .resolve_target(false)
+                        .build()
+                        .map_err(|_| "代理地址无效，请检查服务器与端口".to_string())?,
+                )
+            }
+        };
+        Ok(Self::build(timeout_seconds, proxy))
+    }
+
+    pub fn from_saved_settings(timeout_seconds: u64) -> Result<Self, String> {
+        let config = crate::config::load(&crate::config::data_dir().join("config.json"))?;
+        Self::with_proxy(timeout_seconds, &config.proxy)
+    }
+
+    fn build(timeout_seconds: u64, proxy: Option<ureq::Proxy>) -> Self {
         use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
         let config = ureq::Agent::config_builder()
+            .proxy(proxy)
             .https_only(true)
             .http_status_as_error(false)
             .timeout_global(Some(Duration::from_secs(timeout_seconds)))
@@ -133,5 +171,75 @@ impl JsonHttp for Client {
             value,
             etag,
         })
+    }
+}
+
+#[cfg(all(test, windows))]
+#[path = "../tests/support/windows_registry.rs"]
+mod registry_test_support;
+
+#[cfg(all(test, windows))]
+#[path = "http/proxy_checks.rs"]
+mod proxy_checks;
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::registry_test_support as registry;
+    use super::*;
+
+    #[test]
+    fn windows_system_proxy_carries_the_actual_https_request() {
+        registry::in_child(|| {
+            use std::{
+                io::{BufRead, BufReader, Write},
+                net::TcpListener,
+                thread,
+                time::Instant,
+            };
+            let registry = registry::CurrentUser::new();
+            for name in ["ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"] {
+                // This test is already in its dedicated child process.
+                unsafe {
+                    std::env::remove_var(name);
+                }
+            }
+            let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = proxy.local_addr().unwrap().to_string();
+            let settings = "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+            registry.write(
+                settings,
+                "ProxyEnable",
+                windows_sys::Win32::System::Registry::REG_DWORD,
+                &1_u32.to_le_bytes(),
+            );
+            registry.write_string(settings, "ProxyServer", &address);
+            assert_eq!(registry.string(settings, "ProxyServer"), Some(address));
+
+            proxy.set_nonblocking(true).unwrap();
+            let server = thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while Instant::now() < deadline {
+                    if let Ok((mut stream, _)) = proxy.accept() {
+                        stream.set_nonblocking(false).unwrap();
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(1)))
+                            .unwrap();
+                        let mut request = String::new();
+                        BufReader::new(&mut stream).read_line(&mut request).unwrap();
+                        stream.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                        return request;
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+                String::new()
+            });
+            let result = Client::new(1).get("https://litetray-weather-probe.invalid/current", &[]);
+            let request = server.join().unwrap();
+            assert!(result.is_err());
+            assert!(
+                request.starts_with("CONNECT litetray-weather-probe.invalid:443 "),
+                "the HTTPS request bypassed the enabled Windows proxy: {request:?}"
+            );
+        });
     }
 }

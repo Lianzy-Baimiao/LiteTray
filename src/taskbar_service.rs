@@ -14,6 +14,12 @@ use std::{
 
 const RESTORATION_CHECK_MILLIS: u64 = 5000;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestoreProgress {
+    Pending,
+    Confirmed,
+}
+
 pub trait Session {
     /// A live capability limitation, e.g. clock running while tray is pending.
     fn notice(&self) -> Option<&str> {
@@ -25,6 +31,11 @@ pub trait Session {
     fn environment_matches(&self) -> bool;
     /// Success proves restoration, or that the retained native process exited.
     fn stop(&self) -> Result<(), String>;
+    /// One bounded periodic step. A native transport can acknowledge Stop and
+    /// defer its read-only confirmation to the next UI dispatch.
+    fn restore_step(&self) -> Result<RestoreProgress, String> {
+        self.stop().map(|()| RestoreProgress::Confirmed)
+    }
     /// Read-only proof that a previously blocked restoration has completed.
     /// Unknown, busy and missing endpoints must remain unconfirmed.
     fn restoration_confirmed(&self) -> bool {
@@ -320,11 +331,16 @@ impl<B: Backend> Driver<B> {
     fn stop(&mut self, now: u64) -> Result<(), String> {
         self.enabled = false;
         self.restart(now, "正在停止任务栏时钟");
-        self.restore(now)
+        self.restore(now, false)
     }
-    fn restore(&mut self, now: u64) -> Result<(), String> {
+    fn restore(&mut self, now: u64, periodic: bool) -> Result<(), String> {
         if let Some(connection) = &self.connection {
-            if let Err(error) = connection.stop() {
+            let result = if periodic {
+                connection.restore_step()
+            } else {
+                connection.stop().map(|()| RestoreProgress::Confirmed)
+            };
+            if let Err(error) = result {
                 crate::event_log::record("restore failed", &error);
                 self.recovery.restore_failed(&error);
                 if self.recovery.phase() == Phase::RestoreBlocked {
@@ -333,7 +349,9 @@ impl<B: Backend> Driver<B> {
                 }
                 return Err(error);
             }
-            self.finish_restoration(now);
+            if result == Ok(RestoreProgress::Confirmed) {
+                self.finish_restoration(now);
+            }
         }
         Ok(())
     }
@@ -372,12 +390,15 @@ impl<B: Backend> Driver<B> {
                 Ok(()) => self.recovery.healthy(now),
                 Err(error) => {
                     crate::event_log::record("session fault", &error);
-                    self.recovery.fault(&error)
+                    self.recovery.fault(&error);
+                    // The failed native call already spent this dispatch's
+                    // wait budget. Yield to input/quit before sending Stop.
+                    return;
                 }
             }
         }
         if self.recovery.phase() == Phase::Restoring {
-            let _ = self.restore(now);
+            let _ = self.restore(now, true);
         }
         self.observe_blocked_restoration(now);
         let completed = self
@@ -417,7 +438,8 @@ impl<B: Backend> Driver<B> {
                             crate::event_log::record("start failed", &failure.error);
                             self.recovery.connected(now);
                             self.recovery.fault(&failure.error);
-                            let _ = self.restore(now);
+                            // Start may have executed. Retain its restoration
+                            // obligation, then yield before the next RPC.
                         } else {
                             crate::event_log::record("connect failed", &failure.error);
                             self.recovery.connect_failed(now, &failure.error);
@@ -557,6 +579,126 @@ mod tests {
         complete(native, Ok(()));
         service.tick(1, time(0)).unwrap();
         assert_eq!(service.snapshot().status, Status::Running);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_timer_recovery_keeps_messages_responsive_when_log_io_stalls() {
+        use std::{sync::Arc, time::Duration};
+        use windows_sys::Win32::{
+            Foundation::*,
+            System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
+            UI::WindowsAndMessaging::*,
+        };
+        const PROBE: u32 = WM_APP + 77;
+        struct WindowState {
+            service: Service<Fake>,
+            result: Sender<Snapshot>,
+        }
+        unsafe extern "system" fn procedure(
+            hwnd: HWND,
+            message: u32,
+            w: WPARAM,
+            l: LPARAM,
+        ) -> LRESULT {
+            unsafe {
+                let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const WindowState;
+                if let Some(state) = state.as_ref() {
+                    if message == WM_TIMER && w == 1 {
+                        // This is the same service call made by ui::window_proc.
+                        let _ = state.service.tick(20, time(1));
+                        return 0;
+                    }
+                    if message == PROBE {
+                        let _ = state.result.send(state.service.snapshot());
+                        PostQuitMessage(0);
+                        return 0;
+                    }
+                }
+                DefWindowProcW(hwnd, message, w, l)
+            }
+        }
+
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let ui = std::thread::spawn(move || {
+            let mut gate = Some(release_rx);
+            let log = Arc::new(
+                litetray_event_log::Log::new(4, move |_| {
+                    if let Some(gate) = gate.take() {
+                        let _ = entered_tx.send(());
+                        let _ = gate.recv_timeout(Duration::from_secs(3));
+                    }
+                })
+                .unwrap(),
+            );
+            let (service, native, _) = fixture();
+            connect(&service, &native);
+            native.fail_update.set(true);
+            let state = Box::new(WindowState {
+                service,
+                result: result_tx,
+            });
+            unsafe {
+                let class: Vec<u16> =
+                    format!("LiteTray.SlowLog.TimerTest.{}", GetCurrentThreadId())
+                        .encode_utf16()
+                        .chain(Some(0))
+                        .collect();
+                let instance = GetModuleHandleW(std::ptr::null());
+                assert_ne!(
+                    RegisterClassW(&WNDCLASSW {
+                        lpfnWndProc: Some(procedure),
+                        hInstance: instance,
+                        lpszClassName: class.as_ptr(),
+                        ..std::mem::zeroed()
+                    }),
+                    0
+                );
+                let hwnd = CreateWindowExW(
+                    0,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    HWND_MESSAGE,
+                    std::ptr::null_mut(),
+                    instance,
+                    std::ptr::null(),
+                );
+                assert!(!hwnd.is_null());
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, &*state as *const WindowState as isize);
+                crate::event_log::testing::with_log(log, || {
+                    assert_ne!(PostMessageW(hwnd, WM_TIMER, 1, 0), 0);
+                    assert_ne!(PostMessageW(hwnd, PROBE, 0, 0), 0);
+                    let mut message = std::mem::zeroed();
+                    while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
+                        DispatchMessageW(&message);
+                    }
+                });
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                DestroyWindow(hwnd);
+                UnregisterClassW(class.as_ptr(), instance);
+            }
+        });
+        let sink_entered = entered_rx.recv_timeout(Duration::from_secs(3)).is_ok();
+        let response = result_rx.recv_timeout(Duration::from_millis(250));
+        // Always release the fake I/O and join before asserting a failure.
+        let _ = release_tx.send(());
+        ui.join().unwrap();
+        assert!(
+            sink_entered,
+            "the real session-fault logger must reach the slow sink"
+        );
+        assert!(
+            response.is_ok(),
+            "the WM_TIMER session-fault/recovery path blocked the next UI message for >250ms while diagnostic I/O waited"
+        );
+        assert_eq!(response.unwrap().status, Status::Restoring);
     }
     #[test]
     fn running_session_exposes_partial_capabilities_without_restarting_or_changing_preferences() {
