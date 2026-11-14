@@ -201,22 +201,37 @@ impl ModelLease {
         Ok(lease)
     }
     pub(crate) fn start(&mut self) -> Result<(), String> {
+        self.start_with_rollback(|| {})
+    }
+    /// The session must suspend its interaction before a failed write restores
+    /// native properties, whose setters can synchronously enter shell callbacks.
+    pub(crate) fn start_with_rollback(
+        &mut self,
+        before_restore: impl FnOnce(),
+    ) -> Result<(), String> {
         if self.state != State::Prepared {
             return Err("托盘模型会话已启动或已关闭".into());
         }
-        self.update(true)?;
+        self.update(true, before_restore)?;
         self.state = State::Active;
         Ok(())
     }
     pub(crate) fn refresh(&mut self) -> Result<(), String> {
+        self.refresh_with_rollback(|| {})
+    }
+    pub(crate) fn refresh_with_rollback(
+        &mut self,
+        before_restore: impl FnOnce(),
+    ) -> Result<(), String> {
         if self.state != State::Active {
             return Err("托盘模型会话不再接受更新".into());
         }
-        self.update(false)
+        self.update(false, before_restore)
     }
-    fn update(&mut self, initial: bool) -> Result<(), String> {
+    fn update(&mut self, initial: bool, before_restore: impl FnOnce()) -> Result<(), String> {
         let result = self.write(initial);
         if let Err(error) = result {
+            before_restore();
             return match self.stop() {
                 Ok(()) => Err(error),
                 Err(restore) => Err(format!("{error}；托盘恢复未完成：{restore}")),

@@ -86,6 +86,15 @@ impl Session {
         if self.state != State::Prepared || self.interaction.is_some() {
             return Err("托盘交互只能准备一次".into());
         }
+        let weak = Rc::downgrade(&runtime);
+        let before_restore: Rc<dyn Fn()> = Rc::new(move || {
+            if let Some(runtime) = weak.upgrade() {
+                runtime.deactivate();
+            }
+        });
+        for target in &mut self.targets {
+            target.clock.set_restore_callback(before_restore.clone());
+        }
         self.interaction = Some(runtime);
         Ok(())
     }
@@ -288,7 +297,11 @@ impl Session {
             interaction.start()?;
         }
         if let Some(tray) = &mut self.tray
-            && let Err(error) = tray.start()
+            && let Err(error) = tray.start_with_rollback(|| {
+                if let Some(interaction) = &self.interaction {
+                    interaction.deactivate();
+                }
+            })
         {
             return match self.stop() {
                 Ok(()) => Err(error),
@@ -413,7 +426,11 @@ impl Session {
             for (_, input) in &self.inputs {
                 input.suspend();
             }
-            if let Err(error) = tray.refresh() {
+            if let Err(error) = tray.refresh_with_rollback(|| {
+                if let Some(interaction) = &self.interaction {
+                    interaction.deactivate();
+                }
+            }) {
                 return match self.stop() {
                     Ok(()) => Err(error),
                     Err(restore) => Err(format!("{error}；{restore}")),

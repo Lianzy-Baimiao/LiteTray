@@ -5,7 +5,7 @@ use crate::{
     xaml::{Object, StringHandle, check, factory},
     xaml_abi::*,
 };
-use std::{borrow::Cow, ptr::null_mut};
+use std::{borrow::Cow, ptr::null_mut, rc::Rc};
 use windows_sys::core::IID_IUnknown;
 #[path = "combined_clock_checks.rs"]
 mod combined_checks;
@@ -78,6 +78,7 @@ pub(crate) struct ClockLease {
     native_date: Option<Object>,
     compact_two_lines: bool,
     combined: bool,
+    before_restore: Option<Rc<dyn Fn()>>,
 }
 impl ClockLease {
     pub(crate) fn capture_native(
@@ -163,11 +164,17 @@ impl ClockLease {
                 native_date: None,
                 compact_two_lines: false,
                 combined: rows.len() == 1,
+                before_restore: None,
             })
         }
     }
     fn row_count(&self) -> usize {
         if self.combined { 1 } else { 2 }
+    }
+    /// Session installs this while prepared. Nested write failures can restore
+    /// this lease before returning to Session, so they need the same callback.
+    pub(crate) fn set_restore_callback(&mut self, callback: Rc<dyn Fn()>) {
+        self.before_restore = Some(callback);
     }
     pub(crate) fn with_tooltip_targets(
         mut self,
@@ -372,6 +379,9 @@ impl ClockLease {
         }
     }
     pub fn restore(&mut self) -> Result<(), String> {
+        if let Some(before_restore) = &self.before_restore {
+            before_restore();
+        }
         let mut errors = Vec::new();
         if let Some(layers) = &mut self.native_text {
             for layer in layers {
