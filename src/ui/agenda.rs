@@ -157,8 +157,9 @@ pub(super) unsafe fn create(
         if hwnd.is_null() {
             return hwnd;
         }
-        let dpi = GetDpiForWindow(hwnd).max(96);
-        let scale = |n| n * dpi as i32 / 96;
+        let device_dpi = GetDpiForWindow(hwnd).max(96);
+        let dpi = interface::layout_dpi(device_dpi);
+        let scale = |n| interface::text_pixels(n, device_dpi);
         let face = design::font_face();
         let t = design::Theme::new(dark);
         let error = store.borrow().error.clone().unwrap_or_default();
@@ -172,7 +173,7 @@ pub(super) unsafe fn create(
             fonts: [
                 make_font(scale(14), 400, &face),
                 make_font(scale(12), 400, &face),
-                make_font(scale(48), 500, "Segoe UI"),
+                make_font(scale(48), 500, &face),
             ],
             dpi,
             timer_mode: timers,
@@ -455,6 +456,15 @@ impl View {
             }
             if class == "EDIT" {
                 widgets::style_edit(hwnd, self.dark, self.dpi);
+                widgets::center_edit(hwnd);
+            }
+            if class == "STATIC" {
+                SetPropW(hwnd, wide("LiteTray.Surface").as_ptr(), 1usize as HANDLE);
+                widgets::style_static(hwnd);
+            } else if class == "LISTBOX"
+                || class == "BUTTON" && style & 0xf == BS_AUTOCHECKBOX as u32
+            {
+                widgets::glass_control(hwnd);
             }
             self.children.push(hwnd);
             if id != 0 {
@@ -582,7 +592,7 @@ impl View {
             let w = width - x - 24;
             let half = (w - 16) / 2;
             let heading = self.control("STATIC", "新建日程", 4023, 0, x, 94, w, 26);
-            widgets::heading(heading, self.dpi);
+            widgets::heading(heading, GetDpiForWindow(heading).max(96));
             let title = self.control(
                 "EDIT",
                 "",
@@ -919,7 +929,7 @@ impl View {
     unsafe fn heading(&mut self, text: &str, x: i32, y: i32, width: i32) {
         unsafe {
             let hwnd = self.control("STATIC", text, 0, 0, x, y, width, 26);
-            widgets::heading(hwnd, self.dpi);
+            widgets::heading(hwnd, GetDpiForWindow(hwnd).max(96));
         }
     }
     unsafe fn note(&mut self, text: &str, x: i32, y: i32, width: i32, height: i32) {
@@ -1530,6 +1540,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                     let t = design::Theme::new(view.dark);
                     let mut r: RECT = std::mem::zeroed();
                     GetClientRect(hwnd, &mut r);
+                    let buffer = design::PaintBuffer::for_window(dc, r, hwnd);
+                    let dc = buffer.as_ref().map_or(dc, |buffer| buffer.dc);
                     design::fill(dc, r, t.surface);
                     page::paint_fields(hwnd, dc, t);
                 }

@@ -437,14 +437,13 @@ fn features(modules: &[ModuleReport]) -> Vec<FeatureReport> {
                 .collect(),
             baseline_limitations: match feature {
                 Feature::ClockAppearance => vec![],
-                Feature::ClockInput => vec!["notification_click_crash_report_unresolved"],
+                Feature::ClockInput => vec![],
                 Feature::TrayMirroring => {
                     vec!["third_party_hover_popups_require_separate_validation"]
                 }
-                Feature::SystemAreas => vec![
-                    "system_icon_and_cross_monitor_menu_validation_incomplete",
-                    "notification_click_crash_report_unresolved",
-                ],
+                Feature::SystemAreas => {
+                    vec!["system_icon_and_cross_monitor_menu_validation_incomplete"]
+                }
             },
         }
     })

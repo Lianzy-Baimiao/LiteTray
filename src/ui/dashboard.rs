@@ -186,6 +186,7 @@ pub(super) unsafe fn refresh_theme(hwnd: HWND, dark: bool) {
             v.factor = 0.;
             refresh_agenda(&mut v);
         }
+        quick_agenda::invalidate_resources(GetDlgItem(hwnd, quick_agenda::ID as i32));
         layout(hwnd);
         RedrawWindow(hwnd, null(), null_mut(), RDW_INVALIDATE | RDW_ALLCHILDREN);
     }
@@ -592,7 +593,7 @@ unsafe fn layout(hwnd: HWND) {
                 make_font(s(14), 400, &face),
                 make_font(s(12), 400, &face),
                 make_font(s(19), 600, &face),
-                make_font(s(44), 400, "Segoe UI"),
+                make_font(s(44), 400, &face),
                 make_font(s(20), 400, "Segoe MDL2 Assets"),
             ];
         }
@@ -1142,43 +1143,16 @@ fn observance_suffix(term: Option<&str>, festivals: &[&str], separator: &str) ->
     }
     result
 }
+/// Liquid glass has no inner card under the weather column: the weather
+/// shares the calendar's sheet, so no block covers the backdrop.
+fn weather_card(t: Theme) -> bool {
+    t.high_contrast || interface::style() != config::InterfaceStyle::LiquidGlass
+}
 unsafe fn draw_button_buffered(v: &View, item: &DRAWITEMSTRUCT) {
     unsafe {
-        let width = item.rcItem.right - item.rcItem.left;
-        let height = item.rcItem.bottom - item.rcItem.top;
-        let dc = CreateCompatibleDC(item.hDC);
-        let bitmap = CreateCompatibleBitmap(item.hDC, width.max(1), height.max(1));
-        if dc.is_null() || bitmap.is_null() {
-            if !dc.is_null() {
-                DeleteDC(dc);
-            }
-            if !bitmap.is_null() {
-                DeleteObject(bitmap);
-            }
-            draw_button(v, item);
-            return;
-        }
-        let old = SelectObject(dc, bitmap);
-        let buffered = DRAWITEMSTRUCT {
-            hDC: dc,
-            rcItem: rect(0, 0, width, height),
-            ..*item
-        };
+        let (buffer, buffered) = design::PaintBuffer::item(item);
         draw_button(v, &buffered);
-        BitBlt(
-            item.hDC,
-            item.rcItem.left,
-            item.rcItem.top,
-            width,
-            height,
-            dc,
-            0,
-            0,
-            SRCCOPY,
-        );
-        SelectObject(dc, old);
-        DeleteObject(bitmap);
-        DeleteDC(dc);
+        drop(buffer);
     }
 }
 unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
@@ -1190,8 +1164,9 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
             let selected = id <= forecast::DAILY && v.forecast.selected(id);
             let hovered = !item.hwndItem.is_null()
                 && !GetPropW(item.hwndItem, wide("LiteTray.Hover").as_ptr()).is_null();
-            let background = if selected || hovered { t.tint } else { t.field };
-            fill(item.hDC, item.rcItem, t.field);
+            let ground = if weather_card(t) { t.field } else { t.surface };
+            let background = if selected || hovered { t.tint } else { ground };
+            fill(item.hDC, item.rcItem, ground);
             rounded(item.hDC, item.rcItem, background, background, s(7));
             if id >= forecast::PREVIOUS {
                 icons::draw(
@@ -1408,15 +1383,18 @@ unsafe fn draw_button(v: &View, item: &DRAWITEMSTRUCT) {
                 );
             }
             if v.markers.get(index) == Some(&true) {
-                fill(
+                let dot = if selected { t.on_accent } else { t.accent };
+                rounded(
                     item.hDC,
                     rect(
-                        item.rcItem.left + s(3),
+                        item.rcItem.left + s(4),
                         item.rcItem.top + s(5),
-                        s(3).max(1),
-                        s(3).max(1),
+                        s(4).max(2),
+                        s(4).max(2),
                     ),
-                    if selected { t.on_accent } else { t.accent },
+                    dot,
+                    dot,
+                    s(4),
                 );
             }
         }
@@ -1428,14 +1406,9 @@ unsafe fn paint(hwnd: HWND, v: &View) {
         let dc = BeginPaint(hwnd, &mut ps);
         let mut client: RECT = std::mem::zeroed();
         GetClientRect(hwnd, &mut client);
-        let mem = CreateCompatibleDC(dc);
-        let bitmap = CreateCompatibleBitmap(dc, client.right.max(1), client.bottom.max(1));
-        let old = SelectObject(mem, bitmap);
-        render(mem, client, v);
-        BitBlt(dc, 0, 0, client.right, client.bottom, mem, 0, 0, SRCCOPY);
-        SelectObject(mem, old);
-        DeleteObject(bitmap);
-        DeleteDC(mem);
+        let buffer = design::PaintBuffer::for_window(dc, client, hwnd);
+        render(buffer.as_ref().map_or(dc, |buffer| buffer.dc), client, v);
+        drop(buffer);
         EndPaint(hwnd, &ps);
     }
 }
@@ -1553,7 +1526,9 @@ unsafe fn render(dc: HDC, client: RECT, v: &View) {
                 t.muted
             },
         );
-        rounded(dc, r(380, 88, 320, 390), t.field, t.border, s(12));
+        if weather_card(t) {
+            design::card(dc, r(380, 88, 320, 390), t.field, t.border, s(12));
+        }
         tx(&v.city, 400, 106, 276, 28, 0, t.text);
         let status;
         if v.enabled

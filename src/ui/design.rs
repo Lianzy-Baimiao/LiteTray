@@ -7,6 +7,9 @@ pub(super) struct Theme {
     pub bg: u32,
     pub surface: u32,
     pub field: u32,
+    pub control: u32,
+    pub control_border: u32,
+    pub selection: u32,
     pub text: u32,
     pub muted: u32,
     pub border: u32,
@@ -15,25 +18,29 @@ pub(super) struct Theme {
     pub on_accent: u32,
     pub high_contrast: bool,
 }
-thread_local! { static THEMES: Cell<[Option<Theme>; 2]> = const { Cell::new([None, None]) }; }
+thread_local! { static THEMES: Cell<[Option<Theme>; 6]> = const { Cell::new([None; 6]) }; }
 pub(super) fn invalidate_theme() {
-    THEMES.with(|cache| cache.set([None, None]));
+    THEMES.with(|cache| cache.set([None; 6]));
     typography::invalidate();
 }
 impl Theme {
     pub fn new(dark: bool) -> Self {
+        Self::for_style(dark, interface::style())
+    }
+    pub fn for_style(dark: bool, style: config::InterfaceStyle) -> Self {
+        let index = usize::from(dark) * 3 + style as usize;
         THEMES.with(|cache| {
             let mut values = cache.get();
-            if let Some(theme) = values[dark as usize] {
+            if let Some(theme) = values[index] {
                 return theme;
             }
-            let theme = Self::read(dark);
-            values[dark as usize] = Some(theme);
+            let theme = Self::read(dark, style);
+            values[index] = Some(theme);
             cache.set(values);
             theme
         })
     }
-    fn read(dark: bool) -> Self {
+    fn read(dark: bool, style: config::InterfaceStyle) -> Self {
         unsafe {
             let mut contrast: HIGHCONTRASTW = std::mem::zeroed();
             contrast.cbSize = size_of::<HIGHCONTRASTW>() as u32;
@@ -49,6 +56,9 @@ impl Theme {
                     bg: GetSysColor(COLOR_WINDOW),
                     surface: GetSysColor(COLOR_WINDOW),
                     field: GetSysColor(COLOR_BTNFACE),
+                    control: GetSysColor(COLOR_BTNFACE),
+                    control_border: GetSysColor(COLOR_WINDOWTEXT),
+                    selection: GetSysColor(COLOR_HIGHLIGHT),
                     text: GetSysColor(COLOR_WINDOWTEXT),
                     muted: GetSysColor(COLOR_WINDOWTEXT),
                     border: GetSysColor(COLOR_WINDOWTEXT),
@@ -64,6 +74,9 @@ impl Theme {
                 bg: rgb(32, 32, 32),
                 surface: rgb(43, 43, 43),
                 field: rgb(51, 51, 51),
+                control: rgb(55, 55, 55),
+                control_border: rgb(70, 70, 70),
+                selection: rgb(48, 48, 48),
                 text: rgb(255, 255, 255),
                 muted: rgb(195, 195, 195),
                 border: rgb(66, 66, 66),
@@ -77,6 +90,9 @@ impl Theme {
                 bg: rgb(243, 243, 243),
                 surface: rgb(255, 255, 255),
                 field: rgb(250, 250, 250),
+                control: rgb(255, 255, 255),
+                control_border: rgb(212, 212, 212),
+                selection: rgb(234, 234, 234),
                 text: rgb(26, 26, 26),
                 muted: rgb(96, 96, 96),
                 border: rgb(225, 225, 225),
@@ -86,6 +102,39 @@ impl Theme {
                 high_contrast: false,
             }
         };
+        // One layout serves every material. A style only replaces these
+        // tokens, so cards, fields and buttons keep the same relationships.
+        let pick = |light: u32, dark_value: u32| if dark { dark_value } else { light };
+        let gray = |light: u32, dark_value: u32| {
+            let value = pick(light, dark_value);
+            rgb(value, value, value)
+        };
+        match style {
+            config::InterfaceStyle::RefinedNative => {}
+            config::InterfaceStyle::SoftSkeuomorphic => {
+                theme.bg = pick(rgb(239, 235, 228), rgb(35, 33, 31));
+                theme.surface = pick(rgb(250, 247, 242), rgb(46, 44, 41));
+                theme.field = pick(rgb(255, 253, 249), rgb(56, 53, 50));
+                theme.control = pick(rgb(255, 254, 251), rgb(62, 59, 55));
+                theme.border = pick(rgb(226, 219, 208), rgb(64, 60, 55));
+                theme.control_border = pick(rgb(209, 200, 187), rgb(26, 24, 22));
+                theme.selection = pick(rgb(238, 231, 220), rgb(66, 62, 56));
+                theme.text = pick(rgb(38, 33, 27), rgb(240, 236, 228));
+                theme.muted = pick(rgb(104, 94, 82), rgb(190, 182, 170));
+            }
+            config::InterfaceStyle::LiquidGlass => {
+                theme.bg = gray(240, 28);
+                theme.surface = gray(250, 40);
+                theme.field = gray(255, 50);
+                theme.control = gray(254, 54);
+                // Hairlines become light rims once the fills turn translucent.
+                theme.control_border = gray(200, 112);
+                theme.border = gray(216, 92);
+                theme.selection = gray(234, 60);
+                theme.text = gray(26, 245);
+                theme.muted = gray(88, 196);
+            }
+        }
         use windows::UI::ViewManagement::{UIColorType, UISettings};
         if let Ok(color) = UISettings::new().and_then(|ui| {
             ui.GetColorValue(if dark {
@@ -95,6 +144,9 @@ impl Theme {
             })
         }) {
             theme.accent = rgb(color.R as u32, color.G as u32, color.B as u32);
+        }
+        if style == config::InterfaceStyle::SoftSkeuomorphic {
+            theme.accent = pick(rgb(170, 72, 26), rgb(240, 164, 112));
         }
         let luminance = |c: u32| {
             let c = c as f64 / 255.;
@@ -112,17 +164,24 @@ impl Theme {
         } else {
             rgb(255, 255, 255)
         };
-        theme.tint = blend(theme.surface, theme.accent, if dark { 18 } else { 10 });
+        theme.tint = if style == config::InterfaceStyle::RefinedNative {
+            blend(theme.surface, theme.accent, if dark { 18 } else { 10 })
+        } else {
+            blend(theme.selection, theme.accent, if dark { 10 } else { 6 })
+        };
         theme
     }
 }
-fn blend(base: u32, color: u32, percent: u32) -> u32 {
+pub(super) fn blend(base: u32, color: u32, percent: u32) -> u32 {
     let component = |shift: u32| {
         (((base >> shift) & 255u32) * (100 - percent) + ((color >> shift) & 255u32) * percent) / 100
     };
     rgb(component(0), component(8), component(16))
 }
 pub(super) fn font_face() -> String {
+    if let Some(face) = interface::font_override() {
+        return face;
+    }
     unsafe {
         let mut metrics: NONCLIENTMETRICSW = std::mem::zeroed();
         metrics.cbSize = size_of::<NONCLIENTMETRICSW>() as u32;
@@ -229,21 +288,21 @@ unsafe extern "system" fn combo_proc(
                 };
                 let mut r: RECT = std::mem::zeroed();
                 GetClientRect(hwnd, &mut r);
-                let buffer = PaintBuffer::new(dc, r);
+                let buffer = PaintBuffer::for_window(dc, r, hwnd);
                 let dc = buffer.as_ref().map_or(dc, |b| b.dc);
                 let dark = !GetPropW(hwnd, wide("LiteTray.ControlDark").as_ptr()).is_null();
                 let t = Theme::new(dark);
-                let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+                let dpi = interface::layout_dpi(GetDpiForWindow(hwnd).max(96)) as i32;
                 let s = |n| n * dpi / 96;
                 fill(dc, r, t.surface);
-                rounded(
+                card(
                     dc,
                     r,
                     t.field,
                     if GetFocus() == hwnd {
                         t.accent
                     } else {
-                        t.border
+                        t.control_border
                     },
                     s(6),
                 );
@@ -310,6 +369,11 @@ pub(super) unsafe fn fill(dc: HDC, r: RECT, color: u32) {
 }
 pub(super) unsafe fn rounded(dc: HDC, r: RECT, color: u32, border: u32, radius: i32) {
     unsafe {
+        let radius = if Theme::new(PALETTE.with(Cell::get).is_some_and(|p| p.dark)).high_contrast {
+            0
+        } else {
+            interface::radius(radius)
+        };
         if radius > 0 && smooth_rounded(dc, r, color, border, radius) {
             return;
         }
@@ -322,6 +386,70 @@ pub(super) unsafe fn rounded(dc: HDC, r: RECT, color: u32, border: u32, radius: 
         SelectObject(dc, op);
         DeleteObject(brush);
         DeleteObject(pen);
+    }
+}
+
+/// A raised surface. Tactile material adds a one-pixel top light and bottom
+/// shade inside the border; the other styles stay flat.
+pub(super) unsafe fn card(dc: HDC, r: RECT, color: u32, border: u32, radius: i32) {
+    unsafe {
+        rounded(dc, r, color, border, radius);
+        relief(dc, r, color, radius, false);
+    }
+}
+
+pub(super) unsafe fn button_surface(
+    dc: HDC,
+    r: RECT,
+    color: u32,
+    border: u32,
+    radius: i32,
+    pressed: bool,
+) {
+    unsafe {
+        rounded(dc, r, color, border, radius);
+        relief(dc, r, color, radius, pressed);
+    }
+}
+
+unsafe fn relief(dc: HDC, r: RECT, color: u32, radius: i32, pressed: bool) {
+    unsafe {
+        let t = Theme::new(PALETTE.with(Cell::get).is_some_and(|p| p.dark));
+        let style = interface::style();
+        if t.high_contrast || style == config::InterfaceStyle::RefinedNative {
+            return;
+        }
+        let inset = (interface::radius(radius) / 2).max(2);
+        let width = r.right - r.left - 2 * inset;
+        if width <= 0 || r.bottom - r.top < 8 {
+            return;
+        }
+        if style == config::InterfaceStyle::LiquidGlass {
+            // Glass catches light along its upper edge only.
+            if !pressed {
+                let light = blend(color, rgb(255, 255, 255), 28);
+                fill(dc, rect(r.left + inset, r.top + 1, width, 1), light);
+            }
+            return;
+        }
+        // Light paper catches a bright edge; dark material only a faint one
+        // above a deeper shade.
+        let dark = t.text & 255 > t.surface & 255;
+        let (top, bottom) = if pressed {
+            (blend(color, rgb(0, 0, 0), 10), color)
+        } else if dark {
+            (
+                blend(color, rgb(255, 255, 255), 7),
+                blend(color, rgb(0, 0, 0), 22),
+            )
+        } else {
+            (
+                blend(color, rgb(255, 255, 255), 45),
+                blend(color, rgb(0, 0, 0), 7),
+            )
+        };
+        fill(dc, rect(r.left + inset, r.top + 1, width, 1), top);
+        fill(dc, rect(r.left + inset, r.bottom - 2, width, 1), bottom);
     }
 }
 
@@ -470,6 +598,11 @@ pub(super) struct PaintBuffer {
     bounds: RECT,
     bitmap: HBITMAP,
     old: HGDIOBJ,
+    pixels: *mut u8,
+    glass: Option<interface::GlassPalette>,
+}
+thread_local! {
+    static STAGED_DCS: RefCell<Vec<HDC>> = const { RefCell::new(Vec::new()) };
 }
 impl PaintBuffer {
     pub unsafe fn new(destination: HDC, bounds: RECT) -> Option<Self> {
@@ -477,6 +610,26 @@ impl PaintBuffer {
             if GetObjectType(destination) == OBJ_MEMDC as u32 {
                 return None;
             }
+            Self::stage(destination, bounds, interface::glass_palette(destination))
+        }
+    }
+    pub unsafe fn for_window(destination: HDC, bounds: RECT, hwnd: HWND) -> Option<Self> {
+        unsafe {
+            let glass = interface::glass_palette_for_window(hwnd);
+            if GetObjectType(destination) == OBJ_MEMDC as u32
+                && (glass.is_none() || STAGED_DCS.with(|dcs| dcs.borrow().contains(&destination)))
+            {
+                return None;
+            }
+            Self::stage(destination, bounds, glass)
+        }
+    }
+    unsafe fn stage(
+        destination: HDC,
+        bounds: RECT,
+        glass: Option<interface::GlassPalette>,
+    ) -> Option<Self> {
+        unsafe {
             let width = bounds.right - bounds.left;
             let height = bounds.bottom - bounds.top;
             if width <= 0 || height <= 0 {
@@ -505,18 +658,21 @@ impl PaintBuffer {
             }
             let old = SelectObject(dc, bitmap);
             SetViewportOrgEx(dc, -bounds.left, -bounds.top, null_mut());
+            STAGED_DCS.with(|dcs| dcs.borrow_mut().push(dc));
             Some(Self {
                 dc,
                 destination,
                 bounds,
                 bitmap,
                 old,
+                pixels: bits.cast(),
+                glass,
             })
         }
     }
     pub unsafe fn item(item: &DRAWITEMSTRUCT) -> (Option<Self>, DRAWITEMSTRUCT) {
         unsafe {
-            let buffer = Self::new(item.hDC, item.rcItem);
+            let buffer = Self::for_window(item.hDC, item.rcItem, item.hwndItem);
             let buffered = DRAWITEMSTRUCT {
                 hDC: buffer.as_ref().map_or(item.hDC, |b| b.dc),
                 ..*item
@@ -529,6 +685,16 @@ impl Drop for PaintBuffer {
     fn drop(&mut self) {
         unsafe {
             let r = self.bounds;
+            if let Some(glass) = self.glass {
+                GdiFlush();
+                glass.prepare(
+                    std::slice::from_raw_parts_mut(
+                        self.pixels,
+                        ((r.right - r.left) * (r.bottom - r.top) * 4) as usize,
+                    ),
+                    (r.right - r.left) as usize,
+                );
+            }
             BitBlt(
                 self.destination,
                 r.left,
@@ -541,6 +707,7 @@ impl Drop for PaintBuffer {
                 SRCCOPY,
             );
             SelectObject(self.dc, self.old);
+            STAGED_DCS.with(|dcs| dcs.borrow_mut().retain(|&dc| dc != self.dc));
             DeleteObject(self.bitmap);
             DeleteDC(self.dc);
         }

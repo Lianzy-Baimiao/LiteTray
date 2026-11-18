@@ -1,5 +1,6 @@
 mod agenda;
 mod almanac_tip;
+mod appearance_settings;
 mod calendar;
 mod compatibility;
 mod dashboard;
@@ -7,6 +8,9 @@ mod design;
 mod forecast;
 mod holiday_data;
 mod icons;
+mod interface;
+#[cfg(test)]
+mod interface_checks;
 #[cfg(test)]
 mod navigation_timing;
 mod page;
@@ -74,15 +78,18 @@ const WM_CLOCK_ACTIVATED: u32 = WM_APP + 5;
 const WM_PREVIEW_CLOCK: u32 = WM_APP + 6;
 const WM_SHOW_SECONDARY: u32 = WM_APP + 7;
 const WM_PREPARE_PANELS: u32 = WM_APP + 8;
+const WM_APPLY_INTERFACE: u32 = WM_APP + 9;
 const NAV: u16 = 100;
 const SAVE: u16 = 20;
 const STATUS: u16 = 900;
+/// Minimize, maximize or restore, close: drawn by the settings window.
+const CAPTION: u16 = 906;
 const REFRESH: u16 = 30;
 const UPDATE: u16 = 31;
 const OPEN_RELEASE: u16 = 32;
 const EXIT: u16 = 33;
 const CALENDAR: u16 = 34;
-const PAGES: [&str; 13] = [
+const PAGES: [&str; 14] = [
     "日历与天气",
     "时钟显示",
     "多屏托盘",
@@ -96,6 +103,7 @@ const PAGES: [&str; 13] = [
     "天气格式",
     "兼容性",
     "代理设置",
+    "界面外观",
 ];
 fn revision_label() -> String {
     if i18n::english() {
@@ -145,6 +153,7 @@ enum Event {
 struct App {
     hwnd: HWND,
     page_host: HWND,
+    sidebar: HWND,
     shell_layout: Option<(i32, i32, u32)>,
     settings_key: Option<settings::PageKey>,
     settings_cache: Vec<settings::CachedPage>,
@@ -205,6 +214,7 @@ fn secondary_page() -> usize {
         Some("weather-format") => 11,
         Some("appearance") => 5,
         Some("proxy") => 13,
+        Some("interface") => 14,
         _ => 0,
     }
 }
@@ -277,7 +287,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
         let _ = RoInitialize(RO_INIT_SINGLETHREADED);
         let controls = INITCOMMONCONTROLSEX {
             dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_STANDARD_CLASSES | ICC_DATE_CLASSES,
+            dwICC: ICC_STANDARD_CLASSES | ICC_DATE_CLASSES | ICC_BAR_CLASSES,
         };
         InitCommonControlsEx(&controls);
         let instance = GetModuleHandleW(null());
@@ -330,6 +340,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
         let mut app = App {
             hwnd,
             page_host: null_mut(),
+            sidebar: null_mut(),
             shell_layout: None,
             settings_key: None,
             settings_cache: vec![],
@@ -475,7 +486,7 @@ pub fn run(config: Config, mode: &str) -> Result<(), String> {
 
 impl App {
     fn scale(&self, value: i32) -> i32 {
-        value * self.dpi as i32 / 96
+        value * interface::layout_dpi(self.dpi) as i32 / 96
     }
     fn dark(&self) -> bool {
         match self.draft.appearance {
@@ -495,6 +506,8 @@ impl App {
     }
     unsafe fn recreate_resources(&mut self) {
         i18n::set_language(self.saved.language);
+        let previous_interface = interface::current();
+        interface::configure(&self.draft.interface);
         unsafe {
             SetWindowTextW(
                 self.hwnd,
@@ -504,22 +517,22 @@ impl App {
             self.clear_attached_panels();
             self.release_resources();
             let face = design::font_face();
-            self.font = make_font(self.scale(14), 400, &face);
-            self.title_font = make_font(self.scale(28), 600, &face);
+            self.font = make_font(interface::text_pixels(14, self.dpi), 400, &face);
+            self.title_font = make_font(interface::text_pixels(28, self.dpi), 600, &face);
             self.background = CreateSolidBrush(self.bg_color());
             self.edit_background = CreateSolidBrush(self.edit_color());
             self.surface_background = CreateSolidBrush(design::Theme::new(self.dark()).surface);
             self.publish_palette();
-            let dark = self.dark() as i32;
-            if self.build >= 17763 {
-                DwmSetWindowAttribute(
-                    self.hwnd,
-                    20,
-                    &dark as *const _ as _,
-                    size_of::<i32>() as u32,
-                );
-            }
+            interface::apply_window(self.hwnd, self.build, self.dark(), false);
             for &panel in &self.panel_cache {
+                if previous_interface.font_size != self.draft.interface.font_size {
+                    panel::scale_for_interface(
+                        panel,
+                        self.draft.interface.font_size,
+                        previous_interface.font_size,
+                    );
+                }
+                interface::apply_window(panel, self.build, self.dark(), true);
                 dashboard::refresh_theme(GetDlgItem(panel, dashboard::ID as i32), self.dark());
             }
         }
@@ -647,6 +660,8 @@ impl App {
         unsafe {
             let text = if class == "EDIT" { text } else { tr(text) };
             let content = x >= 224 && y >= 80 && id != STATUS && id != SAVE && id != 42;
+            let sidebar =
+                (NAV..NAV + PAGES.len() as u16).contains(&id) || (903..=905).contains(&id);
             let style = if class == "STATIC" {
                 style | 0x80 // SS_NOPREFIX: display literal '&' in translated headings.
             } else if class == "COMBOBOX" {
@@ -666,7 +681,13 @@ impl App {
             } else {
                 x
             };
-            let y = if content { y - 80 + 20 } else { y };
+            let y = if content {
+                y - 80 + 20
+            } else if sidebar {
+                y - 108
+            } else {
+                y
+            };
             let hwnd = CreateWindowExW(
                 0,
                 wide(class).as_ptr(),
@@ -682,7 +703,13 @@ impl App {
                 self.scale(y),
                 self.scale(w),
                 self.scale(h),
-                if content { self.page_host } else { self.hwnd },
+                if content {
+                    self.page_host
+                } else if sidebar {
+                    self.sidebar
+                } else {
+                    self.hwnd
+                },
                 id as usize as HMENU,
                 GetModuleHandleW(null()),
                 null(),
@@ -701,7 +728,7 @@ impl App {
                 );
             }
             if class == "COMBOBOX" {
-                design::style_combo(hwnd, self.dark(), self.dpi);
+                design::style_combo(hwnd, self.dark(), interface::layout_dpi(self.dpi));
             }
             if class == "LISTBOX" {
                 SetPropW(hwnd, wide("LiteTray.Field").as_ptr(), 1usize as HANDLE);
@@ -734,7 +761,15 @@ impl App {
             }
             if class == "EDIT" {
                 SendMessageW(hwnd, EM_SETLIMITTEXT, 2048, 0);
-                widgets::style_edit(hwnd, self.dark(), self.dpi);
+                widgets::style_edit(hwnd, self.dark(), interface::layout_dpi(self.dpi));
+                widgets::center_edit(hwnd);
+            }
+            if class == "STATIC" {
+                widgets::style_static(hwnd);
+            } else if class == "LISTBOX"
+                || class == "BUTTON" && style & 0xf == BS_AUTOCHECKBOX as u32
+            {
+                widgets::glass_control(hwnd);
             }
             self.children.push(hwnd);
             if id != 0 {
@@ -880,9 +915,10 @@ impl App {
             }
             let mut rect = std::mem::zeroed();
             GetClientRect(self.hwnd, &mut rect);
-            let width = rect.right * 96 / self.dpi as i32 - 56;
-            let height = rect.bottom * 96 / self.dpi as i32;
-            let layout = (rect.right, rect.bottom, self.dpi);
+            let layout_dpi = interface::layout_dpi(self.dpi);
+            let width = rect.right * 96 / layout_dpi as i32 - 56;
+            let height = rect.bottom * 96 / layout_dpi as i32;
+            let layout = (rect.right, rect.bottom, layout_dpi);
             let rebuild_shell = self.shell_layout != Some(layout);
             let old_page = self.page_host;
             let old_key = self.settings_key.take();
@@ -943,33 +979,55 @@ impl App {
                         rect.bottom - self.scale(220),
                     ),
                 );
+                // Everything inside the page lies on its card.
+                SetPropW(
+                    self.page_host,
+                    wide("LiteTray.Surface").as_ptr(),
+                    1usize as HANDLE,
+                );
                 self.children.push(self.page_host);
             }
             if rebuild_shell {
+                self.sidebar = page::create(
+                    self.hwnd,
+                    design::rect(
+                        0,
+                        self.scale(108),
+                        self.scale(230),
+                        rect.bottom - self.scale(174),
+                    ),
+                );
+                SetPropW(
+                    self.sidebar,
+                    wide("LiteTray.Sidebar").as_ptr(),
+                    1usize as HANDLE,
+                );
+                self.children.push(self.sidebar);
                 let brand = self.label("LiteTray", 22, 24, 170, 38);
                 SendMessageW(brand, WM_SETFONT, self.title_font as usize, 1);
                 self.label("你的时间与桌面", 26, 72, 194, 25);
-                for (i, y) in [
-                    (0, 132),
-                    (8, 170),
-                    (9, 208),
-                    (1, 278),
-                    (7, 316),
-                    (10, 354),
-                    (2, 392),
-                    (3, 430),
-                    (4, 498),
-                    (12, 536),
-                    (11, 574),
-                    (5, 612),
-                    (6, 650),
+                // Every group uses one rhythm: caption, 28 to its first
+                // entry, 36 between entries, 10 before the next caption. All
+                // entries then fit the default window without scrolling.
+                let mut y = 108;
+                for (id, name, pages) in [
+                    (903, "日常", &[0, 8, 9][..]),
+                    (904, "任务栏", &[1, 7, 10, 2, 3][..]),
+                    (905, "应用", &[4, 13, 12, 11, 5, 6][..]),
                 ] {
-                    self.button(PAGES[i], NAV + i as u16, 16, y, 208);
+                    let caption = self.control("STATIC", name, id, SS_LEFT as u32, 28, y, 170, 22);
+                    SetPropW(caption, wide("LiteTray.Muted").as_ptr(), 1usize as HANDLE);
+                    widgets::caption_font(caption, self.dpi);
+                    y += 28;
+                    for &page in pages {
+                        self.button(PAGES[page], NAV + page as u16, 16, y, 190);
+                        y += 36;
+                    }
+                    y += 10;
                 }
-                self.label("日常", 28, 108, 170, 22);
-                self.label("任务栏", 28, 248, 170, 22);
-                self.label("应用", 28, 468, 170, 22);
-                self.label(&revision_label(), 24, height - 90, 165, 50);
+                page::finish(self.sidebar);
+                ShowWindow(self.sidebar, SW_SHOWNA);
+                self.label(&revision_label(), 24, height - 58, 194, 38);
                 let heading =
                     self.control("STATIC", "", 901, SS_LEFT as u32, 224, 30, width - 250, 42);
                 SendMessageW(heading, WM_SETFONT, self.title_font as usize, 1);
@@ -985,6 +1043,25 @@ impl App {
                     48,
                 );
                 self.button("保存设置", SAVE, width - 121, height - 68, 125);
+                if interface::owns_frame(self.hwnd) {
+                    for index in 0..3 {
+                        let button = self.control(
+                            "BUTTON",
+                            "",
+                            CAPTION + index,
+                            BS_OWNERDRAW as u32,
+                            // `control` adds the content margin of 24 on this side.
+                            width + 32 - 46 * (3 - i32::from(index)),
+                            0,
+                            46,
+                            interface::CAPTION_HEIGHT,
+                        );
+                        SetWindowTextW(
+                            button,
+                            wide(tr(["最小化", "最大化", "关闭"][usize::from(index)])).as_ptr(),
+                        );
+                    }
+                }
                 self.shell_layout = Some(layout);
             }
             set_text(self.field(901), PAGES[self.page]);
@@ -1002,6 +1079,7 @@ impl App {
                 "组合天气属性，决定任务栏里 %weather% 的显示内容。",
                 "看看这台电脑能使用哪些任务栏功能。",
                 "选择 LiteTray 联网时使用的代理，并测试连接。",
+                "设置窗口与点击弹层共用风格、边角和字体。",
             ];
             set_text(self.field(902), descriptions[self.page]);
             let c = self.draft.clone();
@@ -1032,6 +1110,7 @@ impl App {
                     10 => self.weather_format_settings(&c, width),
                     11 => self.compatibility_settings(width),
                     12 => self.proxy_settings(&c, width),
+                    13 => self.interface_settings(&c, width),
                     2 => self.tray_settings(&c, width),
                     3 => self.weather_settings(&c, width),
                     4 => self.general_settings(&c, width),
@@ -1086,7 +1165,7 @@ impl App {
                     SW_SHOWNA
                 },
             );
-            if ((1..8).contains(&self.page) || matches!(self.page, 10..=12)) && !reused {
+            if ((1..8).contains(&self.page) || matches!(self.page, 10..=13)) && !reused {
                 page::finish(self.page_host);
             }
             self.update_views();
@@ -1199,6 +1278,14 @@ impl App {
                     _ => Language::System,
                 };
             }
+            appearance_settings::PAGE => {
+                c.interface = self.collect_interface()?;
+                c.appearance = match self.selected(501) {
+                    0 => Appearance::System,
+                    1 => Appearance::Light,
+                    _ => Appearance::Dark,
+                };
+            }
             5 => {
                 c.updates.repository = self.text(601).trim().into();
                 c.updates.include_prerelease = self.checked(602);
@@ -1277,12 +1364,7 @@ impl App {
                     }
                 },
                 IDNO => {
-                    self.draft = self.saved.clone();
-                    // A cached page may still contain discarded native input.
-                    for page in self.settings_cache.drain(..) {
-                        DestroyWindow(page.window);
-                    }
-                    self.render();
+                    self.discard_settings_draft();
                     true
                 }
                 _ => false,
@@ -1384,8 +1466,18 @@ impl App {
                 Err(error) => format!("设置已保存；任务栏恢复尚未完成：{error}"),
             };
             self.engine = Default::default();
-            self.recreate_resources();
-            self.render();
+            {
+                // Saving rebuilds every control; show only the finished frame.
+                let _cover = interface::FrameCover::show(self.hwnd);
+                self.recreate_resources();
+                self.render();
+                RedrawWindow(
+                    self.hwnd,
+                    null(),
+                    null_mut(),
+                    RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW,
+                );
+            }
             self.next_weather = Instant::now();
             self.start_weather(true);
             Ok(())
@@ -1838,7 +1930,11 @@ impl App {
                     right: info.rcWork.right,
                     bottom: info.rcWork.bottom,
                 };
-                if let Ok(position) = popup::place(anchor, work, GetDpiForWindow(panel).max(96)) {
+                if let Ok(position) = popup::place(
+                    anchor,
+                    work,
+                    interface::layout_dpi(GetDpiForWindow(panel).max(96)),
+                ) {
                     SetWindowPos(
                         panel,
                         null_mut(),
@@ -1876,7 +1972,7 @@ impl App {
             panel::init(hwnd, anchor);
             // Derive scale from the popup's actual monitor. Settings can be on
             // a completely different display with a different effective DPI.
-            let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+            let dpi = interface::layout_dpi(GetDpiForWindow(hwnd).max(96)) as i32;
             let work = popup::Rect {
                 left: info.rcWork.left,
                 top: info.rcWork.top,
@@ -1916,17 +2012,24 @@ impl App {
             );
             dashboard::bind_store(view, self.organizer.clone());
             dashboard::bind_holidays(view, self.holidays.clone());
-            app_icon::apply(hwnd, dpi as u32);
-            let rounded = 2_i32;
-            if self.build >= 22000 {
-                DwmSetWindowAttribute(hwnd, 33, &rounded as *const _ as _, 4);
-            }
+            app_icon::apply(hwnd, GetDpiForWindow(hwnd).max(96));
+            interface::apply_window(hwnd, self.build, self.dark(), true);
             dashboard::update(view, &self.saved, &self.weather, self.weather_busy);
             Some(hwnd)
         }
     }
     unsafe fn command(&mut self, id: u16) -> bool {
         unsafe {
+            if (CAPTION..CAPTION + 3).contains(&id) {
+                let command = match id - CAPTION {
+                    0 => SC_MINIMIZE,
+                    1 if IsZoomed(self.hwnd) != 0 => SC_RESTORE,
+                    1 => SC_MAXIMIZE,
+                    _ => SC_CLOSE,
+                };
+                PostMessageW(self.hwnd, WM_SYSCOMMAND, command as usize, 0);
+                return false;
+            }
             if (NAV..NAV + PAGES.len() as u16).contains(&id) {
                 if self.page == (id - NAV) as usize {
                     return false;
@@ -1940,6 +2043,30 @@ impl App {
                 return false;
             }
             match id {
+                appearance_settings::PREVIEW => {
+                    self.apply_interface_preview();
+                    self.show_panel();
+                    return false;
+                }
+                appearance_settings::RESET if self.page == appearance_settings::PAGE => {
+                    self.draft.interface = config::InterfaceConfig::default();
+                    self.draft.appearance = Appearance::System;
+                    self.apply_interface_preview();
+                    return false;
+                }
+                id if (appearance_settings::FIRST_STYLE..appearance_settings::FIRST_STYLE + 3)
+                    .contains(&id)
+                    && self.page == appearance_settings::PAGE =>
+                {
+                    if let Err(error) = self.collect_page() {
+                        self.set_status(error);
+                    } else {
+                        self.draft.interface.style = config::InterfaceStyle::ALL
+                            [(id - appearance_settings::FIRST_STYLE) as usize];
+                        PostMessageW(self.hwnd, WM_APPLY_INTERFACE, 0, 0);
+                    }
+                    return false;
+                }
                 proxy_settings::TEST if self.page == proxy_settings::PAGE => {
                     self.start_proxy_test();
                 }
@@ -2423,6 +2550,9 @@ unsafe fn choose_migration_file(owner: HWND) -> Result<Option<std::path::PathBuf
 
 unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     unsafe {
+        if let Some(result) = interface::frame_message(hwnd, msg, w, l) {
+            return result;
+        }
         if let Some(result) = volume_tip::message(hwnd, msg) {
             return result;
         }
@@ -2517,10 +2647,24 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
         }
         if msg == WM_GETMINMAXINFO {
             let info = &mut *(l as *mut MINMAXINFO);
-            let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+            let dpi = interface::layout_dpi(GetDpiForWindow(hwnd).max(96)) as i32;
+            let mut monitor: MONITORINFO = std::mem::zeroed();
+            monitor.cbSize = size_of::<MONITORINFO>() as u32;
+            let work = if GetMonitorInfoW(
+                MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST),
+                &mut monitor,
+            ) != 0
+            {
+                (
+                    monitor.rcWork.right - monitor.rcWork.left,
+                    monitor.rcWork.bottom - monitor.rcWork.top,
+                )
+            } else {
+                (i32::MAX, i32::MAX)
+            };
             info.ptMinTrackSize = POINT {
-                x: 1060 * dpi / 96,
-                y: 820 * dpi / 96,
+                x: (1060 * dpi / 96).min(work.0),
+                y: (820 * dpi / 96).min(work.1),
             };
             return 0;
         }
@@ -2612,6 +2756,18 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 }
                 WM_COMMAND => {
                     let id = (w & 0xffff) as u16;
+                    if app.page == appearance_settings::PAGE
+                        && (w >> 16) as u32 == CBN_SELCHANGE
+                        && matches!(
+                            id,
+                            501 | appearance_settings::CORNERS
+                                | appearance_settings::FONT
+                                | appearance_settings::SIZE
+                        )
+                    {
+                        app.interface_input_changed(false);
+                        return Some(0);
+                    }
                     if app.page == proxy_settings::PAGE
                         && (((w >> 16) as u32 == CBN_SELCHANGE
                             && matches!(id, proxy_settings::MODE | proxy_settings::PROTOCOL))
@@ -2678,6 +2834,24 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                         ShowWindow(hwnd, SW_HIDE);
                     }
                     app.schedule_tick();
+                    Some(0)
+                }
+                WM_HSCROLL
+                    if app.page == appearance_settings::PAGE
+                        && matches!(
+                            GetDlgCtrlID(l as HWND) as u16,
+                            appearance_settings::TRANSPARENCY | appearance_settings::CLARITY
+                        ) =>
+                {
+                    app.interface_input_changed(true);
+                    Some(0)
+                }
+                WM_APPLY_INTERFACE => {
+                    app.apply_interface_preview();
+                    Some(0)
+                }
+                WM_TIMER if w == appearance_settings::PREVIEW_TIMER => {
+                    app.apply_interface_preview();
                     Some(0)
                 }
                 WM_TIMER if w == 2 => {
@@ -2762,8 +2936,27 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     if w != SIZE_MINIMIZED as usize {
                         let fields = app.input_snapshot();
                         let _ = app.collect_page();
+                        // The new size rebuilds every control. Paint once,
+                        // when all of them are in place.
+                        let visible = IsWindowVisible(hwnd) != 0;
+                        if visible {
+                            SendMessageW(hwnd, WM_SETREDRAW, 0, 0);
+                        }
                         app.render();
                         app.restore_inputs(fields);
+                        if visible {
+                            SendMessageW(hwnd, WM_SETREDRAW, 1, 0);
+                            RedrawWindow(
+                                hwnd,
+                                null(),
+                                null_mut(),
+                                RDW_INVALIDATE
+                                    | RDW_ERASE
+                                    | RDW_FRAME
+                                    | RDW_ALLCHILDREN
+                                    | RDW_UPDATENOW,
+                            );
+                        }
                     }
                     Some(0)
                 }
@@ -2836,6 +3029,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
 }
 unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     unsafe {
+        if let Some(result) = interface::frame_message(hwnd, msg, w, l) {
+            return result;
+        }
         if let Some(result) = panel::message(hwnd, msg, w, l) {
             return result;
         }
@@ -2911,13 +3107,16 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                 let mut r: RECT = std::mem::zeroed();
                 GetClientRect(hwnd, &mut r);
                 let t = design::Theme::new(p.dark);
+                let buffer = design::PaintBuffer::new(dc, r);
+                let dc = buffer.as_ref().map_or(dc, |buffer| buffer.dc);
                 design::fill(dc, r, t.bg);
                 if !GetPropW(hwnd, wide("LiteTray.SettingsSurface").as_ptr()).is_null() {
-                    let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+                    let dpi = interface::layout_dpi(GetDpiForWindow(hwnd).max(96)) as i32;
                     let s = |n: i32| n * dpi / 96;
                     design::fill(dc, design::rect(s(232), 0, s(1), r.bottom), t.border);
-                    {
-                        design::rounded(
+                    // Glass is one sheet: no card sets the content apart.
+                    if !interface::glass_active(hwnd) {
+                        design::card(
                             dc,
                             design::rect(s(247), s(123), r.right - s(274), r.bottom - s(218)),
                             t.surface,
@@ -2933,14 +3132,7 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                     let mut child = GetWindow(hwnd, GW_CHILD);
                     while !child.is_null() {
                         if !GetPropW(child, wide("LiteTray.Field").as_ptr()).is_null() {
-                            let mut bounds: RECT = std::mem::zeroed();
-                            GetWindowRect(child, &mut bounds);
-                            MapWindowPoints(
-                                null_mut(),
-                                hwnd,
-                                &mut bounds as *mut RECT as *mut POINT,
-                                2,
-                            );
+                            let mut bounds = widgets::field_box(child, hwnd);
                             InflateRect(&mut bounds, s(2), s(2));
                             design::rounded(dc, bounds, t.field, t.border, s(8));
                             if GetFocus() == child {
@@ -2959,6 +3151,7 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                         child = GetWindow(child, GW_HWNDNEXT);
                     }
                 }
+                drop(buffer);
                 if msg != WM_PRINTCLIENT {
                     EndPaint(hwnd, &ps);
                 }
@@ -3002,6 +3195,43 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                     return None;
                 }
                 let t = design::Theme::new(p.dark);
+                if (CAPTION as u32..CAPTION as u32 + 3).contains(&item.CtlID) {
+                    let close = item.CtlID == CAPTION as u32 + 2;
+                    let lit = item.itemState & ODS_SELECTED != 0
+                        || !GetPropW(item.hwndItem, wide("LiteTray.Hover").as_ptr()).is_null();
+                    let fill = match (lit, close) {
+                        (false, _) => t.bg,
+                        (true, true) => rgb(196, 43, 28),
+                        (true, false) => t.selection,
+                    };
+                    design::fill(item.hDC, item.rcItem, fill);
+                    let dpi = interface::layout_dpi(GetDpiForWindow(hwnd).max(96)) as i32;
+                    let font = make_font(10 * dpi / 96, 400, "Segoe MDL2 Assets");
+                    design::text(
+                        item.hDC,
+                        match item.CtlID - CAPTION as u32 {
+                            0 => "\u{e921}",
+                            1 if IsZoomed(hwnd) != 0 => "\u{e923}",
+                            1 => "\u{e922}",
+                            _ => "\u{e8bb}",
+                        },
+                        item.rcItem,
+                        font,
+                        if lit && close {
+                            rgb(255, 255, 255)
+                        } else {
+                            t.text
+                        },
+                        DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+                    );
+                    DeleteObject(font);
+                    return Some(1);
+                }
+                if p.active == NAV + appearance_settings::PAGE as u16
+                    && appearance_settings::draw_style_card(item, p.dark)
+                {
+                    return Some(1);
+                }
                 let nav = (NAV as u32..NAV as u32 + PAGES.len() as u32).contains(&item.CtlID);
                 let selected = item.CtlID == p.active as u32
                     || !GetPropW(item.hwndItem, wide("LiteTray.Selected").as_ptr()).is_null();
@@ -3016,7 +3246,7 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                 let pressed = item.itemState & ODS_SELECTED != 0;
                 let keyboard_focus = item.itemState & (ODS_FOCUS | ODS_NOFOCUSRECT) == ODS_FOCUS;
                 let hover = !GetPropW(item.hwndItem, wide("LiteTray.Hover").as_ptr()).is_null();
-                let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+                let dpi = interface::layout_dpi(GetDpiForWindow(hwnd).max(96)) as i32;
                 let s = |n: i32| n * dpi / 96;
                 let on_surface =
                     !GetPropW(item.hwndItem, wide("LiteTray.Surface").as_ptr()).is_null();
@@ -3029,16 +3259,32 @@ unsafe fn paint_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> Option<LR
                 } else if nav {
                     t.bg
                 } else {
-                    t.surface
+                    t.control
                 };
-                let border = if nav || primary { color } else { t.border };
-                design::rounded(item.hDC, item.rcItem, color, border, s(10));
+                if nav {
+                    design::rounded(item.hDC, item.rcItem, color, color, s(10));
+                } else {
+                    design::button_surface(
+                        item.hDC,
+                        item.rcItem,
+                        color,
+                        if primary {
+                            color
+                        } else if selected {
+                            t.accent
+                        } else {
+                            t.control_border
+                        },
+                        s(10),
+                        pressed,
+                    );
+                }
                 let mut rect = item.rcItem;
                 if nav {
                     let icons: [&str; PAGES.len()] = [
                         "\u{e787}", "\u{e823}", "\u{e7f4}", "\u{e753}", "\u{e713}", "\u{e946}",
                         "\u{e8b5}", "\u{e790}", "\u{e8fd}", "\u{e916}", "\u{e753}", "\u{e73e}",
-                        "\u{e774}",
+                        "\u{e774}", "\u{e771}",
                     ];
                     let icon_font = make_font(s(17), 400, "Segoe MDL2 Assets");
                     design::text(

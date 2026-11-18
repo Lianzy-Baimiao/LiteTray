@@ -5,6 +5,8 @@ use std::{
 };
 mod proxy;
 pub use proxy::{ProxyConfig, ProxyMode, ProxyProtocol};
+mod interface;
+pub use interface::{CornerStyle, InterfaceConfig, InterfaceStyle};
 
 pub const SCHEMA_VERSION: u32 = 1;
 
@@ -18,6 +20,7 @@ pub struct Config {
     pub proxy: ProxyConfig,
     pub updates: UpdateConfig,
     pub appearance: Appearance,
+    pub interface: InterfaceConfig,
     pub language: crate::i18n::Language,
     pub start_with_windows: bool,
 }
@@ -32,6 +35,7 @@ impl Default for Config {
             proxy: ProxyConfig::default(),
             updates: UpdateConfig::default(),
             appearance: Appearance::System,
+            interface: InterfaceConfig::default(),
             language: crate::i18n::Language::System,
             start_with_windows: false,
         }
@@ -228,6 +232,7 @@ impl Default for UpdateConfig {
 impl Config {
     pub fn validate(&self) -> Result<(), String> {
         self.proxy.validate()?;
+        self.interface.validate()?;
         if self.schema_version != SCHEMA_VERSION {
             return Err(format!(
                 "不支持配置版本 {}；当前支持 {}",

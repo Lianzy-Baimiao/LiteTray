@@ -290,6 +290,17 @@ pub(super) unsafe fn resize(hwnd: HWND, bounds: RECT, dark: bool) {
         }
     }
 }
+pub(super) unsafe fn invalidate_resources(hwnd: HWND) {
+    unsafe {
+        if let Some(cell) = state(hwnd)
+            && let Ok(mut view) = cell.try_borrow_mut()
+        {
+            // Rebuild fonts and brushes on the next arrange without replacing
+            // native inputs or reloading the unsaved entry.
+            view.factor = 0.;
+        }
+    }
+}
 pub(super) unsafe fn dismiss(hwnd: HWND) -> bool {
     unsafe {
         if hwnd.is_null() || GetWindowLongW(hwnd, GWL_STYLE) as u32 & WS_VISIBLE == 0 {

@@ -73,7 +73,10 @@ pub(super) unsafe fn finish(hwnd: HWND) {
             cbSize: size_of::<SCROLLINFO>() as u32,
             fMask: SIF_RANGE | SIF_PAGE,
             nMin: 0,
-            nMax: (bottom + (20 * GetDpiForWindow(hwnd).max(96) / 96) as i32 - 1).max(0),
+            nMax: (bottom
+                + (20 * interface::layout_dpi(GetDpiForWindow(hwnd).max(96)) / 96) as i32
+                - 1)
+            .max(0),
             nPage: client.bottom.max(1) as u32,
             ..std::mem::zeroed()
         };
@@ -98,7 +101,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
     unsafe {
         match msg {
             WM_COMMAND | WM_NOTIFY | WM_DRAWITEM | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN
-            | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => SendMessageW(GetParent(hwnd), msg, w, l),
+            | WM_HSCROLL | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
+                SendMessageW(GetParent(hwnd), msg, w, l)
+            }
             WM_ERASEBKGND => 1,
             WM_PAINT | WM_PRINTCLIENT => {
                 let mut ps: PAINTSTRUCT = std::mem::zeroed();
@@ -110,8 +115,13 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 let mut r: RECT = std::mem::zeroed();
                 GetClientRect(hwnd, &mut r);
                 let theme = design::Theme::new(PALETTE.with(Cell::get).is_some_and(|p| p.dark));
-                design::fill(dc, r, theme.surface);
+                let buffer = design::PaintBuffer::for_window(dc, r, hwnd);
+                let dc = buffer.as_ref().map_or(dc, |buffer| buffer.dc);
+                let sidebar = !GetPropW(hwnd, wide("LiteTray.Sidebar").as_ptr()).is_null();
+                design::fill(dc, r, if sidebar { theme.bg } else { theme.surface });
+                widgets::paint_card_groups(hwnd, dc, theme);
                 paint_fields(hwnd, dc, theme);
+                drop(buffer);
                 if msg != WM_PRINTCLIENT {
                     EndPaint(hwnd, &ps);
                 }
@@ -126,7 +136,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 info.fMask = SIF_ALL;
                 GetScrollInfo(hwnd, SB_VERT, &mut info);
                 let old = info.nPos;
-                let line = (40 * GetDpiForWindow(hwnd).max(96) / 96) as i32;
+                let line = (40 * interface::layout_dpi(GetDpiForWindow(hwnd).max(96)) / 96) as i32;
                 let next = if msg == WM_MOUSEWHEEL {
                     old - (w >> 16) as i16 as i32 * line / WHEEL_DELTA as i32
                 } else {
@@ -163,17 +173,15 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
 }
 pub(super) unsafe fn paint_fields(hwnd: HWND, dc: HDC, theme: design::Theme) {
     unsafe {
-        let scale = GetDpiForWindow(hwnd).max(96) as i32;
+        let scale = interface::layout_dpi(GetDpiForWindow(hwnd).max(96)) as i32;
         let mut child = GetWindow(hwnd, GW_CHILD);
         while !child.is_null() {
             if GetWindowLongW(child, GWL_STYLE) as u32 & WS_VISIBLE != 0
                 && !GetPropW(child, wide("LiteTray.Field").as_ptr()).is_null()
             {
-                let mut r: RECT = std::mem::zeroed();
-                GetWindowRect(child, &mut r);
-                MapWindowPoints(null_mut(), hwnd, &mut r as *mut RECT as *mut POINT, 2);
+                let mut r = widgets::field_box(child, hwnd);
                 InflateRect(&mut r, 2 * scale / 96, 2 * scale / 96);
-                design::rounded(
+                design::card(
                     dc,
                     r,
                     theme.field,

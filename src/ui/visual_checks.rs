@@ -1414,9 +1414,9 @@ fn compatibility_results_update_controls_without_rebuilding_or_switching_pages()
         assert_ne!(IsWindowEnabled(app.field(compatibility::EXPORT)), 0);
         assert!(window_text(status).contains("检查完成"));
         assert_eq!(window_text(clock), "可尝试启用");
-        assert_eq!(window_text(app.field(961)), "有已知问题");
+        assert_eq!(window_text(app.field(961)), "可尝试启用");
         assert_eq!(window_text(app.field(962)), "仍需实测");
-        assert!(window_text(app.field(965)).contains("可能崩溃"));
+        assert!(!window_text(app.field(965)).contains("崩溃"));
         assert!(window_text(app.field(954)).contains("可尝试启用"));
         assert_eq!(IsWindowEnabled(app.field(compatibility::OPEN_REPORT)), 0);
         app.command(compatibility::DETAILS);
@@ -2090,7 +2090,7 @@ fn ui_audit_text_and_geometry_across_pages_and_timer_tabs() {
     });
 }
 
-unsafe fn audit_native_layout(parent: HWND, tag: &str, failures: &mut Vec<String>) {
+pub(super) unsafe fn audit_native_layout(parent: HWND, tag: &str, failures: &mut Vec<String>) {
     unsafe {
         let mut bounds: RECT = std::mem::zeroed();
         GetClientRect(parent, &mut bounds);
@@ -2144,12 +2144,14 @@ unsafe fn audit_native_layout(parent: HWND, tag: &str, failures: &mut Vec<String
                         r.left, r.top, r.right, r.bottom, bounds.right, bounds.bottom
                     ));
                 }
-                // Owner-drawn calendar buttons use accessible names that are
-                // longer than their SVG/date glyphs. Measure normal controls.
+                // Owner-drawn calendar and caption buttons use accessible names
+                // that are longer than their glyphs. Measure normal controls.
                 let custom_calendar = parent_class == "LiteTray.Dashboard.2"
                     || parent_class == "LiteTray.QuickAgenda.1" && id == 4622;
+                let caption_glyph = (i32::from(CAPTION)..i32::from(CAPTION) + 3).contains(&id);
                 let is_static = class.eq_ignore_ascii_case("static") && !preview;
-                let is_button = class.eq_ignore_ascii_case("button") && !custom_calendar;
+                let is_button =
+                    class.eq_ignore_ascii_case("button") && !custom_calendar && !caption_glyph;
                 let is_combo = class.eq_ignore_ascii_case("combobox");
                 let color_edit = class.eq_ignore_ascii_case("edit") && matches!(id, 801 | 802);
                 if class.eq_ignore_ascii_case("edit")
@@ -3183,14 +3185,13 @@ fn compatibility_snapshot_for_check() -> compatibility::Snapshot {
         reasons: vec![],
         baseline_limitations: match feature {
             Feature::ClockAppearance => vec![],
-            Feature::ClockInput => vec!["notification_click_crash_report_unresolved"],
+            Feature::ClockInput => vec![],
             Feature::TrayMirroring => {
                 vec!["third_party_hover_popups_require_separate_validation"]
             }
-            Feature::SystemAreas => vec![
-                "system_icon_and_cross_monitor_menu_validation_incomplete",
-                "notification_click_crash_report_unresolved",
-            ],
+            Feature::SystemAreas => {
+                vec!["system_icon_and_cross_monitor_menu_validation_incomplete"]
+            }
         },
     })
     .collect();
@@ -3231,7 +3232,7 @@ pub(super) unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path)
         let _ = RoInitialize(RO_INIT_SINGLETHREADED);
         InitCommonControlsEx(&INITCOMMONCONTROLSEX {
             dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_STANDARD_CLASSES,
+            dwICC: ICC_STANDARD_CLASSES | ICC_BAR_CLASSES,
         });
         let class = wide("LiteTray.VisualCheck.1");
         RegisterClassW(&WNDCLASSW {
@@ -3309,6 +3310,7 @@ pub(super) unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path)
         let mut app = App {
             hwnd,
             page_host: null_mut(),
+            sidebar: null_mut(),
             shell_layout: None,
             settings_key: None,
             settings_cache: vec![],
@@ -3371,7 +3373,17 @@ pub(super) unsafe fn app_for_check(dark: bool, dpi: u32, path: &std::path::Path)
     }
 }
 pub(super) unsafe fn write_window(hwnd: HWND, path: &std::path::Path) {
+    unsafe { write_window_over(hwnd, path, None) }
+}
+/// Without a compositor the glass result cannot be photographed. Apply the
+/// same alpha pass to the solid frame and blend it over a busy backdrop, so
+/// halos, holes and unreadable text are visible in an offscreen artifact.
+pub(super) unsafe fn write_window_glass(hwnd: HWND, path: &std::path::Path, flyout: bool) {
+    unsafe { write_window_over(hwnd, path, Some(flyout)) }
+}
+unsafe fn write_window_over(hwnd: HWND, path: &std::path::Path, glass: Option<bool>) {
     unsafe {
+        let _solid = interface::SolidRender::begin();
         let mut r: RECT = std::mem::zeroed();
         GetClientRect(hwnd, &mut r);
         let dc = CreateCompatibleDC(null_mut());
@@ -3415,6 +3427,35 @@ pub(super) unsafe fn write_window(hwnd: HWND, path: &std::path::Path) {
         }
         GdiFlush();
         let length = (r.right * r.bottom * 4) as usize;
+        if let Some(flyout) = glass {
+            let pixels = std::slice::from_raw_parts_mut(bits.cast::<u8>(), length);
+            interface::glass_preview(pixels, r.right as usize, flyout);
+            for (index, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let x = (index % r.right as usize) as u32;
+                let y = (index / r.right as usize) as u32;
+                // Diagonal color bands with a bright and a dark block.
+                let band = (x + y) / 90 % 4;
+                let mut backdrop = [
+                    [200, 120, 40],
+                    [60, 170, 230],
+                    [150, 60, 190],
+                    [70, 190, 110],
+                ][band as usize];
+                if x / 220 % 3 == 1 && (y / 180).is_multiple_of(2) {
+                    backdrop = [250, 250, 250];
+                } else if x / 220 % 3 == 2 && y / 180 % 2 == 1 {
+                    backdrop = [10, 10, 10];
+                }
+                let alpha = u32::from(pixel[3]);
+                for channel in 0..3 {
+                    // Desktop Acrylic blurs and mutes what lies behind it.
+                    let behind = (backdrop[channel] + 2 * 128) / 3;
+                    pixel[channel] =
+                        (u32::from(pixel[channel]) + behind * (255 - alpha) / 255).min(255) as u8;
+                }
+                pixel[3] = 255;
+            }
+        }
         let mut bytes = vec![];
         bytes.extend_from_slice(b"BM");
         bytes.extend_from_slice(&((54 + length) as u32).to_le_bytes());

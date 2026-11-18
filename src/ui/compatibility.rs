@@ -330,12 +330,7 @@ fn feature_status(report: Option<&Report>, feature: Feature) -> &'static str {
     };
     tr(match item.status {
         FeatureStatus::DiskMatchedLiveCheckRequired => {
-            if item
-                .baseline_limitations
-                .contains(&"notification_click_crash_report_unresolved")
-            {
-                "有已知问题"
-            } else if item.baseline_limitations.is_empty() {
+            if item.baseline_limitations.is_empty() {
                 "可尝试启用"
             } else {
                 "仍需实测"
@@ -348,7 +343,6 @@ fn feature_status(report: Option<&Report>, feature: Feature) -> &'static str {
 }
 fn limitation_text(key: &str) -> &'static str {
     tr(match key {
-        "notification_click_crash_report_unresolved" => "有通知时点击可能崩溃，尚未确认修复。",
         "third_party_hover_popups_require_separate_validation" => "第三方图标的悬停窗口仍需测试。",
         "system_icon_and_cross_monitor_menu_validation_incomplete" => {
             "系统图标和跨屏菜单仍需测试。"
@@ -365,12 +359,7 @@ fn feature_note(report: Option<&Report>, feature: Feature) -> &'static str {
             }
             FeatureStatus::InspectionFailed => return tr("没能读出检查结果，请重新检查。"),
             FeatureStatus::DiskMatchedLiveCheckRequired => {
-                if let Some(key) = item
-                    .baseline_limitations
-                    .iter()
-                    .find(|key| **key == "notification_click_crash_report_unresolved")
-                    .or_else(|| item.baseline_limitations.first())
-                {
+                if let Some(key) = item.baseline_limitations.first() {
                     return limitation_text(key);
                 }
             }
@@ -917,12 +906,7 @@ mod tests {
                 assert!(!feature_note(Some(&value.report), feature).is_empty());
             }
         }
-        assert!(
-            feature_note(Some(&value.report), Feature::ClockInput)
-                .to_ascii_lowercase()
-                .contains("crash")
-        );
-        assert!(details_text(&value).contains("notification_click_crash_report_unresolved"));
+        assert!(!details_text(&value).contains("notification_click_crash"));
         let tested_ids: Vec<_> = value
             .supported_profiles
             .iter()

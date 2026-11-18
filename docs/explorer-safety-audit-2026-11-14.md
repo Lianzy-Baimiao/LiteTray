@@ -84,7 +84,7 @@
 | 优先级 | 项目与当前状态 | 代码/规格依据及下一步 |
 | --- | --- | --- |
 | P1 | 不同根的共享普通 Flyout 完整内容代理尚未覆盖 | 原生同根与主屏首次显示、菜单代理 options 已修复。普通 Flyout 的 Content 可能持有 UIElement、binding、style 和布局；MenuFlyoutItem 借用无法提供通用内容代理。不同根场景继续拒绝，后续须单独设计并在真实客体测试。 |
-| P1 | “有系统通知时点击可能崩溃”的现场反馈仍未结案 | [兼容页面](../src/ui/compatibility.rs)仍保留 `notification_click_crash_report_unresolved`；本轮菜单回调失败不能自动替代该现场复现。补齐有/无通知、铃铛/时钟独立点击、快切屏和正常/异常退出的真实栈与菜单行为。 |
+| P1 | “有系统通知时点击可能崩溃”的现场反馈仍未结案 | [兼容页面](../src/ui/compatibility.rs)当时保留 `notification_click_crash_report_unresolved`（2026-11-18 在 26300.9818 双屏实机上，有通知时点击主副屏时钟、铃铛、通知内容与清除均未复现崩溃，按用户决定移除该标记；通知横幅点击未覆盖，仍无历史崩溃的异常栈）；本轮菜单回调失败不能自动替代该现场复现。补齐有/无通知、铃铛/时钟独立点击、快切屏和正常/异常退出的真实栈与菜单行为。 |
 | P1 | 跨版本热升级时驻留钩子的并存尚未验收 | [钩子模块](../crates/taskbar-adapter/src/hooks.rs)有意保留进程终身的跳板和菜单 detour，加载的适配器会固定至承载进程结束。干净私有进程中的停止转发检查不覆盖已经加载旧 DLL 的 Explorer；需要独立测试旧/新版本钩子链、缓存与激活身份。 |
 | P2 | 控制中心选择与组件作用范围没有完整接入生产通道 | [配置](../src/config.rs)与[迁移](../src/migration.rs)保存 `show_control_center`、`copied_taskbars_only`；[一般路由](../src/routing.rs)也支持独立参数。但 [生产 preflight](../src/platform/taskbar_clock.rs)固定控制中心偏好与副屏规则，[Prepare 协议](../crates/adapter-protocol/src/taskbar.rs)仅运送 `mirror_icons`，把控制中心与图标复制绑定，并固定 `copied_taskbars_only=true`。控制中心不是完全没有复制实现，欠缺的是独立设置和端到端一致的规则。 |
 | P2 | ARM64 原生 Explorer 适配没有实现 | 现有 DLL、指令检查和调用约定面向 x64。见 [ARM64 环境记录](windows11-arm64-test-environment.md)。x64 程序能启动不能证明可以把 x64 DLL 加载到 ARM64 Explorer。 |

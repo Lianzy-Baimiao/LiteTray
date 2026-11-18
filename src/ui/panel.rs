@@ -103,6 +103,42 @@ pub(super) unsafe fn hide(hwnd: HWND) {
         ShowWindow(hwnd, SW_HIDE);
     }
 }
+pub(super) unsafe fn scale_for_interface(hwnd: HWND, size: u32, previous: u32) {
+    unsafe {
+        let mut bounds: RECT = std::mem::zeroed();
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = size_of::<MONITORINFO>() as u32;
+        if GetWindowRect(hwnd, &mut bounds) == 0
+            || GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut info) == 0
+        {
+            return;
+        }
+        let margin = (10 * GetDpiForWindow(hwnd).max(96) / 96) as i32;
+        let work = info.rcWork;
+        let old_width = (bounds.right - bounds.left).max(1);
+        let old_height = (bounds.bottom - bounds.top).max(1);
+        let factor = (size as f64 / previous.max(1) as f64)
+            .min((work.right - work.left - 2 * margin).max(1) as f64 / old_width as f64)
+            .min((work.bottom - work.top - 2 * margin).max(1) as f64 / old_height as f64);
+        let width = (old_width as f64 * factor).round().max(1.) as i32;
+        let height = (old_height as f64 * factor).round().max(1.) as i32;
+        SetWindowPos(
+            hwnd,
+            null_mut(),
+            bounds.left.clamp(
+                work.left + margin,
+                (work.right - margin - width).max(work.left + margin),
+            ),
+            bounds.top.clamp(
+                work.top + margin,
+                (work.bottom - margin - height).max(work.top + margin),
+            ),
+            width,
+            height,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+}
 fn contains(rect: popup::Rect, point: POINT) -> bool {
     point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
 }

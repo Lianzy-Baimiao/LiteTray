@@ -280,7 +280,7 @@ fn run() -> Result<(), String> {
         }
         Some("--help") => {
             println!(
-                "LiteTray [--settings | --calendar | --clock-preview | --background | --show-secondary [calendar|agenda|timers|clock|weather-format|appearance|proxy] | --diagnose [file] | --compatibility-report <new-report.json> [--system-root <Windows-directory>] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-app-icon | --self-test-clock | --self-test-shell-source | --self-test-preview-recovery | --test-secondary-clock <report.json> | --test-secondary-tray <report.json> | --test-taskbar-compatibility <new-report.json> [--clock-only] (LIVE primary takeover and restore; isolated test systems only) | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
+                "LiteTray [--settings | --calendar | --clock-preview | --background | --show-secondary [calendar|agenda|timers|clock|weather-format|appearance|proxy|interface] | --diagnose [file] | --compatibility-report <new-report.json> [--system-root <Windows-directory>] | --weather-check [file] | --check-updates | --preview-windhawk <profile.json> [new-report.json] | --self-test-app-icon | --self-test-clock | --self-test-shell-source | --self-test-preview-recovery | --test-secondary-clock <report.json> | --test-secondary-tray <report.json> | --test-taskbar-compatibility <new-report.json> [--clock-only] (LIVE primary takeover and restore; isolated test systems only) | --prepare-symbols [cache] | --probe-taskbar [file] | --inspect-taskbar [file]]"
             );
             Ok(())
         }

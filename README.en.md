@@ -65,7 +65,7 @@ Choose **General → Language**, then save. Templates, entry titles and notes ke
 
 Taskbar integration uses an adapter inside Explorer and some undocumented Shell interfaces. Windows updates can affect compatibility, and adapter faults can affect Explorer. QQ popup placement is a separate experimental option, disabled by default.
 
-A reported crash when clicking with Windows notifications present is still awaiting reproduction and a fix. See the [integration notes, Chinese](docs/taskbar-integration-and-store.md) and [Releases](https://github.com/Lianzy-Baimiao/LiteTray/releases) for known limitations and validation details.
+The earlier report of a crash when clicking with Windows notifications present did not recur in 5.17.0 retesting on a dual-monitor 26300.9818 system (clock on both taskbars, notification bell, notification content and dismissal; toast banners were not covered). See the [integration notes, Chinese](docs/taskbar-integration-and-store.md) and [Releases](https://github.com/Lianzy-Baimiao/LiteTray/releases) for known limitations and validation details.
 
 ## Development and support
 

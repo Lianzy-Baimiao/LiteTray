@@ -65,7 +65,7 @@
 
 任务栏接管通过 Explorer 进程内适配器和部分未公开的 Shell 接口实现，系统更新可能影响兼容性；适配器故障也可能影响 Explorer。QQ 弹窗定位为独立实验选项，默认关闭。
 
-存在 Windows 通知时点击可能崩溃的反馈仍待复现与修复。其他已知限制和验证情况见 [任务栏接入说明](docs/taskbar-integration-and-store.md) 与 [Releases](https://github.com/Lianzy-Baimiao/LiteTray/releases)。
+此前“有 Windows 通知时点击可能崩溃”的反馈，在 5.17.0 的 26300.9818 双屏实机复测中未再出现（点击主副屏时钟、通知铃铛、通知内容和清除；通知横幅未覆盖）。其他已知限制和验证情况见 [任务栏接入说明](docs/taskbar-integration-and-store.md) 与 [Releases](https://github.com/Lianzy-Baimiao/LiteTray/releases)。
 
 ## 开发与支持
 
