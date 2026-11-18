@@ -274,6 +274,27 @@ fn appearance_layout_fits_small_and_large_fonts_in_every_material() {
                         app.scale(820),
                         SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
                     );
+                    // Windows caps a window at the size of the display. On
+                    // one too small for this font size's minimum window the
+                    // layout cannot be judged; say so instead of auditing a
+                    // truncated window.
+                    let mut placed = std::mem::zeroed();
+                    GetWindowRect(app.hwnd, &mut placed);
+                    if placed.right - placed.left < app.scale(1060)
+                        || placed.bottom - placed.top < app.scale(820)
+                    {
+                        eprintln!(
+                            "skipped {style:?} size={size} dark={dark}: display allows only {}x{}, layout needs {}x{}",
+                            placed.right - placed.left,
+                            placed.bottom - placed.top,
+                            app.scale(1060),
+                            app.scale(820)
+                        );
+                        DestroyWindow(app.hwnd);
+                        app.release_resources();
+                        interface::configure(&InterfaceConfig::default());
+                        continue;
+                    }
                     app.page = PAGE;
                     app.render();
                     audit_native_layout(

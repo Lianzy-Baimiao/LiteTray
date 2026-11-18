@@ -458,16 +458,39 @@ pub(super) fn on_isolated_desktop(check: impl FnOnce() + Send + 'static) {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
+        // Drain both pipes while waiting: a long failure report would
+        // otherwise fill the pipe, block the child and look like a timeout.
+        let drain = |mut pipe: Box<dyn std::io::Read + Send>| {
+            thread::spawn(move || {
+                let mut text = Vec::new();
+                let _ = pipe.read_to_end(&mut text);
+                text
+            })
+        };
+        let stdout = drain(Box::new(child.stdout.take().unwrap()));
+        let stderr = drain(Box::new(child.stderr.take().unwrap()));
         let deadline = Instant::now() + Duration::from_secs(20);
+        let mut timed_out = false;
         while child.try_wait().unwrap().is_none() {
             if Instant::now() >= deadline {
                 let _ = child.kill();
-                let _ = child.wait();
-                panic!("isolated settings test timed out: {name}");
+                timed_out = true;
+                break;
             }
             thread::sleep(Duration::from_millis(10));
         }
-        let output = child.wait_with_output().unwrap();
+        let status = child.wait().unwrap();
+        let output = std::process::Output {
+            status,
+            stdout: stdout.join().unwrap(),
+            stderr: stderr.join().unwrap(),
+        };
+        assert!(
+            !timed_out,
+            "isolated settings test timed out: {name}
+{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         assert!(
             output.status.success(),
             "isolated settings test failed: {}{}",
