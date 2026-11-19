@@ -102,6 +102,7 @@ $documents += @('docs/diagnostic-responsiveness-5.16.4.md')
 $documents += @('docs/explorer-safety-audit-2026-11-14.md')
 $documents += @('docs/explorer-recheck-5.16.5-2026-11-14.md')
 $documents += @('docs/explorer-recheck-5.16.6-2026-11-14.md')
+$documents += @('docs/images/appearance-5.17.1-zh-light.png','docs/images/appearance-5.17.1-zh-dark.png','docs/images/appearance-5.17.1-en-light.png','docs/images/appearance-5.17.1-en-dark.png')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null

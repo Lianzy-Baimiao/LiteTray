@@ -7,6 +7,7 @@
 - `compatibility-5.14.0-{zh,en}-light.png`：5.14.0 新增兼容性页的原生窗口预览，在私有桌面渲染，系统版本与检测时间使用固定示例，页面中的模块目录来自内置资料。不是宿主实时检测或新版本实测证明；分别来自两个语言输出的 `settings-light-11.png`。
 - `compatibility-5.15.0-{zh,en}-light.png`：5.15.0 按模块实现识别后的页面预览，来自 `local/compatibility-traits/ui-{zh,en}/settings-light-11.png`。沿用私有桌面的原生渲染与固定示例数据，展示模块数量、实现等价数量和逐功能状态，不代表图中系统的本轮运行验收。
 - `compatibility-5.15.1-{zh,en}-light.png`：简化后的兼容性页，来自 `local/compatibility-ui-5.15.1/{zh,en}/settings-light-11.png`。首屏展示结论、设置入口和功能状态，诊断资料默认折叠。使用固定示例检查结果，不是本机检测或新增 Windows 实测证据。
+- `appearance-5.17.1-{zh,en}-{light,dark}.png`：5.17.1 的“界面外观”页，来自 `local/readme-5.17.1-{zh,en}/settings-{light,dark}-13.png`。默认的精修原生风格，在私有桌面按原始分辨率渲染；页脚为渲染用的示例状态文字，不含用户数据。
 
 The taskbar is a live capture of version 5.12.0. Calendar previews are rendered from the current native window and controls, with synthetic weather and schedules. They do not contain the user's agenda or weather cache. Each language and theme is rendered separately at its original resolution.
 
@@ -17,6 +18,6 @@ The taskbar is a live capture of version 5.12.0. Calendar previews are rendered 
 .\tools\Render-UI.ps1 -OutputDirectory local\readme-en -Language en
 ```
 
-使用输出中的 `settings-light-flyout.png` 和 `settings-dark-flyout.png`。更新图片文件名与两个 README 的引用，避免浏览器继续使用旧图缓存。其他未带版本号的图片用于既有专题文档，不代表当前首页预览。
+使用输出中的 `settings-light-flyout.png` 和 `settings-dark-flyout.png`；设置各页为 `settings-{light,dark}-<页序号>.png`，“界面外观”是 13。更新图片文件名与两个 README 的引用，避免浏览器继续使用旧图缓存。其他未带版本号的图片用于既有专题文档，不代表当前首页预览。
 
 Use `settings-light-flyout.png` and `settings-dark-flyout.png` from each output directory. Update filenames and both README references when refreshing the preview to avoid stale image caches. Older, unversioned images support existing topic documentation.

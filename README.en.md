@@ -19,43 +19,61 @@ A useful clock, tray and calendar on every monitor. A native Windows desktop app
   <img alt="5.12.0 calendar with lunar dates, festivals, hourly weather and schedules" src="docs/images/calendar-5.12.0-en-light.png">
 </picture>
 
-5.12.0 previews, refreshed on 2026-11-08. The taskbar is a live secondary-monitor capture using the user's Chinese clock template. The calendar uses the current native controls with sample weather and schedule data; lunar text and sample entry titles retain their original language. Images follow the page's light or dark theme.
+5.12.0 previews, refreshed on 2026-11-08. The taskbar is a live secondary-monitor capture using the user's Chinese clock template. The calendar was rendered by that version's native controls with sample weather and schedule data; lunar text and sample entry titles retain their original language. Images follow the page's light or dark theme.
 
 ## Download
 
 [**Download the Windows x64 installer**](https://github.com/Lianzy-Baimiao/LiteTray/releases/latest) · [Changelog](CHANGELOG.md)
 
-Download `LiteTray-<version>-Setup-x64.exe` from Releases. Installation is per user and needs no administrator privileges. Settings, schedules and weather cache live in `%LOCALAPPDATA%\LiteTray`; upgrades and uninstall preserve user data.
+Download `LiteTray-<version>-Setup-x64.exe` from Releases, or the portable `LiteTray-<version>-windows-x64.zip`. The installer works per user and needs no administrator privileges. Settings, schedules and weather cache live in `%LOCALAPPDATA%\LiteTray`; upgrades and uninstall preserve user data. The installer is not digitally signed.
 
-**Compatibility:** The 5.16.2 default registry includes **nine x64 module sets from Windows 11 21H2 22000.318 (primary clock only), 22H2 22621.1702, 23H2 22631.2861, Enterprise LTSC 2024 Evaluation 26100.1742, 25H2 26200.8037 / 26200.8457, 26300.9711 / 26300.9818, and 26H1 28000.1**. The final 5.16.2 default package has passed single-monitor runtime checks on 26H1. Build 28000.3365 remains experimental and ARM64 is not implemented. Host, XAML source and tray implementations are recognized independently, with strict equivalence for defined metadata-only changes. A requested, compatible clock can run while an unrecognized tray is deferred; see [recognition rules](docs/module-recognition.md). 21H2 uses its separately verified notification host and combined time/date text. Its primary-clock text, width and restoration checks passed; both lines share the first line’s style, and secondary clocks and tray mirroring remain unavailable. See the [21H2 record](docs/compatibility-21h2.md). The 22H2 and 23H2 systems have each passed primary-clock text/width updates, restoration and tray preparation/stop checks in independently installed VMs; see the [22H2 / 23H2 record](docs/compatibility-22h2-23h2.md) for tested binaries and scope. Earlier evidence remains in the [9818](docs/compatibility-9818.md), [25H2 8457](docs/compatibility-8457.md), and [8037 / LTSC](docs/compatibility-next-versions.md) records; 9711 retains historical evidence. These profiles do not cover every cumulative update. Actual input, menus, tray replication, multiple monitors and mixed DPI are tracked by scenario; their full matrix is not yet complete. LiteTray is still in development and the installer is not digitally signed.
+## Compatibility
 
-5.15.0 also fixes a restoration path that could leave old taskbar sessions blocked after display changes and repeatedly reject clock commands. See the [recovery fix](docs/hotplug-recovery-5.15.0.md) for the cause, isolated regressions and upgrade guidance, and the [5.15.0 verification record](docs/compatibility-traits-5.15.0.md) for the exact package, guest results and retained failures. These checks do not constitute physical multi-monitor hotplug acceptance.
+Windows 11 x64 only; ARM64 is not implemented. The taskbar clock and tray mirroring are enabled only where the taskbar modules have been checked. Nine module sets are built in:
 
-5.15.2 adds verification of the previous published package and this release candidate on ordinary **Pro 24H2 26100.1742** and **Pro 25H2 26200.8037**. Both independently installed VMs passed primary-clock and tray preparation/Stop checks, plus automatic recovery after actual resolution changes. The 25H2 VM also passed recovery through an actual `2 → 1 → 2` active-display cycle without restarting Explorer. Ordinary Pro 24H2 has the same taskbar module bytes as LTSC and reuses the existing implementation. Physical hotplug, mixed DPI and complete tray interaction still need verification; see the [additional verification record](docs/compatibility-completion-5.15.1.md) for tested packages and precise scope.
+| Windows 11 | Build | Scenarios actually tested | Record (Chinese) |
+| --- | --- | --- | --- |
+| 21H2 | 22000.318 | Primary clock only: text, width, restoration. Both lines share the first line's style; secondary clocks and tray mirroring are unavailable | [21H2](docs/compatibility-21h2.md) |
+| 22H2 / 23H2 | 22621.1702 / 22631.2861 | Primary-clock text and width updates, restoration, tray preparation and stop | [22H2 / 23H2](docs/compatibility-22h2-23h2.md) |
+| 24H2 | 26100.1742 (Pro and Enterprise LTSC 2024) | Primary clock, tray preparation and stop; on Pro, also automatic recovery after a resolution change | [8037 / LTSC](docs/compatibility-next-versions.md) · [additional checks](docs/compatibility-completion-5.15.1.md) |
+| 25H2 | 26200.8037 | Primary clock, tray preparation and stop; automatic recovery after a resolution change, a virtual `2 → 1 → 2` display cycle, and switching the second display between 100% and 125% scaling; primary-clock calendar clicks | [additional checks](docs/compatibility-completion-5.15.1.md) · [5.16.1](docs/compatibility-release-5.16.1.md) |
+| 25H2 | 26200.8457 | Single display: primary-clock text and width updates, restoration, tray preparation and stop | [8457](docs/compatibility-8457.md) |
+| 26H1 | 28000.1 | Single display: clock text updates, width changes and restoration, tray preparation and stop, primary-clock calendar clicks | [26H1](docs/compatibility-26h1.md) |
+| 26H2 | 26300.9711 / 26300.9818 | 9818: single-display primary-clock text and width updates, restoration, tray preparation and stop; on a physical dual-monitor system with notifications present, clicks on both clocks, the notification bell, notification content and dismissal. 9711 has historical records only | [9818](docs/compatibility-9818.md) |
 
-5.16.1 adds actual 25H2 dual-monitor recovery checks at 100% / 125% scaling and fixes the calendar opening without foreground focus after a clock click. The final binaries passed four real primary-clock clicks and normal-exit restoration. See the [5.16.1 verification record](docs/compatibility-release-5.16.1.md) for exact files, scenarios and remaining gaps.
+The single-display 9818 checks ran in Windows Sandbox and the dual-monitor checks on a physical system; everything else ran in independently installed virtual machines. The table lists the scenarios that were tested; it does not cover every cumulative update of a release. Real input, menus, tray mirroring, multiple monitors and mixed DPI are tracked by scenario and the full matrix is not complete. Physical monitor hotplug has not been accepted either. Build `28000.3365` of 26H1 remains experimental.
 
-On an independently installed Pro 26H1 `28000.1` x64 VM with one display, the final 5.16.2 default package completed three clock text updates, 240→320 width changes and restoration, tray preparation/Stop, and four primary-clock calendar clicks. After normal exit, the native clock advanced during a 75-second observation and Explorer stayed running. Tray replication, wheel volume, the full menu matrix, multiple monitors and mixed DPI were not tested. The exact tested binaries and independent review are documented in the [26H1 verification record](docs/compatibility-26h1.md).
+Host, XAML source and tray implementations are recognized separately, and a module that differs only in defined metadata can reuse an existing adaptation. A compatible clock that is enabled keeps working while an unrecognized tray is deferred; see the [recognition rules, Chinese](docs/module-recognition.md). For recovery after display changes, see the [recovery fix, Chinese](docs/hotplug-recovery-5.15.0.md). The result for your own computer is under **Settings → Compatibility**.
 
 ## Features
 
 - **Taskbar clocks:** templates, individual weather fields, fonts, colors, alignment and presets. Width follows content; compact taskbars can use one or two lines.
 - **Multiple monitors:** mirror the primary tray's icon order and visibility to secondary displays. Clock replacement and icon mirroring have separate switches.
-- **Calendar and weather:** lunar dates, solar terms, popular festivals, Chinese public holidays and adjusted workdays; hourly forecasts, city search and approximate local location, with keyless weather providers.
+- **Calendar and weather:** lunar dates, solar terms, popular festivals, Chinese public holidays and adjusted workdays; hourly forecasts, city search and approximate local location, with keyless weather providers. Detach and drag the calendar to keep it open.
 - **Local schedules:** tasks, events, birthdays, anniversaries and countdowns, including editing directly in the calendar flyout.
 - **Alarms and focus:** alarms, Pomodoro sessions, timers and optional sounds. Optional wheel volume control and middle-click mute over the taskbar clock.
-- **Windows appearance:** system light/dark theme, accent colors and high contrast; detach and drag the calendar to keep it open.
+- **Appearance:** three styles for the settings window and the calendar flyout (Refined native, Soft material, Liquid glass), rounded or square corners, interface font and size. Follows the Windows light/dark theme, accent color and high contrast.
+- **Proxy:** weather, city search, holiday updates and update checks can follow the system proxy, connect directly, or use a manual HTTP / HTTPS / SOCKS5 proxy, with a connection test.
 - **UI languages:** Simplified Chinese and English, following the Windows display language by default, with a manual choice in General. Lunar dates, almanac text and upstream holiday notices retain their original language.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/appearance-5.17.1-en-dark.png">
+  <img alt="5.17.1 Appearance page with three styles, corners, font, size and glass effects" src="docs/images/appearance-5.17.1-en-light.png">
+</picture>
+
+The Appearance page in 5.17.1, rendered offscreen by the native controls in the default Refined native style.
 
 ## Getting started
 
 Choose to launch LiteTray when installation finishes to open settings. The home page's Taskbar clock card lets you enable the custom clock or restore the system clock directly. Use Clock settings to customize it, and Multiple monitors to choose your displays. Click the taskbar clock to open the calendar. An attached panel closes when you click outside it; a detached panel stays open. Closing settings keeps LiteTray running; use the tray menu to exit.
 
-Open **Settings → Compatibility** to see this computer's check results and feature limitations, with shortcuts to clock and multi-monitor settings. In 5.15.1, these fit on the first screen; module information and earlier test records are under Diagnostic details. You can save a report and open its folder. Passing the initial check means a feature is ready to try; LiteTray checks the actual connection when you enable it.
+Open **Settings → Appearance** to change the style of the settings window and the calendar flyout. Changes preview immediately and are kept once you save.
+
+Open **Settings → Compatibility** to see this computer's check results and feature limitations, with shortcuts to clock and multi-monitor settings. Module information and earlier test records are under Diagnostic details. You can save a report and open its folder. Passing the initial check means a feature is ready to try; LiteTray checks the actual connection when you enable it.
 
 ![5.15.1 Compatibility page, rendered by the native UI with sample check results](docs/images/compatibility-5.15.1-en-light.png)
 
-[Usage and development guide, Chinese](docs/usage.md) · [Installer guide, Chinese](docs/installer.md) · [Weather templates, Chinese](docs/weather-format.md)
+[Usage and development guide, Chinese](docs/usage.md) · [Installer guide, Chinese](docs/installer.md) · [Weather templates, Chinese](docs/weather-format.md) · [Proxy settings, Chinese](docs/proxy-settings-5.16.4.md)
 
 [Compatibility checks and offline reports, Chinese](docs/compatibility.md) · [Windows 11 compatibility plan, Chinese](docs/windows11-compatibility-plan.md)
 
@@ -65,7 +83,11 @@ Choose **General → Language**, then save. Templates, entry titles and notes ke
 
 Taskbar integration uses an adapter inside Explorer and some undocumented Shell interfaces. Windows updates can affect compatibility, and adapter faults can affect Explorer. QQ popup placement is a separate experimental option, disabled by default.
 
-The earlier report of a crash when clicking with Windows notifications present did not recur in 5.17.0 retesting on a dual-monitor 26300.9818 system (clock on both taskbars, notification bell, notification content and dismissal; toast banners were not covered). See the [integration notes, Chinese](docs/taskbar-integration-and-store.md) and [Releases](https://github.com/Lianzy-Baimiao/LiteTray/releases) for known limitations and validation details.
+The earlier report of a crash when clicking with Windows notifications present did not recur in 5.17.0 retesting on a dual-monitor 26300.9818 system (clock on both taskbars, notification bell, notification content and dismissal; toast banners were not covered).
+
+A larger interface font size needs a larger settings window. Size 20 needs about 1513×1170 logical pixels, and the content does not fit on a display with a smaller work area.
+
+See the [integration notes, Chinese](docs/taskbar-integration-and-store.md) and [Releases](https://github.com/Lianzy-Baimiao/LiteTray/releases) for other known limitations and validation details.
 
 ## Development and support
 
