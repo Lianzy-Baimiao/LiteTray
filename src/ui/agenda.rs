@@ -240,6 +240,21 @@ pub(super) unsafe fn refresh(hwnd: HWND) {
         }
     }
 }
+/// Shows a view that was kept while hidden as a newly created one would
+/// appear: with the current store contents and without an old notice.
+pub(super) unsafe fn resume(hwnd: HWND) {
+    unsafe {
+        if let Some(cell) =
+            (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RefCell<View>).as_ref()
+            && let Ok(mut view) = cell.try_borrow_mut()
+        {
+            let error = view.store.borrow().error.clone();
+            view.message = error.unwrap_or_default();
+            set_text(view.field(MESSAGE), &view.message);
+            view.populate();
+        }
+    }
+}
 pub(super) unsafe fn open_date(hwnd: HWND, date: NaiveDate) {
     unsafe {
         if let Some(cell) =

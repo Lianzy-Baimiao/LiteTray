@@ -3,20 +3,101 @@
 use super::*;
 const SS_ENDELLIPSIS: u32 = 0x4000;
 
+/// Pages kept alive while hidden, and built during idle time before their
+/// first visit, most expensive first. They are the form pages whose controls
+/// show nothing but draft values, and the calendar and organizer views,
+/// which own their state and catch up with the store when shown.
+pub(super) const KEPT_PAGES: [usize; 8] = [7, appearance_settings::PAGE, 8, 9, 1, 10, 4, 0];
+
+/// Identifies one built page: its layout, its palette and the draft values
+/// its own controls show. Another page's edits leave the key unchanged.
 #[derive(PartialEq, Eq)]
 pub(super) struct PageKey {
     pub page: usize,
     layout: (i32, i32, u32),
-    clock: Vec<u8>,
+    dark: bool,
+    bound: Vec<u8>,
 }
 impl PageKey {
-    pub fn new(page: usize, layout: (i32, i32, u32), config: &Config) -> Option<Self> {
-        matches!(page, 1 | 7 | 10).then(|| Self {
+    pub fn new(page: usize, layout: (i32, i32, u32), dark: bool, config: &Config) -> Option<Self> {
+        Some(Self {
             page,
             layout,
-            clock: serde_json::to_vec(&config.clock).expect("clock settings are serializable"),
+            dark,
+            bound: bound_values(page, config)?,
         })
     }
+    /// The key of the same built page once its controls were collected into
+    /// `config`: a page's own edits must not discard its controls.
+    pub fn collected(self, config: &Config) -> Option<Self> {
+        Some(Self {
+            bound: bound_values(self.page, config)?,
+            ..self
+        })
+    }
+}
+fn bound_values(page: usize, config: &Config) -> Option<Vec<u8>> {
+    // No rest pattern: a new clock setting must be assigned to the page that
+    // shows it before this compiles.
+    let config::ClockConfig {
+        top_line,
+        bottom_line,
+        date_format,
+        time_format,
+        weather_format,
+        show_seconds,
+        show_lunar,
+        show_almanac,
+        font_family,
+        font_size,
+        width,
+        click_action,
+        volume_scroll,
+        volume_mute,
+        compact_two_lines,
+        top_color,
+        bottom_color,
+        alignment,
+        tooltip_line,
+        top_style,
+        bottom_style,
+    } = &config.clock;
+    match page {
+        1 => serde_json::to_vec(&(
+            top_line,
+            bottom_line,
+            date_format,
+            time_format,
+            show_seconds,
+            show_lunar,
+            show_almanac,
+            width,
+            click_action,
+            volume_scroll,
+            volume_mute,
+            compact_two_lines,
+        )),
+        7 => serde_json::to_vec(&(
+            font_family,
+            font_size,
+            top_color,
+            bottom_color,
+            alignment,
+            tooltip_line,
+            top_style,
+            bottom_style,
+        )),
+        10 => serde_json::to_vec(weather_format),
+        4 => serde_json::to_vec(&(
+            config.appearance,
+            config.language,
+            config.start_with_windows,
+        )),
+        appearance_settings::PAGE => serde_json::to_vec(&(&config.interface, config.appearance)),
+        0 | 8 | 9 => Ok(Vec::new()),
+        _ => return None,
+    }
+    .ok()
 }
 pub(super) struct CachedPage {
     pub key: PageKey,
@@ -521,6 +602,44 @@ impl App {
             }
         }
     }
+    /// A kept page outlives edits to its own templates; mark the preset
+    /// those templates now match.
+    unsafe fn sync_preset_choices(&self) {
+        unsafe {
+            let selected = wide("LiteTray.Selected");
+            for (index, (_, top, bottom)) in PRESETS.iter().enumerate() {
+                let hwnd = self.field(PRESET + index as u16);
+                let matches =
+                    self.draft.clock.top_line == *top && self.draft.clock.bottom_line == *bottom;
+                if matches == GetPropW(hwnd, selected.as_ptr()).is_null() {
+                    if matches {
+                        SetPropW(hwnd, selected.as_ptr(), 1usize as HANDLE);
+                    } else {
+                        RemovePropW(hwnd, selected.as_ptr());
+                    }
+                    InvalidateRect(hwnd, null(), 0);
+                }
+            }
+        }
+    }
+    /// Brings a kept page back in line with settings other pages edit.
+    pub(super) unsafe fn refresh_kept_page(&self) {
+        unsafe {
+            match self.page {
+                1 | 7 | 10 => {
+                    widgets::update_preview(self.field(widgets::PREVIEW), &self.draft.clock);
+                    if self.page == 1 {
+                        self.sync_preset_choices();
+                    }
+                    self.update_weather_sample();
+                }
+                appearance_settings::PAGE => self.update_interface_controls(),
+                8 | 9 => agenda::resume(self.field(agenda::ID)),
+                // The calendar follows `update_views`, as its flyout does.
+                _ => {}
+            }
+        }
+    }
     unsafe fn font_picker(
         &mut self,
         value: Option<&str>,
@@ -531,21 +650,9 @@ impl App {
         inherit: bool,
     ) {
         unsafe {
-            let mut names = widgets::fonts().to_vec();
-            if let Some(value) = value.filter(|v| !v.is_empty())
-                && !names.iter().any(|n| n == value)
-            {
-                names.insert(0, value.into());
-            }
-            if inherit {
-                names.insert(0, "沿用公共字体".into());
-            }
-            let index = value
-                .and_then(|v| names.iter().position(|n| n == v))
-                .unwrap_or(0);
-            self.combo(
-                &names.iter().map(String::as_str).collect::<Vec<_>>(),
-                index,
+            self.font_combo(
+                inherit.then_some("沿用公共字体"),
+                value.filter(|value| !value.is_empty()),
                 id,
                 x,
                 y,

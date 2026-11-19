@@ -2520,6 +2520,365 @@ fn settings_cached_pages_preserve_edits_and_invalidate_after_presets_theme_and_r
 }
 
 #[test]
+fn settings_font_pickers_add_installed_names_on_first_use() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-font-list-unused.json"),
+        );
+        let installed = widgets::fonts();
+        let missing = "LiteTray 未安装的字体";
+        app.draft.clock.top_style.font_family = Some(missing.into());
+        app.page = 7;
+        app.render();
+        for id in [205, 806, 809] {
+            assert!(
+                widgets::font_list_pending(app.field(id)),
+                "building a page must not insert every installed font into picker {id}"
+            );
+        }
+        // Showing and collecting the current choices needs no font list.
+        assert_eq!(app.text(205), app.draft.clock.font_family);
+        assert_eq!(app.text(806), missing);
+        assert_eq!(app.text(809), "沿用公共字体");
+        let before = serde_json::to_value(&app.draft).unwrap();
+        app.collect_page().unwrap();
+        assert_eq!(serde_json::to_value(&app.draft).unwrap(), before);
+        assert!(widgets::font_list_pending(app.field(806)));
+
+        // The keyboard works on a closed picker: the names arrive first.
+        let line = app.field(806);
+        SendMessageW(line, WM_KEYDOWN, VK_DOWN as usize, 0);
+        assert!(!widgets::font_list_pending(line));
+        assert_eq!(
+            SendMessageW(line, CB_GETCOUNT, 0, 0),
+            installed.len() as isize + 2,
+            "inherit entry, the configured missing font, then installed fonts"
+        );
+        assert_eq!(SendMessageW(line, CB_GETCURSEL, 0, 0), 2);
+        assert_eq!(app.text(806), installed[0]);
+        SendMessageW(line, WM_KEYDOWN, VK_UP as usize, 0);
+        assert_eq!(app.text(806), missing);
+        SendMessageW(line, WM_KEYDOWN, VK_HOME as usize, 0);
+        assert_eq!(app.text(806), "沿用公共字体");
+
+        // Opening the list keeps the choice it showed while closed.
+        let inherited = app.field(809);
+        SendMessageW(inherited, CB_SHOWDROPDOWN, 1, 0);
+        assert!(!widgets::font_list_pending(inherited));
+        assert_eq!(
+            SendMessageW(inherited, CB_GETCOUNT, 0, 0),
+            installed.len() as isize + 1
+        );
+        assert_eq!(SendMessageW(inherited, CB_GETCURSEL, 0, 0), 0);
+        SendMessageW(inherited, CB_SHOWDROPDOWN, 0, 0);
+        let common = app.field(205);
+        let family = app.draft.clock.font_family.clone();
+        assert_eq!(
+            SendMessageW(common, CB_GETCOUNT, 0, 0),
+            installed.len() as isize + isize::from(!installed.contains(&family))
+        );
+        assert_eq!(app.text(205), family);
+        app.collect_page().unwrap();
+        assert_eq!(app.draft.clock.top_style.font_family, None);
+        assert_eq!(app.draft.clock.bottom_style.font_family, None);
+        assert_eq!(app.draft.clock.font_family, family);
+
+        // The interface font follows the same rule and keeps its meaning of
+        // "first entry follows the system".
+        app.command(NAV + appearance_settings::PAGE as u16);
+        let interface_font = app.field(appearance_settings::FONT);
+        assert!(widgets::font_list_pending(interface_font));
+        assert_eq!(app.collect_interface().unwrap().font_family, None);
+        app.draft.interface.font_family = Some(installed[0].clone());
+        app.render();
+        let interface_font = app.field(appearance_settings::FONT);
+        assert!(widgets::font_list_pending(interface_font));
+        assert_eq!(
+            app.collect_interface().unwrap().font_family.as_deref(),
+            Some(installed[0].as_str())
+        );
+        assert_eq!(
+            SendMessageW(interface_font, CB_GETCOUNT, 0, 0),
+            installed.len() as isize + 1
+        );
+        assert_eq!(
+            app.collect_interface().unwrap().font_family.as_deref(),
+            Some(installed[0].as_str())
+        );
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+    });
+}
+
+#[test]
+fn settings_kept_pages_are_built_while_idle_and_survive_their_own_edits() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-kept-pages-unused.json"),
+        );
+        app.page = 2;
+        app.render();
+        assert!(
+            !app.prebuild_settings_page() && app.settings_cache.is_empty(),
+            "a hidden settings window builds nothing ahead of time"
+        );
+        ShowWindow(app.hwnd, SW_SHOWNOACTIVATE);
+        UpdateWindow(app.hwnd);
+        let shown = (app.page_host, app.children.len(), app.fields.len());
+        let mut built = 0;
+        while app.prebuild_settings_page() {
+            built += 1;
+            assert!(
+                built <= settings::KEPT_PAGES.len(),
+                "idle building must end"
+            );
+        }
+        assert_eq!(built, settings::KEPT_PAGES.len());
+        assert_eq!(
+            (
+                app.page,
+                app.page_host,
+                app.children.len(),
+                app.fields.len()
+            ),
+            (2, shown.0, shown.1, shown.2),
+            "building hidden pages must leave the shown page as it was"
+        );
+        assert!(!app.field(301).is_null());
+        for id in [widgets::PREVIEW, dashboard::ID, agenda::ID] {
+            assert!(
+                app.field(id).is_null(),
+                "control {id} of a hidden page must not be registered as shown"
+            );
+        }
+        let kept = |app: &App, page: usize| {
+            app.settings_cache
+                .iter()
+                .find(|kept| kept.key.page == page)
+                .map(|kept| kept.window)
+        };
+        for page in settings::KEPT_PAGES {
+            let window = kept(&app, page).unwrap();
+            assert_eq!(IsWindowVisible(window), 0);
+            let start = Instant::now();
+            app.command(NAV + page as u16);
+            RedrawWindow(
+                app.hwnd,
+                null(),
+                null_mut(),
+                RDW_UPDATENOW | RDW_ALLCHILDREN,
+            );
+            eprintln!(
+                "first visit of prebuilt page {page}: {}us",
+                start.elapsed().as_micros()
+            );
+            assert_eq!(
+                app.page_host, window,
+                "the first visit of page {page} must show the page built while idle"
+            );
+            assert_ne!(IsWindowVisible(window), 0);
+        }
+        assert!(!app.prebuild_settings_page(), "nothing is left to build");
+
+        // The organizer views keep their own state while hidden, and catch
+        // up with entries saved elsewhere when they are shown again.
+        app.command(NAV + 8);
+        let organizer_view = app.field(agenda::ID);
+        let list = GetDlgItem(organizer_view, 4000);
+        let listed = SendMessageW(list, LB_GETCOUNT, 0, 0);
+        SetWindowTextW(
+            GetDlgItem(organizer_view, 4010),
+            wide("尚未保存的标题").as_ptr(),
+        );
+        app.command(NAV + 9);
+        assert_ne!(app.field(agenda::ID), organizer_view);
+        let mut entry = organizer::Entry::new(organizer::Kind::ALL[1], Local::now().date_naive());
+        entry.title = "别处新增的事项".into();
+        app.organizer.borrow_mut().data.put(entry).unwrap();
+        app.command(NAV + 8);
+        assert_eq!(
+            app.field(agenda::ID),
+            organizer_view,
+            "the organizer view is shown again, not rebuilt"
+        );
+        assert_eq!(SendMessageW(list, LB_GETCOUNT, 0, 0), listed + 1);
+        assert_eq!(
+            window_text(GetDlgItem(organizer_view, 4010)),
+            "尚未保存的标题"
+        );
+        app.command(NAV);
+        assert!(!app.field(dashboard::ID).is_null());
+        assert!(!app.prebuild_settings_page());
+
+        // A page's own edits keep its controls, and reach the other pages'
+        // previews without rebuilding them.
+        app.command(NAV + 1);
+        let clock = app.page_host;
+        let style = kept(&app, 7).unwrap();
+        for index in 0..settings::PRESETS.len() as u16 {
+            let preset = app.field(settings::PRESET + index);
+            assert!(GetPropW(preset, wide("LiteTray.Selected").as_ptr()).is_null());
+        }
+        set_text(app.field(201), settings::PRESETS[1].1);
+        set_text(app.field(202), settings::PRESETS[1].2);
+        app.command(NAV + 7);
+        assert_eq!(
+            app.page_host, style,
+            "clock text edits must keep the style page"
+        );
+        let sample = widgets::preview_clock(app.field(widgets::PREVIEW));
+        assert_eq!(sample.top_line, settings::PRESETS[1].1);
+        assert_eq!(sample.bottom_line, settings::PRESETS[1].2);
+        set_text(app.field(801), "#336699");
+        app.command(NAV + 1);
+        assert_eq!(app.page_host, clock, "a page's own edits must keep it");
+        assert_eq!(app.text(201), settings::PRESETS[1].1);
+        assert_eq!(
+            widgets::preview_clock(app.field(widgets::PREVIEW)).top_color,
+            "#336699"
+        );
+        for index in 0..settings::PRESETS.len() as u16 {
+            let preset = app.field(settings::PRESET + index);
+            assert_eq!(
+                !GetPropW(preset, wide("LiteTray.Selected").as_ptr()).is_null(),
+                index == 1,
+                "preset {index} must follow the edited templates"
+            );
+        }
+        app.command(NAV + 7);
+        assert_eq!(app.page_host, style);
+        assert_eq!(app.text(801), "#336699");
+        app.command(NAV + 1);
+
+        // A preset rewrites style settings from the clock page. The kept
+        // style page is out of date: idle time replaces it before a visit.
+        app.command(settings::PRESET + 2);
+        assert_eq!(app.draft.clock.top_style.font_size, Some(14));
+        assert!(app.prebuild_settings_page());
+        let rebuilt = kept(&app, 7).unwrap();
+        assert_eq!(IsWindow(style), 0, "the outdated style page is released");
+        assert!(!app.prebuild_settings_page());
+        app.command(NAV + 7);
+        assert_eq!(app.page_host, rebuilt);
+        assert_eq!(app.text(807), "14");
+        assert_eq!(app.text(801), "");
+
+        // Only the two navigation entries that changed state are repainted;
+        // the rest of the persistent shell keeps its pixels.
+        UpdateWindow(app.hwnd);
+        RedrawWindow(
+            app.hwnd,
+            null(),
+            null_mut(),
+            RDW_UPDATENOW | RDW_ALLCHILDREN,
+        );
+        app.command(NAV + appearance_settings::PAGE as u16);
+        let pending = |hwnd: HWND| GetUpdateRect(hwnd, null_mut(), 0) != 0;
+        assert!(pending(app.field(NAV + 7)));
+        assert!(pending(app.field(NAV + appearance_settings::PAGE as u16)));
+        assert!(!pending(app.field(NAV + 1)));
+        assert!(!pending(app.field(SAVE)));
+        assert!(pending(app.page_host));
+        DestroyWindow(app.hwnd);
+        app.release_resources();
+    });
+}
+
+#[test]
+fn settings_idle_timer_builds_kept_pages_once_the_window_is_shown() {
+    on_isolated_desktop(|| unsafe {
+        let mut app = app_for_check(
+            false,
+            96,
+            &std::env::temp_dir().join("litetray-idle-build-unused.json"),
+        );
+        app.page = 0;
+        app.render();
+        let hwnd = app.hwnd;
+        STATE.with(|state| *state.borrow_mut() = Some(app));
+        let pump = |until: Duration, done: &dyn Fn() -> bool| {
+            let end = Instant::now() + until;
+            while Instant::now() < end && !done() {
+                let mut message: MSG = std::mem::zeroed();
+                while PeekMessageW(&mut message, hwnd, WM_TIMER, WM_TIMER, PM_REMOVE) != 0 {
+                    if message.wParam == PREBUILD_TIMER {
+                        DispatchMessageW(&message);
+                    }
+                }
+                thread::sleep(Duration::from_millis(4));
+            }
+        };
+        let kept = || STATE.with(|state| state.borrow().as_ref().unwrap().settings_cache.len());
+        let ready = || {
+            STATE.with(|state| {
+                state
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .pending_kept_page()
+                    .is_none()
+            })
+        };
+        pump(Duration::from_millis(400), &|| false);
+        assert_eq!(kept(), 0, "a hidden settings window must stay idle");
+
+        // Showing the window is the only trigger: no page was visited.
+        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        pump(Duration::from_secs(8), &ready);
+        assert!(ready());
+        assert_eq!(kept(), settings::KEPT_PAGES.len() - 1);
+        // The timer stops once every page is built.
+        pump(Duration::from_millis(400), &|| false);
+        let mut message: MSG = std::mem::zeroed();
+        assert_eq!(
+            PeekMessageW(&mut message, hwnd, WM_TIMER, WM_TIMER, PM_NOREMOVE),
+            0,
+            "the idle timer must end with the last page"
+        );
+
+        // While App is borrowed (a modal prompt), a tick changes nothing and
+        // the timer survives to finish the work afterwards.
+        STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            let app = state.as_mut().unwrap();
+            app.command(NAV + 1);
+            app.command(settings::PRESET + 2);
+            assert!(app.pending_kept_page().is_some());
+            pump(Duration::from_millis(400), &|| false);
+            assert!(app.pending_kept_page().is_some());
+        });
+        pump(Duration::from_secs(8), &ready);
+        assert!(
+            ready(),
+            "every kept page except the shown one is ready again"
+        );
+        assert_eq!(kept(), settings::KEPT_PAGES.len() - 1);
+
+        // A hidden window stops building.
+        ShowWindow(hwnd, SW_HIDE);
+        STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            let app = state.as_mut().unwrap();
+            app.command(settings::PRESET + 3);
+            SetTimer(hwnd, PREBUILD_TIMER, 10, None);
+        });
+        assert!(!ready());
+        pump(Duration::from_millis(300), &|| false);
+        assert!(!ready(), "a hidden settings window must stay idle");
+        STATE.with(|state| {
+            let mut app = state.borrow_mut().take().unwrap();
+            DestroyWindow(hwnd);
+            app.release_resources();
+        });
+        RoUninitialize();
+    });
+}
+
+#[test]
 fn settings_switches_preserve_chrome_drafts_and_native_font_choices() {
     on_isolated_desktop(|| unsafe {
         let mut app = app_for_check(

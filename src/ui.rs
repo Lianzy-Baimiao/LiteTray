@@ -79,6 +79,10 @@ const WM_PREVIEW_CLOCK: u32 = WM_APP + 6;
 const WM_SHOW_SECONDARY: u32 = WM_APP + 7;
 const WM_PREPARE_PANELS: u32 = WM_APP + 8;
 const WM_APPLY_INTERFACE: u32 = WM_APP + 9;
+/// Builds kept settings pages one at a time once the window has been idle.
+/// Timer messages arrive only when no input or paint is waiting.
+const PREBUILD_TIMER: usize = 75;
+const PREBUILD_INTERVAL: u32 = 150;
 const NAV: u16 = 100;
 const SAVE: u16 = 20;
 const STATUS: u16 = 900;
@@ -860,6 +864,39 @@ impl App {
             InvalidateRect(hwnd, null(), 0);
         }
     }
+    /// An installed-font picker: an optional `head` entry, then the fonts.
+    /// Inserting every installed name costs more than the rest of a page,
+    /// so only the current choice is added here; `widgets::font_list` adds
+    /// the names when the picker is first used.
+    unsafe fn font_combo(
+        &mut self,
+        head: Option<&str>,
+        value: Option<&str>,
+        id: u16,
+        x: i32,
+        y: i32,
+        w: i32,
+    ) {
+        unsafe {
+            let items = head.into_iter().chain(value).collect::<Vec<_>>();
+            if items.is_empty() {
+                // Nothing chosen and no head entry: the first installed font
+                // is the selection, so the names are needed at once.
+                let names = widgets::fonts();
+                self.combo(
+                    &names.iter().map(String::as_str).collect::<Vec<_>>(),
+                    0,
+                    id,
+                    x,
+                    y,
+                    w,
+                );
+                return;
+            }
+            self.combo(&items, items.len() - 1, id, x, y, w);
+            widgets::font_list(self.field(id), head.is_some());
+        }
+    }
     fn field(&self, id: u16) -> HWND {
         self.fields.get(&id).copied().unwrap_or(null_mut())
     }
@@ -905,6 +942,7 @@ impl App {
         #[cfg(test)]
         let _timing = navigation_timing::scope(navigation_timing::Phase::Render);
         unsafe {
+            let previous = PALETTE.with(Cell::get);
             self.publish_palette();
             if let Some(calendar) = dashboard::selection(self.field(dashboard::ID)) {
                 self.calendar = Some(calendar);
@@ -921,8 +959,15 @@ impl App {
             let layout = (rect.right, rect.bottom, layout_dpi);
             let rebuild_shell = self.shell_layout != Some(layout);
             let old_page = self.page_host;
-            let old_key = self.settings_key.take();
-            let next_key = settings::PageKey::new(self.page, layout, &self.draft);
+            let dark = self.dark();
+            // Navigation collects a page before leaving it, so its controls
+            // now show the draft. Key it by those values, not by the ones it
+            // was built from: a page's own edits must not discard it.
+            let old_key = self
+                .settings_key
+                .take()
+                .and_then(|key| key.collected(&self.draft));
+            let next_key = settings::PageKey::new(self.page, layout, dark, &self.draft);
             if rebuild_shell {
                 for page in self.settings_cache.drain(..) {
                     DestroyWindow(page.window);
@@ -932,7 +977,7 @@ impl App {
                 .as_ref()
                 .and_then(|key| self.settings_cache.iter().position(|page| &page.key == key))
                 .map(|index| self.settings_cache.remove(index));
-            // Keep at most one inactive instance of each expensive clock page.
+            // Keep at most one inactive instance of each kept page.
             self.settings_cache.retain(|page| {
                 if page.key.page == self.page {
                     DestroyWindow(page.window);
@@ -970,21 +1015,7 @@ impl App {
                 self.children.extend(cached.children);
                 self.fields.extend(cached.fields);
             } else {
-                self.page_host = page::create(
-                    self.hwnd,
-                    design::rect(
-                        self.scale(248),
-                        self.scale(124),
-                        rect.right - self.scale(276),
-                        rect.bottom - self.scale(220),
-                    ),
-                );
-                // Everything inside the page lies on its card.
-                SetPropW(
-                    self.page_host,
-                    wide("LiteTray.Surface").as_ptr(),
-                    1usize as HANDLE,
-                );
+                self.page_host = self.create_page_host(rect);
                 self.children.push(self.page_host);
             }
             if rebuild_shell {
@@ -1082,60 +1113,11 @@ impl App {
                 "设置窗口与点击弹层共用风格、边角和字体。",
             ];
             set_text(self.field(902), descriptions[self.page]);
-            let c = self.draft.clone();
-            if !reused {
-                match self.page {
-                    0 => {
-                        self.home_clock_controls(width);
-                        let mut bounds: RECT = std::mem::zeroed();
-                        GetClientRect(self.page_host, &mut bounds);
-                        InflateRect(&mut bounds, -self.scale(8), -self.scale(8));
-                        bounds.top += self.scale(104);
-                        // The calendar keeps the flyout's proportions. Center
-                        // that surface in a wider settings viewport.
-                        let width = (bounds.right - bounds.left)
-                            .min((bounds.bottom - bounds.top) * popup::WIDTH / popup::HEIGHT);
-                        bounds.left += (bounds.right - bounds.left - width) / 2;
-                        bounds.right = bounds.left + width;
-                        let view = dashboard::create(self.page_host, bounds, self.dark(), false);
-                        self.children.push(view);
-                        self.fields.insert(dashboard::ID, view);
-                        dashboard::bind_store(view, self.organizer.clone());
-                        dashboard::bind_holidays(view, self.holidays.clone());
-                        if let Some(calendar) = self.calendar {
-                            dashboard::restore_selection(view, calendar);
-                        }
-                    }
-                    1 => self.clock_settings(&c, width),
-                    10 => self.weather_format_settings(&c, width),
-                    11 => self.compatibility_settings(width),
-                    12 => self.proxy_settings(&c, width),
-                    13 => self.interface_settings(&c, width),
-                    2 => self.tray_settings(&c, width),
-                    3 => self.weather_settings(&c, width),
-                    4 => self.general_settings(&c, width),
-                    5 => self.about_settings(&c, width),
-                    6 => self.migration_settings(width, height),
-                    7 => self.style_settings(&c, width),
-                    8 | 9 => {
-                        let timers = self.page == 9;
-                        ShowScrollBar(self.page_host, SB_VERT, 0);
-                        let mut bounds: RECT = std::mem::zeroed();
-                        GetClientRect(self.page_host, &mut bounds);
-                        let view = agenda::create(
-                            self.page_host,
-                            bounds,
-                            self.dark(),
-                            self.organizer.clone(),
-                            timers,
-                            self.agenda_scope,
-                            self.agenda_state[timers as usize].as_ref(),
-                        );
-                        self.children.push(view);
-                        self.fields.insert(agenda::ID, view);
-                    }
-                    _ => {}
-                }
+            if reused {
+                self.refresh_kept_page();
+            } else {
+                let c = self.draft.clone();
+                self.build_page(&c, width, height);
             }
             set_text(
                 self.field(STATUS),
@@ -1165,9 +1147,6 @@ impl App {
                     SW_SHOWNA
                 },
             );
-            if ((1..8).contains(&self.page) || matches!(self.page, 10..=13)) && !reused {
-                page::finish(self.page_host);
-            }
             self.update_views();
             #[cfg(test)]
             let show_timing = navigation_timing::scope(navigation_timing::Phase::ShowPage);
@@ -1188,15 +1167,179 @@ impl App {
             #[cfg(test)]
             drop(show_timing);
             self.settings_key = next_key;
-            RedrawWindow(
-                self.hwnd,
-                null(),
-                null_mut(),
-                RDW_INVALIDATE | RDW_ALLCHILDREN,
-            );
+            let active = NAV + self.page as u16;
+            if rebuild_shell || previous.is_none_or(|palette| palette.dark != dark) {
+                RedrawWindow(
+                    self.hwnd,
+                    null(),
+                    null_mut(),
+                    RDW_INVALIDATE | RDW_ALLCHILDREN,
+                );
+            } else if let Some(previous) = previous.filter(|palette| palette.active != active) {
+                // Showing a page invalidates it, and a caption repaints when
+                // its text changes. Of the persistent shell, only the two
+                // navigation entries that changed state are out of date.
+                for id in [previous.active, active] {
+                    InvalidateRect(self.field(id), null(), 0);
+                }
+            }
+            if IsWindowVisible(self.hwnd) != 0 {
+                schedule_prebuild(self.hwnd);
+            }
             if self.page == compatibility::PAGE && !self.compatibility.attempted {
                 self.start_compatibility_check();
             }
+        }
+    }
+
+    unsafe fn create_page_host(&self, client: RECT) -> HWND {
+        unsafe {
+            let host = page::create(
+                self.hwnd,
+                design::rect(
+                    self.scale(248),
+                    self.scale(124),
+                    client.right - self.scale(276),
+                    client.bottom - self.scale(220),
+                ),
+            );
+            // Everything inside the page lies on its card.
+            SetPropW(host, wide("LiteTray.Surface").as_ptr(), 1usize as HANDLE);
+            host
+        }
+    }
+
+    /// Fills the hidden `page_host` with the controls of `self.page`.
+    unsafe fn build_page(&mut self, c: &Config, width: i32, height: i32) {
+        unsafe {
+            match self.page {
+                0 => {
+                    self.home_clock_controls(width);
+                    let mut bounds: RECT = std::mem::zeroed();
+                    GetClientRect(self.page_host, &mut bounds);
+                    InflateRect(&mut bounds, -self.scale(8), -self.scale(8));
+                    bounds.top += self.scale(104);
+                    // The calendar keeps the flyout's proportions. Center
+                    // that surface in a wider settings viewport.
+                    let width = (bounds.right - bounds.left)
+                        .min((bounds.bottom - bounds.top) * popup::WIDTH / popup::HEIGHT);
+                    bounds.left += (bounds.right - bounds.left - width) / 2;
+                    bounds.right = bounds.left + width;
+                    let view = dashboard::create(self.page_host, bounds, self.dark(), false);
+                    self.children.push(view);
+                    self.fields.insert(dashboard::ID, view);
+                    dashboard::bind_store(view, self.organizer.clone());
+                    dashboard::bind_holidays(view, self.holidays.clone());
+                    if let Some(calendar) = self.calendar {
+                        dashboard::restore_selection(view, calendar);
+                    }
+                }
+                1 => self.clock_settings(c, width),
+                10 => self.weather_format_settings(c, width),
+                11 => self.compatibility_settings(width),
+                12 => self.proxy_settings(c, width),
+                13 => self.interface_settings(c, width),
+                2 => self.tray_settings(c, width),
+                3 => self.weather_settings(c, width),
+                4 => self.general_settings(c, width),
+                5 => self.about_settings(c, width),
+                6 => self.migration_settings(width, height),
+                7 => self.style_settings(c, width),
+                8 | 9 => {
+                    let timers = self.page == 9;
+                    ShowScrollBar(self.page_host, SB_VERT, 0);
+                    let mut bounds: RECT = std::mem::zeroed();
+                    GetClientRect(self.page_host, &mut bounds);
+                    let view = agenda::create(
+                        self.page_host,
+                        bounds,
+                        self.dark(),
+                        self.organizer.clone(),
+                        timers,
+                        self.agenda_scope,
+                        self.agenda_state[timers as usize].as_ref(),
+                    );
+                    self.children.push(view);
+                    self.fields.insert(agenda::ID, view);
+                }
+                _ => {}
+            }
+            if (1..8).contains(&self.page) || matches!(self.page, 10..=13) {
+                page::finish(self.page_host);
+            }
+        }
+    }
+
+    /// The key of a kept page that is neither shown nor ready to be shown.
+    unsafe fn pending_kept_page(&self) -> Option<settings::PageKey> {
+        unsafe {
+            let mut client: RECT = std::mem::zeroed();
+            GetClientRect(self.hwnd, &mut client);
+            let layout = (client.right, client.bottom, interface::layout_dpi(self.dpi));
+            if self.shell_layout != Some(layout) || self.page_host.is_null() {
+                // The shell is about to be rebuilt; that render asks again.
+                return None;
+            }
+            let dark = self.dark();
+            settings::KEPT_PAGES
+                .into_iter()
+                .filter(|&page| page != self.page)
+                .filter_map(|page| settings::PageKey::new(page, layout, dark, &self.draft))
+                .find(|key| !self.settings_cache.iter().any(|kept| &kept.key == key))
+        }
+    }
+
+    /// Builds one kept page that is missing or out of date, under a hidden
+    /// host and off the click path; visiting it then only shows it. Returns
+    /// whether the idle timer should keep running.
+    unsafe fn prebuild_settings_page(&mut self) -> bool {
+        unsafe {
+            if IsWindowVisible(self.hwnd) == 0 || IsIconic(self.hwnd) != 0 {
+                return false;
+            }
+            // A drag, an open list or a size loop holds the pointer; building
+            // a page now would stall it. Try again on the next tick.
+            if !GetCapture().is_null() {
+                return true;
+            }
+            let Some(key) = self.pending_kept_page() else {
+                return false;
+            };
+            let mut client: RECT = std::mem::zeroed();
+            GetClientRect(self.hwnd, &mut client);
+            let layout_dpi = interface::layout_dpi(self.dpi);
+            self.settings_cache.retain(|kept| {
+                if kept.key.page == key.page {
+                    DestroyWindow(kept.window);
+                    false
+                } else {
+                    true
+                }
+            });
+            // Builders address `page_host` and register into `children` and
+            // `fields`. Lend them to the hidden page, then put the shown
+            // page back: several pages reuse the same control identifiers.
+            let shown = (self.page, self.page_host);
+            let children = std::mem::take(&mut self.children);
+            let fields = std::mem::take(&mut self.fields);
+            self.page = key.page;
+            self.page_host = self.create_page_host(client);
+            self.children.push(self.page_host);
+            let draft = self.draft.clone();
+            self.build_page(
+                &draft,
+                client.right * 96 / layout_dpi as i32 - 56,
+                client.bottom * 96 / layout_dpi as i32,
+            );
+            let window = self.page_host;
+            (self.page, self.page_host) = shown;
+            self.settings_cache.push(settings::CachedPage {
+                key,
+                window,
+                children: std::mem::replace(&mut self.children, children),
+                fields: std::mem::replace(&mut self.fields, fields),
+            });
+            true
         }
     }
 
@@ -2051,6 +2194,8 @@ impl App {
                 appearance_settings::RESET if self.page == appearance_settings::PAGE => {
                     self.draft.interface = config::InterfaceConfig::default();
                     self.draft.appearance = Appearance::System;
+                    // Applying the preview may collect the page again.
+                    self.show_interface_draft();
                     self.apply_interface_preview();
                     return false;
                 }
@@ -2624,6 +2769,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             SetTimer(hwnd, 2, 500, None);
             return 0;
         }
+        if msg == WM_SHOWWINDOW && w != 0 {
+            schedule_prebuild(hwnd);
+        }
         if msg == WM_TIMER && w == 1 {
             let taskbar = TASKBAR.with(|p| p.borrow().clone());
             if let Some(taskbar) = taskbar {
@@ -2854,6 +3002,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                     app.apply_interface_preview();
                     Some(0)
                 }
+                WM_TIMER if w == PREBUILD_TIMER => {
+                    if !app.prebuild_settings_page() {
+                        KillTimer(hwnd, PREBUILD_TIMER);
+                    }
+                    Some(0)
+                }
                 WM_TIMER if w == 2 => {
                     KillTimer(hwnd, 2);
                     let invalidated = PANELS_INVALIDATED.with(|pending| pending.replace(false));
@@ -3071,6 +3225,14 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM)
             }
         });
         handled.unwrap_or_else(|| DefWindowProcW(hwnd, msg, w, l))
+    }
+}
+/// (Re)starts the idle countdown after which kept settings pages are built.
+/// Every navigation restarts it, so a build never competes with one.
+unsafe fn schedule_prebuild(hwnd: HWND) {
+    unsafe {
+        widgets::prewarm_fonts();
+        SetTimer(hwnd, PREBUILD_TIMER, PREBUILD_INTERVAL, None);
     }
 }
 unsafe fn set_text(hwnd: HWND, text: &str) {

@@ -17,7 +17,7 @@ const CLARITY_LABEL: u16 = 561;
 const EFFECT_STATUS: u16 = 562;
 pub(super) const PREVIEW_TIMER: usize = 87;
 // TBM_GETPOS is WM_USER itself; Windows metadata omits zero-offset messages.
-const TBM_GETPOS: u32 = WM_USER;
+pub(super) const TBM_GETPOS: u32 = WM_USER;
 const STYLE_CARD_HEIGHT: i32 = 104;
 const ROW: i32 = 40;
 
@@ -163,6 +163,14 @@ pub(super) unsafe fn draw_style_card(item: &DRAWITEMSTRUCT, dark: bool) -> bool 
     }
 }
 
+fn appearance_choice(appearance: Appearance) -> usize {
+    match appearance {
+        Appearance::System => 0,
+        Appearance::Light => 1,
+        Appearance::Dark => 2,
+    }
+}
+
 impl App {
     pub(super) unsafe fn interface_settings(&mut self, c: &Config, width: i32) {
         unsafe {
@@ -197,11 +205,7 @@ impl App {
             self.label("颜色模式", 240, row(0) + 8, 200, 24);
             self.combo(
                 &["跟随 Windows", "浅色", "深色"],
-                match c.appearance {
-                    Appearance::System => 0,
-                    Appearance::Light => 1,
-                    Appearance::Dark => 2,
-                },
+                appearance_choice(c.appearance),
                 501,
                 input - 220,
                 row(0) + 3,
@@ -217,22 +221,9 @@ impl App {
                 220,
             );
             self.label("界面字体", 240, row(2) + 8, 200, 24);
-            let mut fonts = widgets::fonts().to_vec();
-            if let Some(face) = &c.interface.font_family
-                && !fonts.contains(face)
-            {
-                fonts.insert(0, face.clone());
-            }
-            fonts.insert(0, tr("跟随系统字体").into());
-            let selected = c
-                .interface
-                .font_family
-                .as_ref()
-                .and_then(|face| fonts.iter().position(|name| name == face))
-                .unwrap_or(0);
-            self.combo(
-                &fonts.iter().map(String::as_str).collect::<Vec<_>>(),
-                selected,
+            self.font_combo(
+                Some("跟随系统字体"),
+                c.interface.font_family.as_deref(),
                 FONT,
                 input - 220,
                 row(2) + 3,
@@ -358,6 +349,68 @@ impl App {
         };
         config.validate()?;
         Ok(config)
+    }
+
+    /// Moves every control of the page to the draft. A value changed in the
+    /// draft alone is otherwise read back from its control, and so undone,
+    /// the next time the page is collected.
+    pub(super) unsafe fn show_interface_draft(&self) {
+        unsafe {
+            if self.page != PAGE {
+                return;
+            }
+            let interface = &self.draft.interface;
+            let selected = wide("LiteTray.Selected");
+            for (index, style) in InterfaceStyle::ALL.into_iter().enumerate() {
+                let card = self.field(FIRST_STYLE + index as u16);
+                if interface.style == style {
+                    SetPropW(card, selected.as_ptr(), 1usize as HANDLE);
+                } else {
+                    RemovePropW(card, selected.as_ptr());
+                }
+                InvalidateRect(card, null(), 0);
+            }
+            let font = self.field(FONT);
+            let family = match &interface.font_family {
+                None => 0,
+                Some(family) => {
+                    let name = wide(family);
+                    // Looking a name up completes a font list that is still
+                    // waiting for its first use.
+                    let found =
+                        SendMessageW(font, CB_FINDSTRINGEXACT, usize::MAX, name.as_ptr() as isize);
+                    if found >= 0 {
+                        found
+                    } else {
+                        SendMessageW(font, CB_ADDSTRING, 0, name.as_ptr() as isize)
+                    }
+                }
+            };
+            for (id, choice) in [
+                (501, appearance_choice(self.draft.appearance)),
+                (
+                    CORNERS,
+                    usize::from(interface.corners == CornerStyle::Square),
+                ),
+                (FONT, family.max(0) as usize),
+                (
+                    SIZE,
+                    interface
+                        .font_size
+                        .saturating_sub(InterfaceConfig::MIN_FONT_SIZE)
+                        as usize,
+                ),
+            ] {
+                SendMessageW(self.field(id), CB_SETCURSEL, choice, 0);
+            }
+            for (id, value) in [
+                (TRANSPARENCY, interface.transparency),
+                (CLARITY, interface.card_clarity),
+            ] {
+                SendMessageW(self.field(id), TBM_SETPOS, 1, value as isize);
+            }
+            self.update_interface_controls();
+        }
     }
 
     pub(super) unsafe fn update_interface_controls(&self) {

@@ -219,7 +219,7 @@ pub(super) unsafe fn style_combo(hwnd: HWND, dark: bool, dpi: u32) {
         SetWindowSubclass(hwnd, Some(combo_proc), 4, 0);
     }
 }
-unsafe fn combo_text(hwnd: HWND, index: i32) -> String {
+pub(super) unsafe fn combo_text(hwnd: HWND, index: i32) -> String {
     unsafe {
         if index < 0 {
             return String::new();

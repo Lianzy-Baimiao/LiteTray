@@ -116,6 +116,107 @@ pub(super) fn fonts() -> &'static [String] {
     })
 }
 
+/// Enumerates the installed fonts off the UI thread, before a picker asks.
+pub(super) fn prewarm_fonts() {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        let _ = thread::Builder::new()
+            .name("LiteTray fonts".into())
+            .spawn(|| {
+                fonts();
+            });
+    });
+}
+
+const FONT_LIST: &str = "LiteTray.FontList";
+/// Marks a picker holding only its `head` entry and its current choice, and
+/// adds the installed names when it is first focused, opened or queried.
+/// Selection, keyboard access and UIA stay those of the native combo box.
+pub(super) unsafe fn font_list(hwnd: HWND, head: bool) {
+    unsafe {
+        SetPropW(
+            hwnd,
+            wide(FONT_LIST).as_ptr(),
+            (1 + usize::from(head)) as HANDLE,
+        );
+        SetWindowSubclass(hwnd, Some(font_list_proc), 31, 0);
+    }
+}
+#[cfg(test)]
+pub(super) unsafe fn font_list_pending(hwnd: HWND) -> bool {
+    unsafe { !GetPropW(hwnd, wide(FONT_LIST).as_ptr()).is_null() }
+}
+unsafe fn fill_font_list(hwnd: HWND) {
+    unsafe {
+        let pending = wide(FONT_LIST);
+        let kind = GetPropW(hwnd, pending.as_ptr()) as usize;
+        if kind == 0 {
+            return;
+        }
+        // Cleared first: the messages below pass through `font_list_proc`.
+        RemovePropW(hwnd, pending.as_ptr());
+        let head = (kind == 2).then(|| design::combo_text(hwnd, 0));
+        let count = SendMessageW(hwnd, CB_GETCOUNT, 0, 0);
+        let value = (count > isize::from(head.is_some()))
+            .then(|| design::combo_text(hwnd, count as i32 - 1));
+        let selected = design::combo_text(hwnd, SendMessageW(hwnd, CB_GETCURSEL, 0, 0) as i32);
+        let installed = fonts();
+        // A configured font that is no longer installed stays selectable.
+        let names = head
+            .iter()
+            .chain(value.iter().filter(|value| !installed.contains(*value)))
+            .chain(installed)
+            .collect::<Vec<_>>();
+        SendMessageW(hwnd, WM_SETREDRAW, 0, 0);
+        SendMessageW(hwnd, CB_RESETCONTENT, 0, 0);
+        let bytes = names
+            .iter()
+            .map(|name| (name.encode_utf16().count() + 1) * 2)
+            .sum::<usize>();
+        SendMessageW(hwnd, CB_INITSTORAGE, names.len(), bytes as isize);
+        for name in &names {
+            SendMessageW(hwnd, CB_ADDSTRING, 0, wide(name).as_ptr() as isize);
+        }
+        SendMessageW(
+            hwnd,
+            CB_SETCURSEL,
+            names
+                .iter()
+                .position(|name| **name == selected)
+                .unwrap_or(0),
+            0,
+        );
+        SendMessageW(hwnd, WM_SETREDRAW, 1, 0);
+        InvalidateRect(hwnd, null(), 0);
+    }
+}
+unsafe extern "system" fn font_list_proc(
+    hwnd: HWND,
+    msg: u32,
+    w: WPARAM,
+    l: LPARAM,
+    id: usize,
+    _: usize,
+) -> LRESULT {
+    unsafe {
+        match msg {
+            // Everything that can move the selection, show the list or
+            // report its rows, including an accessibility client asking for
+            // the control. Painting and reading the current choice do not
+            // need the installed names.
+            WM_SETFOCUS | WM_KEYDOWN | WM_SYSKEYDOWN | WM_CHAR | WM_LBUTTONDOWN
+            | WM_LBUTTONDBLCLK | WM_MOUSEWHEEL | WM_GETOBJECT | CB_SHOWDROPDOWN | CB_GETCOUNT
+            | CB_FINDSTRING | CB_FINDSTRINGEXACT | CB_SELECTSTRING => fill_font_list(hwnd),
+            WM_NCDESTROY => {
+                RemovePropW(hwnd, wide(FONT_LIST).as_ptr());
+                RemoveWindowSubclass(hwnd, Some(font_list_proc), id);
+            }
+            _ => {}
+        }
+        DefSubclassProc(hwnd, msg, w, l)
+    }
+}
+
 pub(super) const FIELD_PAD: &str = "LiteTray.FieldPad";
 /// A single-line edit draws its text at the top of its client area. Shrink
 /// the control to one line in the middle of its box; the parent, which
@@ -655,6 +756,17 @@ pub(super) unsafe fn update_preview(hwnd: HWND, config: &config::ClockConfig) {
         preview(hwnd, config, dark, dpi);
         drop(previous);
         InvalidateRect(hwnd, null(), 0);
+    }
+}
+#[cfg(test)]
+pub(super) unsafe fn preview_clock(hwnd: HWND) -> config::ClockConfig {
+    unsafe {
+        let mut data = 0;
+        assert_ne!(
+            GetWindowSubclass(hwnd, Some(preview_proc), 17, &mut data),
+            0
+        );
+        (*(data as *const PreviewData)).clock.clone()
     }
 }
 #[cfg(test)]

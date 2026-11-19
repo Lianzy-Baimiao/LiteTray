@@ -1,5 +1,7 @@
 use super::*;
-use appearance_settings::{CLARITY, CORNERS, FIRST_STYLE, FONT, PAGE, SIZE, TRANSPARENCY};
+use appearance_settings::{
+    CLARITY, CORNERS, FIRST_STYLE, FONT, PAGE, RESET, SIZE, TBM_GETPOS, TRANSPARENCY,
+};
 use config::{CornerStyle, InterfaceConfig, InterfaceStyle};
 use visual_checks::{app_for_check, audit_native_layout, on_isolated_desktop};
 
@@ -379,6 +381,164 @@ fn slider_preview_keeps_native_controls_and_keyboard_navigation_alive() {
         app.discard_settings_draft();
         DestroyWindow(app.hwnd);
         app.release_resources();
+        interface::configure(&InterfaceConfig::default());
+        RoUninitialize();
+    });
+}
+
+#[test]
+fn restoring_interface_defaults_moves_every_control_and_survives_leaving_the_page() {
+    on_isolated_desktop(|| unsafe {
+        // Start in the colour mode Windows uses, so that returning to
+        // "follow Windows" changes no colour and rebuilds nothing by itself.
+        let system = system_dark();
+        let mut app = app_for_check(
+            system,
+            96,
+            &std::env::temp_dir().join("litetray-interface-reset-unused.json"),
+        );
+        app.page = PAGE;
+        app.render();
+        let hwnd = app.hwnd;
+        STATE.with(|state| *state.borrow_mut() = Some(app));
+        let field = |id: u16| STATE.with(|state| state.borrow().as_ref().unwrap().field(id));
+        let changed = |id: u16| {
+            SendMessageW(
+                hwnd,
+                WM_COMMAND,
+                (CBN_SELCHANGE as usize) << 16 | id as usize,
+                field(id) as isize,
+            );
+            dispatch_appearance(hwnd);
+        };
+        let click = |id: u16| {
+            SendMessageW(hwnd, WM_COMMAND, id as usize, field(id) as isize);
+            dispatch_appearance(hwnd);
+        };
+        let shows_defaults = |context: &str| {
+            STATE.with(|state| {
+                let state = state.borrow();
+                let app = state.as_ref().unwrap();
+                let defaults = InterfaceConfig::default();
+                assert_eq!(app.page, PAGE, "{context}");
+                assert_eq!(app.draft.interface, defaults, "{context}");
+                assert_eq!(app.draft.appearance, Appearance::System, "{context}");
+                assert_eq!(interface::current(), defaults, "{context}");
+                assert_eq!(app.selected(501), 0, "{context}: colour mode");
+                assert_eq!(app.selected(CORNERS), 0, "{context}: corners");
+                assert_eq!(app.selected(FONT), 0, "{context}: font");
+                assert_eq!(
+                    app.text(SIZE),
+                    defaults.font_size.to_string(),
+                    "{context}: size"
+                );
+                for (id, value) in [
+                    (TRANSPARENCY, defaults.transparency),
+                    (CLARITY, defaults.card_clarity),
+                ] {
+                    assert_eq!(
+                        SendMessageW(app.field(id), TBM_GETPOS, 0, 0),
+                        value as isize,
+                        "{context}: slider {id}"
+                    );
+                }
+                for index in 0..3 {
+                    assert_eq!(
+                        !GetPropW(
+                            app.field(FIRST_STYLE + index),
+                            wide("LiteTray.Selected").as_ptr()
+                        )
+                        .is_null(),
+                        index == 0,
+                        "{context}: style card {index}"
+                    );
+                }
+            });
+        };
+        let leave_and_return = || {
+            STATE.with(|state| {
+                let mut state = state.borrow_mut();
+                let app = state.as_mut().unwrap();
+                // Leaving reads the controls back into the draft.
+                app.command(NAV + 7);
+                app.command(NAV + PAGE as u16);
+            });
+        };
+
+        // Choices that repaint the window without rebuilding its controls.
+        SendMessageW(field(TRANSPARENCY), TBM_SETPOS, 1, 82);
+        SendMessageW(field(CLARITY), TBM_SETPOS, 1, 71);
+        STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.as_mut().unwrap().interface_input_changed(true);
+        });
+        STATE.with(|state| {
+            let state = state.borrow();
+            let app = state.as_ref().unwrap();
+            assert_eq!(app.draft.interface.transparency, 82);
+            assert_eq!(app.draft.interface.card_clarity, 71);
+            assert_eq!(app.selected(501), if system { 2 } else { 1 });
+        });
+        let slider = field(TRANSPARENCY);
+        click(RESET);
+        assert_eq!(
+            field(TRANSPARENCY),
+            slider,
+            "restoring these values needs no new controls"
+        );
+        shows_defaults("after restoring values that need no rebuild");
+        leave_and_return();
+        shows_defaults("after leaving a page restored without a rebuild");
+
+        // Choices that rebuild the whole window, and resize it.
+        click(FIRST_STYLE + 2);
+        let font = field(FONT);
+        let index = SendMessageW(
+            font,
+            CB_FINDSTRINGEXACT,
+            usize::MAX,
+            wide("Segoe UI").as_ptr() as isize,
+        );
+        assert!(index > 0);
+        SendMessageW(font, CB_SETCURSEL, index as usize, 0);
+        SendMessageW(
+            field(SIZE),
+            CB_SETCURSEL,
+            (InterfaceConfig::MAX_FONT_SIZE - InterfaceConfig::MIN_FONT_SIZE) as usize,
+            0,
+        );
+        SendMessageW(field(CORNERS), CB_SETCURSEL, 1, 0);
+        SendMessageW(field(501), CB_SETCURSEL, if system { 1 } else { 2 }, 0);
+        SendMessageW(field(TRANSPARENCY), TBM_SETPOS, 1, 18);
+        SendMessageW(field(CLARITY), TBM_SETPOS, 1, 90);
+        changed(FONT);
+        STATE.with(|state| {
+            let state = state.borrow();
+            let app = state.as_ref().unwrap();
+            assert_eq!(
+                app.draft.interface,
+                InterfaceConfig {
+                    style: InterfaceStyle::LiquidGlass,
+                    corners: CornerStyle::Square,
+                    transparency: 18,
+                    card_clarity: 90,
+                    font_family: Some("Segoe UI".into()),
+                    font_size: InterfaceConfig::MAX_FONT_SIZE,
+                }
+            );
+            assert_eq!(app.dark(), !system);
+        });
+        click(RESET);
+        shows_defaults("after restoring values that rebuild the window");
+        leave_and_return();
+        shows_defaults("after leaving a page restored with a rebuild");
+
+        STATE.with(|state| {
+            let mut app = state.borrow_mut().take().unwrap();
+            app.discard_settings_draft();
+            DestroyWindow(hwnd);
+            app.release_resources();
+        });
         interface::configure(&InterfaceConfig::default());
         RoUninitialize();
     });
