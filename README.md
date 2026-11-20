@@ -15,11 +15,11 @@
 ![5.12.0 副屏实际任务栏：复制的托盘图标与两行自定义时钟](docs/images/taskbar-5.12.0.png)
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/calendar-5.12.0-zh-dark.png">
-  <img alt="5.12.0 日历：农历、节气、节日、逐小时天气与日程" src="docs/images/calendar-5.12.0-zh-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/calendar-5.17.1-zh-dark.png">
+  <img alt="5.17.1 日历：农历、节气、节日、逐小时天气与日程" src="docs/images/calendar-5.17.1-zh-light.png">
 </picture>
 
-5.12.0 预览，更新于 2026-11-08：任务栏为副屏实拍；日历由当时版本的原生控件渲染，天气与日程使用示例数据。配图跟随页面明暗主题。
+任务栏为 5.12.0 的副屏实拍（2026-11-08）；日历由 5.17.1 的原生控件渲染，天气与日程使用示例数据。配图跟随页面明暗主题。
 
 ## 下载安装
 
@@ -71,7 +71,10 @@
 
 在 **设置 → 兼容性** 查看这台电脑的检查结果、各项功能的使用限制，并直接进入时钟或多屏托盘设置。模块与历史测试资料收在“诊断详情”里；报告保存后可打开所在文件夹。检查通过表示可以尝试启用，实际连接会在启用时再次确认。
 
-![5.15.1 兼容性页面，原生界面使用示例检查结果](docs/images/compatibility-5.15.1-zh-light.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/compatibility-5.17.1-zh-dark.png">
+  <img alt="5.17.1 兼容性页面，原生界面使用示例检查结果" src="docs/images/compatibility-5.17.1-zh-light.png">
+</picture>
 
 [使用与开发说明](docs/usage.md) · [安装包说明](docs/installer.md) · [天气模板](docs/weather-format.md) · [代理设置](docs/proxy-settings-5.16.4.md)
 

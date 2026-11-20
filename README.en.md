@@ -15,11 +15,11 @@ A useful clock, tray and calendar on every monitor. A native Windows desktop app
 ![5.12.0 live secondary taskbar with mirrored icons and a two-line custom clock](docs/images/taskbar-5.12.0.png)
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/calendar-5.12.0-en-dark.png">
-  <img alt="5.12.0 calendar with lunar dates, festivals, hourly weather and schedules" src="docs/images/calendar-5.12.0-en-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/calendar-5.17.1-en-dark.png">
+  <img alt="5.17.1 calendar with lunar dates, festivals, hourly weather and schedules" src="docs/images/calendar-5.17.1-en-light.png">
 </picture>
 
-5.12.0 previews, refreshed on 2026-11-08. The taskbar is a live secondary-monitor capture using the user's Chinese clock template. The calendar was rendered by that version's native controls with sample weather and schedule data; lunar text and sample entry titles retain their original language. Images follow the page's light or dark theme.
+The taskbar is a live secondary-monitor capture of 5.12.0 (2026-11-08) using the user's Chinese clock template. The calendar is rendered by the native controls of 5.17.1 with sample weather and schedule data; lunar text and sample entry titles retain their original language. Images follow the page's light or dark theme.
 
 ## Download
 
@@ -71,7 +71,10 @@ Open **Settings → Appearance** to change the style of the settings window and 
 
 Open **Settings → Compatibility** to see this computer's check results and feature limitations, with shortcuts to clock and multi-monitor settings. Module information and earlier test records are under Diagnostic details. You can save a report and open its folder. Passing the initial check means a feature is ready to try; LiteTray checks the actual connection when you enable it.
 
-![5.15.1 Compatibility page, rendered by the native UI with sample check results](docs/images/compatibility-5.15.1-en-light.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/compatibility-5.17.1-en-dark.png">
+  <img alt="5.17.1 Compatibility page, rendered by the native UI with sample check results" src="docs/images/compatibility-5.17.1-en-light.png">
+</picture>
 
 [Usage and development guide, Chinese](docs/usage.md) · [Installer guide, Chinese](docs/installer.md) · [Weather templates, Chinese](docs/weather-format.md) · [Proxy settings, Chinese](docs/proxy-settings-5.16.4.md)
 

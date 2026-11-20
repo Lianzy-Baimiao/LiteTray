@@ -71,8 +71,8 @@ $documents += @('README.en.md','CHANGELOG.md','docs/usage.md','docs/licensing.md
 $documents += @('docs/languages.md')
 $documents += @('LICENSE','NOTICE')
 $documents += @('docs/images/taskbar-5.12.0.png','docs/images/README.md')
-$documents += @('docs/images/calendar-5.12.0-zh-light.png','docs/images/calendar-5.12.0-zh-dark.png')
-$documents += @('docs/images/calendar-5.12.0-en-light.png','docs/images/calendar-5.12.0-en-dark.png')
+$documents += @('docs/images/calendar-5.17.1-zh-light.png','docs/images/calendar-5.17.1-zh-dark.png')
+$documents += @('docs/images/calendar-5.17.1-en-light.png','docs/images/calendar-5.17.1-en-dark.png')
 $documents += @('docs/compatibility.md','docs/windows11-compatibility-plan.md','docs/windows11-compatibility-research.md')
 $documents += @('docs/stability-5.13.1.md')
 $documents += @('docs/sandbox-compatibility.md','docs/compatibility-matrix.template.json')
@@ -103,6 +103,7 @@ $documents += @('docs/explorer-safety-audit-2026-11-14.md')
 $documents += @('docs/explorer-recheck-5.16.5-2026-11-14.md')
 $documents += @('docs/explorer-recheck-5.16.6-2026-11-14.md')
 $documents += @('docs/images/appearance-5.17.1-zh-light.png','docs/images/appearance-5.17.1-zh-dark.png','docs/images/appearance-5.17.1-en-light.png','docs/images/appearance-5.17.1-en-dark.png')
+$documents += @('docs/images/compatibility-5.17.1-zh-light.png','docs/images/compatibility-5.17.1-zh-dark.png','docs/images/compatibility-5.17.1-en-light.png','docs/images/compatibility-5.17.1-en-dark.png')
 foreach($name in $documents){
     $destination=Join-Path $output $name
     [IO.Directory]::CreateDirectory((Split-Path $destination -Parent))|Out-Null
