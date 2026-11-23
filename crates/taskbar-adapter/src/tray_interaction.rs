@@ -6,6 +6,7 @@ use crate::{
     property::{Property, same_object},
     tray::{Field, read},
     tray_menu::Menus,
+    wide,
     xaml::{self, Object, check, factory},
     xaml_abi::*,
 };
@@ -25,9 +26,11 @@ use windows_sys::Win32::{
     Graphics::Gdi::{
         ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
     },
-    System::{LibraryLoader::*, SystemInformation::GetTickCount64},
+    System::{LibraryLoader::*, SystemInformation::GetTickCount64, Threading::GetCurrentProcessId},
     UI::{
         Controls::{WM_MOUSEHOVER, WM_MOUSELEAVE},
+        HiDpi::GetDpiForWindow,
+        Input::Pointer::{GetPointerInfo, POINTER_FLAG_PRIMARY, POINTER_INFO},
         WindowsAndMessaging::*,
     },
 };
@@ -44,12 +47,37 @@ pub(crate) use menu_lifecycle_checks::run as check_inactive_menus;
 
 #[derive(Clone, Copy)]
 struct PopupAnchor {
+    taskbar: usize,
+    island: usize,
+    source_island: usize,
+    process_id: u32,
+    thread_id: u32,
+    monitor: usize,
+    taskbar_bounds: RECT,
     bounds: RECT,
     work: RECT,
+    source_dpi: u32,
+    target_dpi: u32,
     tick: u64,
     popup: usize,
 }
 static OVERFLOW: std::sync::Mutex<Option<PopupAnchor>> = std::sync::Mutex::new(None);
+const OVERFLOW_POPUP_PROPERTY: &str = "LiteTray.OverflowPopup.v1";
+fn clear_overflow() {
+    let anchor = OVERFLOW.lock().ok().and_then(|mut state| state.take());
+    if let Some(anchor) = anchor
+        .filter(anchor_is_current)
+        .filter(|anchor| anchor.popup != 0)
+    {
+        unsafe {
+            let popup = anchor.popup as HWND;
+            let property = wide(OVERFLOW_POPUP_PROPERTY);
+            if IsWindow(popup) != 0 && GetPropW(popup, property.as_ptr()) == overflow_popup_tag() {
+                RemovePropW(popup, property.as_ptr());
+            }
+        }
+    }
+}
 pub(crate) struct Surface {
     pub role: Role,
     pub element: Object,
@@ -175,9 +203,7 @@ impl Runtime {
             return;
         }
         self.last.set(None);
-        if let Ok(mut overflow) = OVERFLOW.lock() {
-            *overflow = None;
-        }
+        clear_overflow();
         let previous = RUNTIME.with(|state| {
             let mut state = state.borrow_mut();
             if state
@@ -277,12 +303,11 @@ impl Runtime {
         Ok(())
     }
     fn arm_overflow(&self, index: usize, message: &MSG) {
-        if !self.active.get()
-            || !matches!(
-                message.message,
-                WM_LBUTTONDOWN | WM_LBUTTONUP | WM_POINTERDOWN | WM_POINTERUP | WM_KEYDOWN
-            )
-        {
+        if !should_arm_overflow(
+            self.active.get(),
+            self.hosts[index].secondary,
+            message.message,
+        ) {
             return;
         }
         let host = &self.hosts[index];
@@ -299,6 +324,9 @@ impl Runtime {
         {
             return;
         }
+        if message.message == WM_POINTERDOWN && !pointer_is_primary(message.wParam) {
+            return;
+        }
         unsafe {
             let monitor = MonitorFromWindow(host.taskbar, MONITOR_DEFAULTTONEAREST);
             let mut info: MONITORINFO = std::mem::zeroed();
@@ -306,8 +334,39 @@ impl Runtime {
             if GetMonitorInfoW(monitor, &mut info) == 0 {
                 return;
             }
+            // Explorer may hide the overflow window without sending the
+            // SWP_HIDEWINDOW path. Retire the previous popup lease on every
+            // fresh chevron press so the next open can claim that same HWND.
+            clear_overflow();
+            let mut taskbar_bounds: RECT = std::mem::zeroed();
+            let mut process_id = 0;
+            let thread_id = GetWindowThreadProcessId(host.taskbar, &mut process_id);
+            if thread_id == 0
+                || process_id != GetCurrentProcessId()
+                || GetWindowRect(host.taskbar, &mut taskbar_bounds) == 0
+            {
+                return;
+            }
+            let Some(source) = self.hosts.iter().find(|source| !source.secondary) else {
+                return;
+            };
+            if source.binding.validate().is_err() {
+                return;
+            }
+            let source_dpi = GetDpiForWindow(source.binding.window());
+            if source_dpi == 0 {
+                return;
+            }
+            let target_dpi = GetDpiForWindow(host.binding.window()).max(96);
             if let Ok(mut anchor) = OVERFLOW.lock() {
                 *anchor = Some(PopupAnchor {
+                    taskbar: host.taskbar as usize,
+                    island: host.binding.window() as usize,
+                    source_island: source.binding.window() as usize,
+                    process_id,
+                    thread_id,
+                    monitor: monitor as usize,
+                    taskbar_bounds,
                     bounds: RECT {
                         left: rect.left,
                         top: rect.top,
@@ -315,6 +374,8 @@ impl Runtime {
                         bottom: rect.bottom,
                     },
                     work: info.rcWork,
+                    source_dpi,
+                    target_dpi,
                     tick: GetTickCount64(),
                     popup: 0,
                 });
@@ -508,13 +569,71 @@ unsafe extern "system" fn dispatch(message: *const MSG) -> LRESULT {
         result
     }
 }
+fn anchor_is_current(anchor: &PopupAnchor) -> bool {
+    unsafe {
+        let mut pid = 0;
+        let tid = GetWindowThreadProcessId(anchor.taskbar as HWND, &mut pid);
+        let island = anchor.island as HWND;
+        let source_island = anchor.source_island as HWND;
+        let mut island_pid = 0;
+        let island_tid = GetWindowThreadProcessId(island, &mut island_pid);
+        let mut source_pid = 0;
+        let source_tid = GetWindowThreadProcessId(source_island, &mut source_pid);
+        let mut bounds: RECT = std::mem::zeroed();
+        let monitor = MonitorFromWindow(anchor.taskbar as HWND, MONITOR_DEFAULTTONEAREST);
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        IsWindow(anchor.taskbar as HWND) != 0
+            && IsWindow(island) != 0
+            && IsWindow(source_island) != 0
+            && tid == anchor.thread_id
+            && island_tid == anchor.thread_id
+            && source_tid == anchor.thread_id
+            && pid == anchor.process_id
+            && island_pid == anchor.process_id
+            && source_pid == anchor.process_id
+            && pid == GetCurrentProcessId()
+            && crate::class_name(anchor.taskbar as HWND) == "Shell_SecondaryTrayWnd"
+            && GetParent(island) == anchor.taskbar as HWND
+            && monitor as usize == anchor.monitor
+            && GetDpiForWindow(source_island) == anchor.source_dpi
+            && GetDpiForWindow(island) == anchor.target_dpi
+            && GetMonitorInfoW(monitor, &mut info) != 0
+            && GetWindowRect(anchor.taskbar as HWND, &mut bounds) != 0
+            && rect_eq(bounds, anchor.taskbar_bounds)
+            && info.rcWork.left == anchor.work.left
+            && info.rcWork.top == anchor.work.top
+            && info.rcWork.right == anchor.work.right
+            && info.rcWork.bottom == anchor.work.bottom
+    }
+}
+fn rect_eq(left: RECT, right: RECT) -> bool {
+    (left.left, left.top, left.right, left.bottom)
+        == (right.left, right.top, right.right, right.bottom)
+}
+fn should_arm_overflow(active: bool, secondary: bool, message: u32) -> bool {
+    active && secondary && matches!(message, WM_LBUTTONDOWN | WM_POINTERDOWN)
+}
+fn pointer_is_primary(wparam: WPARAM) -> bool {
+    let pointer_id = wparam as u32 & 0xffff;
+    if pointer_id == 0 {
+        return false;
+    }
+    let mut info = POINTER_INFO::default();
+    unsafe {
+        GetPointerInfo(pointer_id, &mut info) != 0 && info.pointerFlags & POINTER_FLAG_PRIMARY != 0
+    }
+}
+fn request_to_physical_dpi(source_dpi: u32, target_dpi: u32, resize: bool) -> bool {
+    resize && source_dpi > 0 && target_dpi > 0 && source_dpi != target_dpi
+}
 unsafe extern "system" fn position(
     hwnd: HWND,
     after: HWND,
     mut x: i32,
     mut y: i32,
-    cx: i32,
-    cy: i32,
+    mut cx: i32,
+    mut cy: i32,
     mut flags: u32,
 ) -> i32 {
     unsafe {
@@ -523,35 +642,79 @@ unsafe extern "system" fn position(
         if crate::class_name(hwnd) == "TopLevelWindowForOverflowXamlIsland" {
             let anchor = OVERFLOW.lock().ok().and_then(|state| *state);
             if let Some(mut anchor) = anchor {
-                if flags & SWP_HIDEWINDOW != 0 {
+                let popup_property = wide(OVERFLOW_POPUP_PROPERTY);
+                let popup_tag = overflow_popup_tag();
+                let property = GetPropW(hwnd, popup_property.as_ptr());
+                let popup_matches_anchor = anchor.popup == hwnd as usize && IsWindow(hwnd) != 0;
+                let sticky =
+                    popup_matches_anchor && IsWindowVisible(hwnd) != 0 && property == popup_tag;
+                let reusable =
+                    popup_matches_anchor && IsWindowVisible(hwnd) == 0 && property == popup_tag;
+                let anchor_current = anchor_is_current(&anchor);
+                let candidate = should_claim_overflow(
+                    property.is_null() || reusable,
+                    anchor.popup == 0 && GetTickCount64().saturating_sub(anchor.tick) < 2000,
+                    flags,
+                );
+                if property == popup_tag && (flags & SWP_HIDEWINDOW != 0 || !anchor_current) {
+                    RemovePropW(hwnd, popup_property.as_ptr());
+                    if anchor.popup == hwnd as usize
+                        && let Ok(mut state) = OVERFLOW.lock()
+                    {
+                        *state = None;
+                    }
+                } else if candidate && !anchor_current {
                     if let Ok(mut state) = OVERFLOW.lock() {
                         *state = None;
                     }
-                } else if (anchor.popup == hwnd as usize && IsWindowVisible(hwnd) != 0)
-                    || GetTickCount64().saturating_sub(anchor.tick) < 2000
-                {
+                } else if should_position_overflow(anchor_current, flags, sticky, candidate) {
                     let mut current: RECT = std::mem::zeroed();
-                    if GetWindowRect(hwnd, &mut current) != 0 {
-                        let width = if flags & SWP_NOSIZE != 0 {
-                            current.right - current.left
-                        } else {
-                            cx
-                        };
-                        let height = if flags & SWP_NOSIZE != 0 {
-                            current.bottom - current.top
-                        } else {
-                            cy
-                        };
-                        if let Some((left, top)) =
-                            popup_position(anchor.bounds, anchor.work, width, height)
-                        {
-                            x = left;
-                            y = top;
-                            flags &= !SWP_NOMOVE;
-                            anchor.popup = hwnd as usize;
-                            if let Ok(mut state) = OVERFLOW.lock() {
-                                *state = Some(anchor);
-                            }
+                    if GetWindowRect(hwnd, &mut current) == 0 {
+                        return original(hwnd, after, x, y, cx, cy, flags);
+                    }
+                    let width = if flags & SWP_NOSIZE != 0 {
+                        current.right - current.left
+                    } else {
+                        cx
+                    };
+                    let height = if flags & SWP_NOSIZE != 0 {
+                        current.bottom - current.top
+                    } else {
+                        cy
+                    };
+                    let scale_size = request_to_physical_dpi(
+                        anchor.source_dpi,
+                        anchor.target_dpi,
+                        flags & SWP_NOSIZE == 0 || candidate,
+                    );
+                    let source_dpi = if scale_size {
+                        anchor.source_dpi
+                    } else {
+                        anchor.target_dpi
+                    };
+                    if let Some((left, top, width, height)) = popup_position(
+                        anchor.bounds,
+                        anchor.work,
+                        width,
+                        height,
+                        source_dpi,
+                        anchor.target_dpi,
+                        scale_size,
+                    ) {
+                        if candidate && SetPropW(hwnd, popup_property.as_ptr(), popup_tag) == 0 {
+                            return original(hwnd, after, x, y, cx, cy, flags);
+                        }
+                        x = left;
+                        y = top;
+                        if candidate || flags & SWP_NOSIZE == 0 {
+                            cx = width;
+                            cy = height;
+                            flags &= !SWP_NOSIZE;
+                        }
+                        flags &= !SWP_NOMOVE;
+                        anchor.popup = hwnd as usize;
+                        if let Ok(mut state) = OVERFLOW.lock() {
+                            *state = Some(anchor);
                         }
                     }
                 }
@@ -560,10 +723,38 @@ unsafe extern "system" fn position(
         original(hwnd, after, x, y, cx, cy, flags)
     }
 }
-fn popup_position(anchor: RECT, work: RECT, width: i32, height: i32) -> Option<(i32, i32)> {
+fn should_claim_overflow(popup_unclaimed: bool, anchor_fresh: bool, flags: u32) -> bool {
+    popup_unclaimed && anchor_fresh && flags & SWP_HIDEWINDOW == 0
+}
+fn overflow_popup_tag() -> HANDLE {
+    static TAG: u8 = 0;
+    (&TAG as *const u8).cast_mut().cast()
+}
+fn should_position_overflow(
+    anchor_current: bool,
+    flags: u32,
+    sticky: bool,
+    first_position_fresh: bool,
+) -> bool {
+    anchor_current && flags & SWP_HIDEWINDOW == 0 && (sticky || first_position_fresh)
+}
+fn popup_position(
+    anchor: RECT,
+    work: RECT,
+    width: i32,
+    height: i32,
+    source_dpi: u32,
+    target_dpi: u32,
+    resize: bool,
+) -> Option<(i32, i32, i32, i32)> {
     if width <= 0 || height <= 0 || work.right <= work.left || work.bottom <= work.top {
         return None;
     }
+    let (width, height) = if resize {
+        scale_popup_size(width, height, source_dpi, target_dpi)?
+    } else {
+        (width, height)
+    };
     let x = (anchor.left + (anchor.right - anchor.left - width) / 2)
         .clamp(work.left, (work.right - width).max(work.left));
     let y = if anchor.top >= work.bottom {
@@ -573,7 +764,28 @@ fn popup_position(anchor: RECT, work: RECT, width: i32, height: i32) -> Option<(
     } else {
         anchor.top - height
     };
-    Some((x, y.clamp(work.top, (work.bottom - height).max(work.top))))
+    Some((
+        x,
+        y.clamp(work.top, (work.bottom - height).max(work.top)),
+        width,
+        height,
+    ))
+}
+fn scale_popup_size(
+    width: i32,
+    height: i32,
+    source_dpi: u32,
+    target_dpi: u32,
+) -> Option<(i32, i32)> {
+    if width <= 0 || height <= 0 || source_dpi == 0 || target_dpi == 0 {
+        return None;
+    }
+    let scale = |value: i32| -> Option<i32> {
+        let scaled = (i64::from(value) * i64::from(target_dpi) + i64::from(source_dpi / 2))
+            / i64::from(source_dpi);
+        i32::try_from(scaled).ok().filter(|value| *value > 0)
+    };
+    Some((scale(width)?, scale(height)?))
 }
 unsafe extern "system" fn invocation(
     this: *mut c_void,
@@ -989,7 +1201,10 @@ mod tests {
             right: 6400,
             bottom: 1540,
         };
-        assert_eq!(popup_position(anchor, work, 300, 240), Some((5870, 1292)));
+        assert_eq!(
+            popup_position(anchor, work, 300, 240, 144, 144, true),
+            Some((5870, 1292, 300, 240))
+        );
         let anchor = RECT {
             left: -50,
             top: 1040,
@@ -1002,7 +1217,81 @@ mod tests {
             right: 0,
             bottom: 1040,
         };
-        assert_eq!(popup_position(anchor, work, 300, 240), Some((-300, 792)));
-        assert_eq!(popup_position(anchor, work, 0, 240), None);
+        assert_eq!(
+            popup_position(anchor, work, 300, 240, 120, 120, true),
+            Some((-300, 792, 300, 240))
+        );
+        assert_eq!(popup_position(anchor, work, 0, 240, 120, 144, true), None);
+    }
+
+    #[test]
+    fn overflow_popup_scales_to_the_clicked_monitors_dpi() {
+        let anchor = RECT {
+            left: 4700,
+            top: 1035,
+            right: 4779,
+            bottom: 1067,
+        };
+        let work = RECT {
+            left: 3072,
+            top: 0,
+            right: 4779,
+            bottom: 1035,
+        };
+        assert_eq!(
+            popup_position(anchor, work, 350, 643, 120, 144, true),
+            Some((4359, 255, 420, 772))
+        );
+        assert_eq!(
+            popup_position(anchor, work, 420, 772, 120, 144, false),
+            Some((4359, 255, 420, 772))
+        );
+        assert_eq!(scale_popup_size(350, 643, 120, 144), Some((420, 772)));
+        assert_eq!(scale_popup_size(350, 643, 144, 144), Some((350, 643)));
+        assert_eq!(scale_popup_size(350, 643, 0, 144), None);
+    }
+
+    #[test]
+    fn overflow_anchor_requires_a_live_secondary_left_button_press() {
+        assert!(should_arm_overflow(true, true, WM_LBUTTONDOWN));
+        assert!(!should_arm_overflow(false, true, WM_LBUTTONDOWN));
+        assert!(!should_arm_overflow(true, false, WM_LBUTTONDOWN));
+        for message in [WM_RBUTTONDOWN, WM_LBUTTONUP, WM_KEYDOWN, WM_MOUSEMOVE] {
+            assert!(!should_arm_overflow(true, true, message));
+        }
+        assert!(should_arm_overflow(true, true, WM_POINTERDOWN));
+    }
+
+    #[test]
+    fn overflow_position_stays_sticky_only_while_the_anchor_is_live() {
+        assert!(should_position_overflow(true, 0, true, false));
+        assert!(should_position_overflow(true, 0, false, true));
+        assert!(!should_position_overflow(true, SWP_HIDEWINDOW, true, true));
+        assert!(!should_position_overflow(false, 0, true, true));
+        assert!(!should_position_overflow(true, 0, false, false));
+    }
+
+    #[test]
+    fn overflow_popup_claim_requires_a_fresh_secondary_open() {
+        assert!(should_claim_overflow(true, true, 0));
+        assert!(!should_claim_overflow(false, true, 0));
+        assert!(!should_claim_overflow(true, false, 0));
+        assert!(should_claim_overflow(true, true, SWP_NOSIZE));
+        assert!(!should_claim_overflow(true, true, SWP_HIDEWINDOW));
+    }
+
+    #[test]
+    fn overflow_popup_can_be_claimed_again_after_a_hidden_close_skips_windowpos() {
+        assert!(!should_claim_overflow(false, true, 0));
+        // The old popup rectangle can already be on the secondary display.
+        assert!(should_claim_overflow(true, true, 0));
+    }
+
+    #[test]
+    fn overflow_resizes_only_when_dpi_coordinates_differ() {
+        assert!(request_to_physical_dpi(120, 144, true));
+        assert!(!request_to_physical_dpi(144, 144, true));
+        assert!(!request_to_physical_dpi(120, 144, false));
+        assert!(!request_to_physical_dpi(0, 144, true));
     }
 }

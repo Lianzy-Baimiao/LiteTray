@@ -417,6 +417,18 @@ fn refresh_failure_scenario(deactivate_before_refresh: bool) -> Result<(), Strin
 }
 fn arm_anchor() -> Result<(), String> {
     *OVERFLOW.lock().map_err(|_| "回滚夹具定位锁已损坏")? = Some(PopupAnchor {
+        taskbar: 0,
+        island: 0,
+        source_island: 0,
+        process_id: unsafe { windows_sys::Win32::System::Threading::GetCurrentProcessId() },
+        thread_id: unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() },
+        monitor: 0,
+        taskbar_bounds: RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        },
         bounds: RECT {
             left: 950,
             top: 1000,
@@ -429,6 +441,8 @@ fn arm_anchor() -> Result<(), String> {
             right: 1920,
             bottom: 1080,
         },
+        source_dpi: 96,
+        target_dpi: 96,
         tick: unsafe { GetTickCount64() },
         popup: 0,
     });
