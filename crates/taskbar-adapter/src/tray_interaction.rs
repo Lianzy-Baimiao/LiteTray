@@ -63,18 +63,27 @@ struct PopupAnchor {
 }
 static OVERFLOW: std::sync::Mutex<Option<PopupAnchor>> = std::sync::Mutex::new(None);
 const OVERFLOW_POPUP_PROPERTY: &str = "LiteTray.OverflowPopup.v1";
+/// Explorer defers the first open until the overflow XAML has loaded, so the
+/// show can trail the chevron press. Any other taskbar press retires it.
+const OVERFLOW_CLAIM_MS: u64 = 5000;
 fn clear_overflow() {
     let anchor = OVERFLOW.lock().ok().and_then(|mut state| state.take());
-    if let Some(anchor) = anchor
-        .filter(anchor_is_current)
-        .filter(|anchor| anchor.popup != 0)
-    {
-        unsafe {
-            let popup = anchor.popup as HWND;
-            let property = wide(OVERFLOW_POPUP_PROPERTY);
-            if IsWindow(popup) != 0 && GetPropW(popup, property.as_ptr()) == overflow_popup_tag() {
-                RemovePropW(popup, property.as_ptr());
-            }
+    if let Some(anchor) = anchor.filter(|anchor| anchor.popup != 0) {
+        // The marker is ours even after a display change made the anchor
+        // stale. A leftover marker must not outlive its lease.
+        release_popup(anchor.popup as HWND);
+    }
+}
+fn release_popup(popup: HWND) {
+    unsafe {
+        let mut process_id = 0;
+        let property = wide(OVERFLOW_POPUP_PROPERTY);
+        if IsWindow(popup) != 0
+            && GetWindowThreadProcessId(popup, &mut process_id) != 0
+            && process_id == GetCurrentProcessId()
+            && GetPropW(popup, property.as_ptr()) == overflow_popup_tag()
+        {
+            RemovePropW(popup, property.as_ptr());
         }
     }
 }
@@ -303,14 +312,20 @@ impl Runtime {
         Ok(())
     }
     fn arm_overflow(&self, index: usize, message: &MSG) {
-        if !should_arm_overflow(
-            self.active.get(),
-            self.hosts[index].secondary,
-            message.message,
-        ) {
+        if !self.active.get() || !is_left_press(message.message) {
             return;
         }
+        if message.message == WM_POINTERDOWN && !pointer_is_primary(message.wParam) {
+            return;
+        }
+        // Every left press on a taskbar starts a new interaction, including
+        // the primary chevron. Explorer hides the overflow with ShowWindow,
+        // so no SetWindowPos hide retires the previous lease.
+        clear_overflow();
         let host = &self.hosts[index];
+        if !host.secondary {
+            return;
+        }
         let Some(surface) = host.surfaces.iter().find(|s| s.role == Role::HiddenIcons) else {
             return;
         };
@@ -324,9 +339,6 @@ impl Runtime {
         {
             return;
         }
-        if message.message == WM_POINTERDOWN && !pointer_is_primary(message.wParam) {
-            return;
-        }
         unsafe {
             let monitor = MonitorFromWindow(host.taskbar, MONITOR_DEFAULTTONEAREST);
             let mut info: MONITORINFO = std::mem::zeroed();
@@ -334,10 +346,6 @@ impl Runtime {
             if GetMonitorInfoW(monitor, &mut info) == 0 {
                 return;
             }
-            // Explorer may hide the overflow window without sending the
-            // SWP_HIDEWINDOW path. Retire the previous popup lease on every
-            // fresh chevron press so the next open can claim that same HWND.
-            clear_overflow();
             let mut taskbar_bounds: RECT = std::mem::zeroed();
             let mut process_id = 0;
             let thread_id = GetWindowThreadProcessId(host.taskbar, &mut process_id);
@@ -611,8 +619,57 @@ fn rect_eq(left: RECT, right: RECT) -> bool {
     (left.left, left.top, left.right, left.bottom)
         == (right.left, right.top, right.right, right.bottom)
 }
-fn should_arm_overflow(active: bool, secondary: bool, message: u32) -> bool {
-    active && secondary && matches!(message, WM_LBUTTONDOWN | WM_POINTERDOWN)
+fn is_left_press(message: u32) -> bool {
+    matches!(message, WM_LBUTTONDOWN | WM_POINTERDOWN)
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Placement {
+    /// First placement after a secondary chevron press: lease the popup.
+    Claim,
+    /// Explorer re-runs its primary-anchored placement for the leased popup.
+    Follow,
+    /// Drop the lease and keep Explorer's placement.
+    Release,
+    Native,
+}
+/// Explorer shows the overflow with SetWindowPos(SWP_SHOWWINDOW) but hides it
+/// with ShowWindow, so a lease can only end at the next press or placement.
+/// `owned`: the anchor leases this HWND. `marked`: it carries our marker.
+fn overflow_placement(
+    hide: bool,
+    current: bool,
+    fresh: bool,
+    unclaimed: bool,
+    owned: bool,
+    marked: bool,
+    visible: bool,
+) -> Placement {
+    if hide {
+        return if owned || marked {
+            Placement::Release
+        } else {
+            Placement::Native
+        };
+    }
+    if unclaimed && fresh {
+        // A pending secondary press decides the next open. A marker left by
+        // an earlier lease must never block it.
+        return if current {
+            Placement::Claim
+        } else {
+            Placement::Release
+        };
+    }
+    // Explorer re-places only a visible overflow. A hidden one is being
+    // reopened without a secondary press, e.g. from the primary chevron.
+    if owned && marked && current && visible {
+        return Placement::Follow;
+    }
+    if owned || marked {
+        Placement::Release
+    } else {
+        Placement::Native
+    }
 }
 fn pointer_is_primary(wparam: WPARAM) -> bool {
     let pointer_id = wparam as u32 & 0xffff;
@@ -644,30 +701,32 @@ unsafe extern "system" fn position(
             if let Some(mut anchor) = anchor {
                 let popup_property = wide(OVERFLOW_POPUP_PROPERTY);
                 let popup_tag = overflow_popup_tag();
-                let property = GetPropW(hwnd, popup_property.as_ptr());
-                let popup_matches_anchor = anchor.popup == hwnd as usize && IsWindow(hwnd) != 0;
-                let sticky =
-                    popup_matches_anchor && IsWindowVisible(hwnd) != 0 && property == popup_tag;
-                let reusable =
-                    popup_matches_anchor && IsWindowVisible(hwnd) == 0 && property == popup_tag;
-                let anchor_current = anchor_is_current(&anchor);
-                let candidate = should_claim_overflow(
-                    property.is_null() || reusable,
-                    anchor.popup == 0 && GetTickCount64().saturating_sub(anchor.tick) < 2000,
-                    flags,
+                let marked = GetPropW(hwnd, popup_property.as_ptr()) == popup_tag;
+                let owned = anchor.popup == hwnd as usize;
+                let placement = overflow_placement(
+                    flags & SWP_HIDEWINDOW != 0,
+                    anchor_is_current(&anchor),
+                    GetTickCount64().saturating_sub(anchor.tick) < OVERFLOW_CLAIM_MS,
+                    anchor.popup == 0,
+                    owned,
+                    marked,
+                    IsWindowVisible(hwnd) != 0,
                 );
-                if property == popup_tag && (flags & SWP_HIDEWINDOW != 0 || !anchor_current) {
-                    RemovePropW(hwnd, popup_property.as_ptr());
-                    if anchor.popup == hwnd as usize
+                let candidate = placement == Placement::Claim;
+                if placement == Placement::Release {
+                    if marked {
+                        RemovePropW(hwnd, popup_property.as_ptr());
+                    }
+                    // Keep an anchor that still leases another popup.
+                    if (owned || anchor.popup == 0)
                         && let Ok(mut state) = OVERFLOW.lock()
+                        && state.is_some_and(|value| {
+                            value.tick == anchor.tick && value.popup == anchor.popup
+                        })
                     {
                         *state = None;
                     }
-                } else if candidate && !anchor_current {
-                    if let Ok(mut state) = OVERFLOW.lock() {
-                        *state = None;
-                    }
-                } else if should_position_overflow(anchor_current, flags, sticky, candidate) {
+                } else if candidate || placement == Placement::Follow {
                     let mut current: RECT = std::mem::zeroed();
                     if GetWindowRect(hwnd, &mut current) == 0 {
                         return original(hwnd, after, x, y, cx, cy, flags);
@@ -723,20 +782,9 @@ unsafe extern "system" fn position(
         original(hwnd, after, x, y, cx, cy, flags)
     }
 }
-fn should_claim_overflow(popup_unclaimed: bool, anchor_fresh: bool, flags: u32) -> bool {
-    popup_unclaimed && anchor_fresh && flags & SWP_HIDEWINDOW == 0
-}
 fn overflow_popup_tag() -> HANDLE {
     static TAG: u8 = 0;
     (&TAG as *const u8).cast_mut().cast()
-}
-fn should_position_overflow(
-    anchor_current: bool,
-    flags: u32,
-    sticky: bool,
-    first_position_fresh: bool,
-) -> bool {
-    anchor_current && flags & SWP_HIDEWINDOW == 0 && (sticky || first_position_fresh)
 }
 fn popup_position(
     anchor: RECT,
@@ -1252,39 +1300,159 @@ mod tests {
     }
 
     #[test]
-    fn overflow_anchor_requires_a_live_secondary_left_button_press() {
-        assert!(should_arm_overflow(true, true, WM_LBUTTONDOWN));
-        assert!(!should_arm_overflow(false, true, WM_LBUTTONDOWN));
-        assert!(!should_arm_overflow(true, false, WM_LBUTTONDOWN));
+    fn overflow_presses_are_left_button_or_pointer_down() {
+        assert!(is_left_press(WM_LBUTTONDOWN));
+        assert!(is_left_press(WM_POINTERDOWN));
         for message in [WM_RBUTTONDOWN, WM_LBUTTONUP, WM_KEYDOWN, WM_MOUSEMOVE] {
-            assert!(!should_arm_overflow(true, true, message));
+            assert!(!is_left_press(message));
         }
-        assert!(should_arm_overflow(true, true, WM_POINTERDOWN));
+    }
+
+    // Arguments: hide, current, fresh, unclaimed, owned, marked, visible.
+    #[test]
+    fn overflow_claim_ignores_a_marker_left_by_an_earlier_lease() {
+        use Placement::*;
+        // Usual open: Explorer shows the hidden popup with SWP_SHOWWINDOW.
+        assert_eq!(
+            overflow_placement(false, true, true, true, false, false, false),
+            Claim
+        );
+        // A display change left the marker behind. The next press still wins.
+        assert_eq!(
+            overflow_placement(false, true, true, true, false, true, false),
+            Claim
+        );
+        assert_eq!(
+            overflow_placement(false, true, true, true, false, true, true),
+            Claim
+        );
+        assert_eq!(
+            overflow_placement(false, false, true, true, false, true, false),
+            Release
+        );
+        assert_eq!(
+            overflow_placement(false, false, true, true, false, false, false),
+            Release
+        );
     }
 
     #[test]
-    fn overflow_position_stays_sticky_only_while_the_anchor_is_live() {
-        assert!(should_position_overflow(true, 0, true, false));
-        assert!(should_position_overflow(true, 0, false, true));
-        assert!(!should_position_overflow(true, SWP_HIDEWINDOW, true, true));
-        assert!(!should_position_overflow(false, 0, true, true));
-        assert!(!should_position_overflow(true, 0, false, false));
+    fn overflow_lease_follows_explorer_only_while_visible() {
+        use Placement::*;
+        // Content resize while the leased popup stays open.
+        assert_eq!(
+            overflow_placement(false, true, false, false, true, true, true),
+            Follow
+        );
+        // Explorer re-places only a visible overflow. A hidden leased popup
+        // is reopening without a secondary press, e.g. the primary chevron.
+        assert_eq!(
+            overflow_placement(false, true, false, false, true, true, false),
+            Release
+        );
+        assert_eq!(
+            overflow_placement(false, true, true, false, true, true, false),
+            Release
+        );
+        assert_eq!(
+            overflow_placement(false, false, false, false, true, true, true),
+            Release
+        );
+        // An owned HWND without the marker may have been recycled.
+        assert_eq!(
+            overflow_placement(false, true, false, false, true, false, true),
+            Release
+        );
     }
 
     #[test]
-    fn overflow_popup_claim_requires_a_fresh_secondary_open() {
-        assert!(should_claim_overflow(true, true, 0));
-        assert!(!should_claim_overflow(false, true, 0));
-        assert!(!should_claim_overflow(true, false, 0));
-        assert!(should_claim_overflow(true, true, SWP_NOSIZE));
-        assert!(!should_claim_overflow(true, true, SWP_HIDEWINDOW));
+    fn overflow_hide_and_unrelated_windows_keep_native_placement() {
+        use Placement::*;
+        assert_eq!(
+            overflow_placement(true, true, true, false, true, true, true),
+            Release
+        );
+        assert_eq!(
+            overflow_placement(true, true, true, true, false, false, false),
+            Native
+        );
+        assert_eq!(
+            overflow_placement(false, true, false, false, false, false, true),
+            Native
+        );
+        assert_eq!(
+            overflow_placement(false, true, false, true, false, false, false),
+            Native
+        );
+        assert_eq!(
+            overflow_placement(false, true, false, true, false, true, false),
+            Release
+        );
     }
 
     #[test]
-    fn overflow_popup_can_be_claimed_again_after_a_hidden_close_skips_windowpos() {
-        assert!(!should_claim_overflow(false, true, 0));
-        // The old popup rectangle can already be on the secondary display.
-        assert!(should_claim_overflow(true, true, 0));
+    fn overflow_lease_is_released_after_its_display_changed() {
+        let popup = unsafe {
+            CreateWindowExW(
+                0,
+                wide("STATIC").as_ptr(),
+                wide("LiteTray overflow lease").as_ptr(),
+                WS_POPUP,
+                0,
+                0,
+                32,
+                32,
+                null_mut(),
+                null_mut(),
+                GetModuleHandleW(std::ptr::null()),
+                std::ptr::null(),
+            )
+        };
+        assert!(!popup.is_null());
+        let property = wide(OVERFLOW_POPUP_PROPERTY);
+        unsafe {
+            assert_ne!(SetPropW(popup, property.as_ptr(), overflow_popup_tag()), 0);
+        }
+        // Taskbar 0 is never a live window, so this anchor is not current.
+        let stale = PopupAnchor {
+            taskbar: 0,
+            island: 0,
+            source_island: 0,
+            process_id: unsafe { GetCurrentProcessId() },
+            thread_id: 0,
+            monitor: 0,
+            taskbar_bounds: RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+            bounds: RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+            work: RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+            source_dpi: 96,
+            target_dpi: 96,
+            tick: 0,
+            popup: popup as usize,
+        };
+        assert!(!anchor_is_current(&stale));
+        *OVERFLOW.lock().unwrap() = Some(stale);
+        clear_overflow();
+        let remaining = unsafe { GetPropW(popup, property.as_ptr()) };
+        unsafe {
+            DestroyWindow(popup);
+        }
+        assert!(OVERFLOW.lock().unwrap().is_none());
+        assert!(remaining.is_null(), "stale lease kept its popup marker");
     }
 
     #[test]
